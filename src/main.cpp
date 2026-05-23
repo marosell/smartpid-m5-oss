@@ -42,6 +42,8 @@
 #include "channel_state.h"
 #include "telemetry.h"
 #include "command_handler.h"
+#include "probe.h"
+#include "output_control.h"
 
 // ── Forward declarations ──────────────────────────────────────────────────────
 static void setupWiFi();
@@ -113,15 +115,20 @@ void setup() {
     mqttMgr.onMessage(onMQTTMessage);
     mqttMgr.begin(cfg);
 
-    // ── Phase 2: channel state, telemetry, command handler ────────────────────
+    // ── Phase 2+3: channel state, probe, PID, telemetry, command handler ────────
     // Load stored SP/PID defaults into in-RAM channel state
-    ch1.sp    = cfg.ch1_sp;
-    ch2.sp    = cfg.ch2_sp;
+    ch1.sp     = cfg.ch1_sp;
+    ch2.sp     = cfg.ch2_sp;
     ch1.maxpwm = 100;
     ch2.maxpwm = 100;
-    // Phase 3 fills ch.temp from probe reads; for Phase 2 stub with 0
-    ch1.temp  = 0.0f;
-    ch2.temp  = 0.0f;
+
+    // Phase 3: probe reader and output controller
+    probeReader.begin();
+    outputCtrl.begin(cfg);
+
+    // Read initial temperature (populates ch.temp before first telemetry tick)
+    ch1.temp = probeReader.readTemp(1);
+    ch2.temp = probeReader.readTemp(2);
 
     telemetry.begin(cfg, mqttMgr);
     cmdHandler.begin(cfg, mqttMgr, telemetry, ch1, ch2);
@@ -136,7 +143,20 @@ void loop() {
     M5.update();
     mqttMgr.loop();
 
-    // Phase 2: command timer tick + telemetry publish
+    // Phase 2+3: probe reads, PID update, command tick, telemetry, PWM output
+    static unsigned long lastSampleMs = 0;
+    unsigned long nowMs = millis();
+    if (nowMs - lastSampleMs >= (unsigned long)cfg.sample_s * 1000UL) {
+        lastSampleMs = nowMs;
+        // Read probes (Phase 3)
+        ch1.temp = probeReader.readTemp(1);
+        ch2.temp = probeReader.readTemp(2);
+        // PID + output update (Phase 3)
+        outputCtrl.update(ch1, ch2);
+    }
+    // Time-proportioning PWM must run every loop() iteration
+    outputCtrl.pwmLoop();
+
     cmdHandler.tick();
     telemetry.loop(ch1, ch2);
 
