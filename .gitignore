@@ -1,0 +1,18 @@
+# PlatformIO build artifacts
+.pio/
+.pioenvs/
+.piolibdeps/
+
+# IDE
+.vscode/
+*.code-workspace
+.DS_Store
+
+# Build
+*.o
+*.d
+
+# Credentials — never commit NVS snapshots or credential files
+*.nvs
+wifi_creds.*
+mqtt_creds.*
