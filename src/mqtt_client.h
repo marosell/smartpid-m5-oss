@@ -34,7 +34,7 @@ public:
     void loop();
 
     // Returns true if currently connected to broker.
-    bool connected() const;
+    bool connected();
 
     // Publish a message. Returns false if not connected.
     bool publish(const char* topic, const char* payload, bool retained = false);

@@ -88,7 +88,8 @@ bool MQTTManager::publish(const char* topic, const char* payload, bool retained)
 }
 
 // ── connected ────────────────────────────────────────────────────────────────
-bool MQTTManager::connected() const {
+// Note: PubSubClient::connected() is not const-qualified in the library.
+bool MQTTManager::connected() {
     return _client.connected();
 }
 

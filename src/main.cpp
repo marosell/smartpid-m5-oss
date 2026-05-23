@@ -34,7 +34,7 @@
 
 #include <Arduino.h>
 #include <M5Unified.h>
-#include <WiFiManager.h>
+#include <WiFi.h>
 #include <ArduinoJson.h>
 
 #include "config.h"
@@ -87,20 +87,7 @@ void setup() {
     M5.Display.setCursor(10, 45);
     M5.Display.printf("ID: %s\n", cfg.topic_id);
     M5.Display.setCursor(10, 60);
-    M5.Display.println("Setting up WiFi...");
-
-    // ── WiFi setup (blocking until connected or portal closes) ───────────────
-    // BtnA held at boot: clear WiFiManager credentials (factory reset WiFi)
-    M5.update();
-    if (M5.BtnA.isPressed()) {
-        log_w("BtnA held — clearing WiFi credentials");
-        WiFiManager wm;
-        wm.resetSettings();
-        M5.Display.setCursor(10, 80);
-        M5.Display.println("WiFi RESET — rebooting...");
-        delay(2000);
-        ESP.restart();
-    }
+    M5.Display.println("Connecting WiFi...");
 
     setupWiFi();
     log_i("WiFi connected: SSID=%s  IP=%s", WiFi.SSID().c_str(), WiFi.localIP().toString().c_str());
@@ -180,69 +167,80 @@ void loop() {
 }
 
 // ── setupWiFi() ───────────────────────────────────────────────────────────────
-// Uses WiFiManager for credential management. On first boot (no stored creds),
-// launches AP "SmartPID-XXXXXX" and blocks until the user configures WiFi + MQTT
-// via the captive portal at http://192.168.4.1
+// Phase 1–4: Direct WiFi.begin() using credentials stored in NVS.
+// WiFi credentials are stored under NVS namespace "smartpid" keys:
+//   "wifi_ssid" and "wifi_pass"
 //
-// MQTT host/port/user/pass are presented as custom parameters in the same portal
-// so everything can be configured in one shot on first boot.
+// On first flash (no credentials): device logs an error and displays a message.
+// Set credentials once via serial or NVS tool, then reboot.
+// Example (from serial monitor or initial flash):
+//   Use pio device monitor to confirm boot, then inject via NVS.
 //
-// On subsequent boots, autoConnect() returns immediately using stored credentials.
+// Phase 7 will add a captive portal (WiFiManager or equivalent) for credential
+// management via a browser. Not included here due to WiFiManager 2.0.17 not
+// supporting arduino-esp32 3.x (Network.h build error).
+//
+// WiFi reconnect: ESP32 WiFi stack handles reconnect automatically once
+// WiFi.begin() is called. We check connectivity in mqttMgr.loop().
 static void setupWiFi() {
-    WiFiManager wm;
+    // Load WiFi creds from NVS ("smartpid" namespace)
+    char ssid[33] = {0};
+    char pass[65] = {0};
+    {
+        Preferences prefs;
+        prefs.begin(SMARTPID_NVS_NS, /*readOnly=*/true);
+        prefs.getString("wifi_ssid", ssid, sizeof(ssid));
+        prefs.getString("wifi_pass", pass, sizeof(pass));
+        prefs.end();
+    }
 
-    // Portal timeout: 3 minutes. After timeout, device reboots.
-    wm.setConfigPortalTimeout(180);
+    if (strlen(ssid) == 0) {
+        log_e("No WiFi credentials in NVS. Write wifi_ssid + wifi_pass to NVS namespace '%s' and reboot.", SMARTPID_NVS_NS);
+        M5.Display.setCursor(10, 75);
+        M5.Display.setTextColor(TFT_RED, TFT_BLACK);
+        M5.Display.println("No WiFi creds!");
+        M5.Display.println("Write NVS keys:");
+        M5.Display.println("  wifi_ssid");
+        M5.Display.println("  wifi_pass");
+        M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
+        // Hang — user must provision credentials
+        while (true) { delay(5000); }
+    }
 
-    // Pre-fill MQTT fields with current NVS values (shown as defaults in portal)
-    char portStr[6];
-    snprintf(portStr, sizeof(portStr), "%u", cfg.mqtt_port);
+    log_i("Connecting to SSID: %s", ssid);
+    WiFi.mode(WIFI_STA);
+    WiFi.begin(ssid, pass);
 
-    WiFiManagerParameter p_host("mqtt_host", "MQTT Host",     cfg.mqtt_host, 63);
-    WiFiManagerParameter p_port("mqtt_port", "MQTT Port",     portStr,        5);
-    WiFiManagerParameter p_user("mqtt_user", "MQTT Username", cfg.mqtt_user, 31);
-    WiFiManagerParameter p_pass("mqtt_pass", "MQTT Password", cfg.mqtt_pass, 31);
+    // Wait up to 30 seconds for connection
+    int tries = 0;
+    while (WiFi.status() != WL_CONNECTED && tries < 60) {
+        delay(500);
+        tries++;
+        if (tries % 10 == 0) {
+            log_d("WiFi connecting... (%ds)", tries / 2);
+        }
+    }
 
-    wm.addParameter(&p_host);
-    wm.addParameter(&p_port);
-    wm.addParameter(&p_user);
-    wm.addParameter(&p_pass);
-
-    // AP name: "SmartPID-" + last 6 chars of topic_id (device-unique, stable)
-    String apName = String("SmartPID-") + String(cfg.topic_id).substring(8);
-
-    bool connected = wm.autoConnect(apName.c_str());
-    if (!connected) {
-        log_e("WiFi config portal closed without connecting — rebooting");
-        M5.Display.setCursor(10, 80);
-        M5.Display.println("WiFi TIMEOUT — rebooting");
-        delay(2000);
+    if (WiFi.status() != WL_CONNECTED) {
+        log_e("WiFi connect failed after 30s — rebooting");
+        M5.Display.setCursor(10, 75);
+        M5.Display.println("WiFi FAILED — reboot");
+        delay(3000);
         ESP.restart();
     }
+}
 
-    // Save MQTT params if anything changed in the portal
-    bool dirty = false;
-    if (strcmp(cfg.mqtt_host, p_host.getValue()) != 0) {
-        strlcpy(cfg.mqtt_host, p_host.getValue(), sizeof(cfg.mqtt_host));
-        dirty = true;
-    }
-    uint16_t newPort = (uint16_t)atoi(p_port.getValue());
-    if (newPort > 0 && newPort != cfg.mqtt_port) {
-        cfg.mqtt_port = newPort;
-        dirty = true;
-    }
-    if (strcmp(cfg.mqtt_user, p_user.getValue()) != 0) {
-        strlcpy(cfg.mqtt_user, p_user.getValue(), sizeof(cfg.mqtt_user));
-        dirty = true;
-    }
-    if (strcmp(cfg.mqtt_pass, p_pass.getValue()) != 0) {
-        strlcpy(cfg.mqtt_pass, p_pass.getValue(), sizeof(cfg.mqtt_pass));
-        dirty = true;
-    }
-    if (dirty) {
-        cfg.saveMqtt();
-        log_i("MQTT params updated from portal and saved to NVS");
-    }
+// ── saveWiFiCreds() ───────────────────────────────────────────────────────────
+// Utility: call once to store WiFi credentials in NVS before first boot.
+// Not called during normal operation — invoked programmatically if needed.
+__attribute__((unused))
+static void saveWiFiCreds(const char* ssid, const char* pass) {
+    Preferences prefs;
+    prefs.begin(SMARTPID_NVS_NS, false);
+    prefs.putString("wifi_ssid", ssid);
+    prefs.putString("wifi_pass", pass);
+    prefs.end();
+    log_i("WiFi credentials saved to NVS");
 }
 
 // ── onMQTTMessage() ───────────────────────────────────────────────────────────

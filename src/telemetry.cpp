@@ -72,7 +72,8 @@ void TelemetryPublisher::_publishChannel(const char* chName, const ChannelState&
     serializeJson(doc, payload);
 
     // Topic: smartpidM5/pro/<id>/dynamic/CH1 (or CH2)
-    String topic = _mqtt->fullTopic(String("dynamic/") + chName);
+    String suffix = String("dynamic/") + chName;
+    String topic  = _mqtt->fullTopic(suffix.c_str());
     _mqtt->publish(topic.c_str(), payload.c_str(), /*retained=*/false);
 
     log_d("[TELE] %s: %s", chName, payload.c_str());
