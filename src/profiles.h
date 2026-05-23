@@ -19,10 +19,10 @@
 // MQTT subscribe: smartpidM5/pro/<id>/profiles/update/# — receives profile writes
 //   from Proof (Phase 6 receiving side — not yet implemented; store as-received).
 //
-// Sequencer events (published to /events/standard):
+// Sequencer events (published to /events/advanced — OEM decompile lines 32817-32824):
 //   "profile"  — advanced mode started, profile loaded
-//   "soak N"   — soak phase begun on step N (1-based)
 //   "ramp N"   — ramp phase begun on step N (1-based)
+//   "soak N"   — soak phase begun on step N (1-based)
 //
 // OEM sequence per step:
 //   1. Ramp: linearly target SetPoint over ramp_s seconds
@@ -114,6 +114,11 @@ public:
 
     // Stop profile execution (e.g. when {"stop": true} received).
     void stop(uint8_t chIdx, ChannelState& ch);
+
+    // Manually advance to the next profile step.
+    // Intended for soak_s=0 "hold-until-commanded" steps — command: {"CH1 next step": true}.
+    // No-op if not in soak phase, not active, or step is not a hold step.
+    void advanceStep(uint8_t chIdx, ChannelState& ch);
 
     // Access sequencer state (read-only, for telemetry/display).
     const ProfileRunState& runState(uint8_t chIdx) const { return _run[chIdx]; }

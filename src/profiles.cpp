@@ -209,6 +209,28 @@ void ProfileManager::stop(uint8_t chIdx, ChannelState& ch) {
     log_d("[PROF] CH%u stopped", chIdx + 1);
 }
 
+// ── advanceStep ───────────────────────────────────────────────────────────────
+// Manually advance a soak_s=0 "hold" step.
+// Called by CommandHandler when {"CH1 next step": true} / {"CH2 next step": true}
+// is received via MQTT. The OEM supports indefinite soaks (soak_s=0) that only
+// advance when commanded — without this handler, soak_s=0 steps stall forever.
+void ProfileManager::advanceStep(uint8_t chIdx, ChannelState& ch) {
+    if (chIdx > 1) return;
+    ProfileRunState& run = _run[chIdx];
+
+    if (!run.active) {
+        log_d("[PROF] CH%u: advanceStep ignored — no active profile", chIdx + 1);
+        return;
+    }
+    if (!run.inSoak) {
+        log_d("[PROF] CH%u: advanceStep ignored — not in soak phase (currently ramping)", chIdx + 1);
+        return;
+    }
+
+    log_i("[PROF] CH%u: manual advance from step %u (soak_s=0 hold released)", chIdx + 1, run.step + 1);
+    _advanceStep(chIdx, ch);
+}
+
 // ── _beginRamp ────────────────────────────────────────────────────────────────
 void ProfileManager::_beginRamp(uint8_t chIdx, ChannelState& ch) {
     ProfileRunState& run = _run[chIdx];

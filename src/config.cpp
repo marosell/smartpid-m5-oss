@@ -81,8 +81,8 @@ void Config::load() {
     // Cooling mode and compressor protection
     ch1_cooling_mode  = prefs.getBool("ch1_cool",   false);
     ch2_cooling_mode  = prefs.getBool("ch2_cool",   false);
-    ch1_fridge_delay  = prefs.getUShort("ch1_fdly", 0);
-    ch2_fridge_delay  = prefs.getUShort("ch2_fdly", 0);
+    ch1_fridge_delay  = prefs.getUChar("ch1_fdly", 0);
+    ch2_fridge_delay  = prefs.getUChar("ch2_fdly", 0);
 
     // Control algorithm
     ch1_control_algo = prefs.getUChar("ch1_algo", 1);   // 1 = PID default
@@ -94,13 +94,15 @@ void Config::load() {
     button_beep   = prefs.getBool("btn_beep",     true);
 
     // PID Auto-Tune
-    at_output_step = prefs.getUChar("at_out_step", 50);
+    // OEM struct-initialises OutputStep to 100 (decompile line 34313: puVar1[0x64]=100).
+    // Range [1,100]; default matches OEM factory value (maximum excitation).
+    at_output_step = prefs.getUChar("at_out_step", 100);
     at_noise_band  = prefs.getFloat("at_noise",    1.0f);
     at_lookback_s  = prefs.getUChar("at_lookback", 10);
     at_channel     = prefs.getUChar("at_ch",        0);
 
     // Logging
-    log_mode      = prefs.getBool("log_mode",    false);
+    log_mode      = prefs.getUChar("log_mode",    0);    // uint8_t enum 0–4, not bool
     log_sample_s  = prefs.getUShort("log_samp_s", 15);
 
     // Auto-resume run state
@@ -152,8 +154,8 @@ void Config::save() {
 
     prefs.putBool("ch1_cool",      ch1_cooling_mode);
     prefs.putBool("ch2_cool",      ch2_cooling_mode);
-    prefs.putUShort("ch1_fdly",    ch1_fridge_delay);
-    prefs.putUShort("ch2_fdly",    ch2_fridge_delay);
+    prefs.putUChar("ch1_fdly",     ch1_fridge_delay);   // uint8_t, max 240s (OEM byte field)
+    prefs.putUChar("ch2_fdly",     ch2_fridge_delay);
 
     prefs.putUChar("ch1_algo",     ch1_control_algo);
     prefs.putUChar("ch2_algo",     ch2_control_algo);
@@ -167,7 +169,7 @@ void Config::save() {
     prefs.putBool("auto_resume",   auto_resume);
     prefs.putBool("btn_beep",      button_beep);
 
-    prefs.putBool("log_mode",      log_mode);
+    prefs.putUChar("log_mode",     log_mode);    // uint8_t enum 0–4
     prefs.putUShort("log_samp_s",  log_sample_s);
 
     prefs.putUChar("ch1_runmode",  ch1_saved_runmode);

@@ -100,9 +100,11 @@ struct Config {
     bool     ch1_cooling_mode;   // false=heating only, true=cooling relay enabled
     bool     ch2_cooling_mode;
     // CONFIRMED (RE_FINDINGS.md): Fridge Delay is in SECONDS, not minutes.
-    // OEM device display shows "0s" default. Range 0–600s (confirmed from UI_SPEC.md §8.1).
-    uint16_t ch1_fridge_delay;   // compressor protection: minimum off-time in SECONDS (default 0)
-    uint16_t ch2_fridge_delay;   // default 0
+    // OEM stores as a single byte (undefined1), max 0xF0 = 240 seconds.
+    // UI_SPEC.md §8.1 "Range 0–600s" was WRONG — decompile line 30603 proves max=240.
+    // Using uint8_t to match OEM NVS storage type (prevents cross-flash corruption).
+    uint8_t ch1_fridge_delay;   // compressor protection: minimum off-time in SECONDS (default 0, max 240)
+    uint8_t ch2_fridge_delay;   // default 0, max 240
 
     // ── Control algorithm per channel ─────────────────────────────────────────
     // 0 = On/Off hysteresis  1 = PID (default)  2 = On/Off+PID combined
@@ -137,7 +139,12 @@ struct Config {
     uint8_t  at_channel;      // 0=CH1, 1=CH2 — which channel to auto-tune
 
     // ── Logging ───────────────────────────────────────────────────────────────
-    bool     log_mode;        // false=disabled (OEM: WiFi/Logging → Log Mode)
+    // OEM stores Log_Mode as a byte enum 0–4, NOT a boolean.
+    // Decompile line 30812: FUN_400febe8(PTR_s_Log_Mode, DAT_400d0164, 4, ...) — max=4.
+    // Known values: 0=Off. Modes 1–4 likely: WiFi, SD, cloud, combined (unconfirmed).
+    // Our UI currently exposes only Off(0) / WiFi(1). Type is uint8_t to preserve
+    // any NVS value written by OEM firmware without truncating to 0/1.
+    uint8_t  log_mode;        // 0=disabled, 1=WiFi, 2–4=OEM modes (UI exposes 0/1)
     uint16_t log_sample_s;    // logging sample interval in seconds (default 15)
 
     // ── Methods ───────────────────────────────────────────────────────────────

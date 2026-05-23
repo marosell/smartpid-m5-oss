@@ -64,13 +64,16 @@ struct ChannelState {
                runmode == Runmode::MONITOR;
     }
 
-    // Called when stop command received or on boot init
+    // Called when stop command received or on boot init.
+    // countdown is explicitly cleared: a stale timer must not auto-expire
+    // on the next start and fire spurious "timer expired" events.
     void stop() {
-        runmode    = Runmode::IDLE;
-        mode       = ControlMode::OFF;
-        pwm        = 0;
-        paused     = false;
-        countup    = 0;
+        runmode        = Runmode::IDLE;
+        mode           = ControlMode::OFF;
+        pwm            = 0;
+        paused         = false;
+        countup        = 0;
+        countdown      = 0;
         spReachedFired = false;
     }
 

@@ -75,10 +75,18 @@ void CommandHandler::handle(const uint8_t* payload, unsigned int len) {
     if (!doc["CH2 maxpwm"].isNull()) _cmdSetMaxpwm(2, doc["CH2 maxpwm"].as<int>());
 
     // CH1 countdown / CH2 countdown
-    if (!doc["CH1 countdown"].isNull())
-        _cmdSetCountdown(1, (uint32_t)doc["CH1 countdown"].as<long>());
-    if (!doc["CH2 countdown"].isNull())
-        _cmdSetCountdown(2, (uint32_t)doc["CH2 countdown"].as<long>());
+    // Guard: negative JSON long wraps to ~136-year uint32 — silently reject.
+    // Reasonable cap: 86400s (24 hours); longer timers are not realistic for this device.
+    if (!doc["CH1 countdown"].isNull()) {
+        long v = doc["CH1 countdown"].as<long>();
+        if (v >= 0 && v <= 86400L) _cmdSetCountdown(1, (uint32_t)v);
+        else log_w("[CMD] CH1 countdown %ld out of range [0,86400] — ignored", v);
+    }
+    if (!doc["CH2 countdown"].isNull()) {
+        long v = doc["CH2 countdown"].as<long>();
+        if (v >= 0 && v <= 86400L) _cmdSetCountdown(2, (uint32_t)v);
+        else log_w("[CMD] CH2 countdown %ld out of range [0,86400] — ignored", v);
+    }
 
     // CH1 profile / CH2 profile (advanced mode selection — Phase 6 execution)
     if (!doc["CH1 profile"].isNull()) {
@@ -89,6 +97,14 @@ void CommandHandler::handle(const uint8_t* payload, unsigned int len) {
         ChannelState* ch = _channel(2);
         if (ch) ch->profile = (uint8_t)constrain(doc["CH2 profile"].as<int>(), 1, 10);
     }
+
+    // ── {"CH1 next step": true} / {"CH2 next step": true} ───────────────────
+    // Manually advance a soak_s=0 profile step (hold-until-commanded phase).
+    // No-op when not running advanced mode or not in soak phase.
+    if (doc["CH1 next step"].is<bool>() && doc["CH1 next step"].as<bool>())
+        profiles.advanceStep(0, *_ch[0]);
+    if (doc["CH2 next step"].is<bool>() && doc["CH2 next step"].as<bool>())
+        profiles.advanceStep(1, *_ch[1]);
 
     // ── {"CH1 pwm": N} / {"CH2 pwm": N} — SILENTLY IGNORED ──────────────────
     // pwm is a read-only telemetry field; direct write is not supported (OEM behavior
@@ -199,9 +215,23 @@ void CommandHandler::_cmdResume() {
 // ── _cmdSetSP ─────────────────────────────────────────────────────────────────
 // Setpoint update takes effect immediately, no restart required (confirmed STEP 2).
 // SP is in-RAM only — does NOT persist to NVS (OEM behavior confirmed STEP 5).
+//
+// Range: -200 to 999 °F  /  -129 to 537 °C.
+// Values outside this range are rejected — they indicate a malformed payload and
+// would drive PID or OnOff control to hardware-damaging extremes.
 void CommandHandler::_cmdSetSP(int chIdx, float sp) {
     ChannelState* ch = _channel(chIdx);
     if (!ch) return;
+
+    bool isFahrenheit = (strcmp(_cfg->temp_unit, "F") == 0);
+    float spMin = isFahrenheit ? -200.0f :  -129.0f;
+    float spMax = isFahrenheit ?  999.0f :   537.0f;
+    if (sp < spMin || sp > spMax) {
+        log_w("[CMD] CH%d SP %.1f %s out of range [%.0f, %.0f] — rejected",
+              chIdx, sp, _cfg->temp_unit, spMin, spMax);
+        return;
+    }
+
     log_i("[CMD] CH%d SP → %.1f %s", chIdx, sp, _cfg->temp_unit);
     ch->sp = sp;
     ch->spReachedFired = false;  // reset so event can fire again at new SP

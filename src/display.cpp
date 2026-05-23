@@ -1631,8 +1631,10 @@ void DisplayManager::_handleSetupHw(UIEvent ev) {
                         static const char* const logOpts[] = { "Off", "WiFi" };
                         strlcpy(_listTitle, "Log Mode", sizeof(_listTitle));
                         _listOptions = logOpts; _listCount = 2;
-                        _listSel = cfg.log_mode ? 1 : 0;
-                        _listCallback = [](int8_t i){ cfg.log_mode = (i == 1); cfg.save(); };
+                        _listSel = (cfg.log_mode > 0) ? 1 : 0;  // uint8_t: 0=Off, >0=On
+                        // Store 0 or 1 only; full 0–4 enum is preserved on NVS read
+                        // but UI currently exposes only Off/WiFi.
+                        _listCallback = [](int8_t i){ cfg.log_mode = (uint8_t)(i > 0 ? 1 : 0); cfg.save(); };
                         _goTo(UIScreen::LIST_SELECT_DIALOG);
                         break;
                     }

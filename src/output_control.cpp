@@ -89,6 +89,19 @@ void OutputController::_updatePid(int chIdx, ChannelState& ch,
                                    double& input, double& sp, double& output,
                                    PwmState& pwmState,
                                    int heatingPin, int coolingPin) {
+    // Probe disconnected: force ALL outputs OFF immediately.
+    // PROBE_SENTINEL_VALUE (9170000) would make sp > temp = false → cooling relay ON.
+    // That is dangerous — we must detect and suppress output entirely.
+    if (ch.temp >= (PROBE_SENTINEL_VALUE / 2.0f)) {
+        _setHeatingOutput(chIdx, 0, heatingPin, pwmState, _isPwmChannel(chIdx));
+        _setCoolingOutput(chIdx, false, coolingPin);
+        ch.pwm  = 0;
+        ch.mode = ControlMode::OFF;
+        log_w("[OUT] CH%d PROBE DISCONNECTED (temp=%.0f) — outputs forced OFF",
+              chIdx, ch.temp);
+        return;
+    }
+
     if (!ch.isRunning() || ch.paused) {
         _setHeatingOutput(chIdx, 0, heatingPin, pwmState, _isPwmChannel(chIdx));
         _setCoolingOutput(chIdx, false, coolingPin);
@@ -162,6 +175,20 @@ void OutputController::_updateOnOff(int chIdx, ChannelState& ch,
                                      OnOffState& oos,
                                      int heatingPin, int coolingPin) {
     (void)coolingPin;   // On/Off uses single relay for both directions
+
+    // Probe disconnected: force relay OFF and record off-time.
+    // Same sentinel guard as _updatePid — prevents cooling relay activation on open probe.
+    if (ch.temp >= (PROBE_SENTINEL_VALUE / 2.0f)) {
+        if (oos.relayOn) {
+            digitalWrite(heatingPin, LOW);
+            oos.relayOn    = false;
+            oos.relayOffMs = millis();
+        }
+        ch.pwm  = 0;
+        ch.mode = ControlMode::OFF;
+        log_w("[OUT] CH%d PROBE DISCONNECTED (temp=%.0f) — relay forced OFF", chIdx, ch.temp);
+        return;
+    }
 
     if (!ch.isRunning() || ch.paused || ch.runmode == Runmode::MONITOR) {
         if (oos.relayOn) {

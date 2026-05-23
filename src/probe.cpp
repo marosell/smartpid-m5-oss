@@ -127,9 +127,23 @@ float ProbeReader::_readDS18B20(int channel) {
 
     log_d("[PROBE] DS18B20 CH%d: raw %.4f°C", channel, tempC);
 
-    // Apply per-channel calibration offset (stored in device units — match OEM)
-    float cal = (channel == 1) ? cfg.ch1_probe_cal : cfg.ch2_probe_cal;
-    return _toDeviceUnit(tempC) + cal;
+    // Apply unit conversion then per-channel calibration offset (stored in device units).
+    float cal    = (channel == 1) ? cfg.ch1_probe_cal : cfg.ch2_probe_cal;
+    float result = _toDeviceUnit(tempC) + cal;
+
+    // Post-calibration bounds check.
+    // DS18B20 physical range: -55 to +125°C → -67 to +257°F.
+    // We allow ±20 units of cal headroom so small offsets near the sensor's limits pass.
+    bool isFahrenheit = (strcmp(cfg.temp_unit, "F") == 0);
+    float postMin = isFahrenheit ? -87.0f :  -75.0f;   // -67°F - 20 headroom  |  -55°C - 20
+    float postMax = isFahrenheit ?  277.0f :  145.0f;   // 257°F + 20 headroom  | 125°C + 20
+    if (result < postMin || result > postMax) {
+        log_w("[PROBE] DS18B20 CH%d: post-cal %.2f%s out of bounds [%.0f, %.0f]",
+              channel, result, cfg.temp_unit, postMin, postMax);
+        return PROBE_SENTINEL_VALUE;
+    }
+
+    return result;
 }
 
 // ── _readNtcAdc ───────────────────────────────────────────────────────────────
@@ -159,8 +173,22 @@ float ProbeReader::_readNtcAdc(int channel) {
         return PROBE_SENTINEL_VALUE;
     }
 
-    float cal = (channel == 1) ? cfg.ch1_probe_cal : cfg.ch2_probe_cal;
-    return _toDeviceUnit(tempC) + cal;
+    float cal    = (channel == 1) ? cfg.ch1_probe_cal : cfg.ch2_probe_cal;
+    float result = _toDeviceUnit(tempC) + cal;
+
+    // Sanity check: NTC ADC can produce physically impossible values if the
+    // resistor divider is wired for a different NTC than cfg.ntc_beta expects.
+    // Reject anything outside the plausible operating range of this device.
+    bool isFahrenheit = (strcmp(cfg.temp_unit, "F") == 0);
+    float ntcMin = isFahrenheit ? -148.0f : -100.0f;   // -100°C / -148°F practical floor
+    float ntcMax = isFahrenheit ?  572.0f :  300.0f;   //  300°C /  572°F practical ceiling
+    if (result < ntcMin || result > ntcMax) {
+        log_w("[PROBE] NTC CH%d: post-cal %.2f%s out of bounds [%.0f, %.0f]",
+              channel, result, cfg.temp_unit, ntcMin, ntcMax);
+        return PROBE_SENTINEL_VALUE;
+    }
+
+    return result;
 }
 
 // ── adcToTempC ────────────────────────────────────────────────────────────────

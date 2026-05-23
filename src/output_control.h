@@ -128,8 +128,8 @@ private:
     //   Turn OFF when: pv <= sp
     //
     // hyst1 = cfg.chN_hyst1 (lower threshold, default 3.6°)
-    // Fridge delay = cfg.chN_fridge_delay minutes — minimum relay off-time
-    //   (compressor protection; 0 = no delay enforced)
+    // Fridge delay = cfg.chN_fridge_delay SECONDS — minimum relay off-time
+    //   (compressor protection; 0 = no delay enforced; max 240s — OEM byte field)
     void _updateOnOff(int chIdx, ChannelState& ch,
                       OnOffState& oos,
                       int heatingPin, int coolingPin);
