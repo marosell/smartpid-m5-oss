@@ -2,8 +2,7 @@
 // Ported from vendor C source; confirmed against hardware 2026-05-22.
 
 #include "topic_id.h"
-#include <esp_efuse.h>    // esp_efuse_mac_get_default
-#include <esp_mac.h>
+#include <Arduino.h>    // ESP.getEfuseMac()
 
 // ── bitOrderInvert ────────────────────────────────────────────────────────────
 // Reverses the bit order within a byte.
@@ -63,13 +62,18 @@ String scrambleSerialToId(const String& serialHex) {
 // ── macDerivedSerial ──────────────────────────────────────────────────────────
 // Builds a 7-byte serial from the ESP32 base MAC address:
 //   Byte 0: 0x00 (padding prefix)
-//   Bytes 1-6: MAC[0]–MAC[5]
+//   Bytes 1-6: lower 6 bytes of ESP.getEfuseMac()
 // This gives a stable, device-unique serial without hardware serial access.
+// ESP.getEfuseMac() is the Arduino-ESP32 API for reading the efuse base MAC.
 String macDerivedSerial() {
-    uint8_t mac[6];
-    esp_efuse_mac_get_default(mac);
+    uint64_t mac = ESP.getEfuseMac();
     char buf[15];
     snprintf(buf, sizeof(buf), "00%02X%02X%02X%02X%02X%02X",
-             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+             (uint8_t)(mac >> 40),
+             (uint8_t)(mac >> 32),
+             (uint8_t)(mac >> 24),
+             (uint8_t)(mac >> 16),
+             (uint8_t)(mac >>  8),
+             (uint8_t)(mac      ));
     return String(buf);
 }

@@ -10,7 +10,7 @@
 #include <Arduino.h>
 #include <PubSubClient.h>
 #include <WiFiClient.h>
-#include <functional>
+#include <functional>   // std::function
 #include "config.h"
 
 // Topic base for all SmartPID M5 PRO topics.
