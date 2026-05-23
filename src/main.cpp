@@ -1,5 +1,5 @@
 // main.cpp — SmartPID M5 PRO Open-Source Firmware
-// Phase 1: WiFi + MQTT scaffold, NVS config, status publish
+// Phase 1+2: WiFi + MQTT + NVS config + command parser + telemetry publisher
 //
 // Reference documents:
 //   /Users/Mike/Projects/M5/IMPLEMENTATION_SCOPE.md    — full phase plan
@@ -14,10 +14,23 @@
 //   5. scramble("040531000000E0") == "6e345245af3704"
 //   6. AP "SmartPID-XXXXXX" appears when WiFi credentials absent
 //
+// Phase 2 acceptance criteria:
+//   1. mosquitto_sub -t 'smartpidM5/pro/+/dynamic/+' receives CH1+CH2 on same tick every 15s
+//      ONLY after {"start": "monitor"} or {"start": "standard"} — not on idle boot
+//   2. Monitor mode payload: exactly {time, temp, unit, runmode}
+//   3. Standard mode payload: all fields including SP, pwm, maxpwm, mode, runmode
+//   4. {"CH1 SP": N} while running: reflected in next tick; no restart required
+//   5. {"CH1 maxpwm": 30}: reflected as "maxpwm": 30 in next tick
+//   6. {"start": "standard"} while running: silently ignored
+//   7. {"stop": true} → event "stop"; {"start": "standard"} → event "start"
+//   8. {"CH1 pwm": 50}: silently ignored
+//   9. {"pause": true} → event "pause"; {"resume": true} → event "resume"
+//
 // KEY BEHAVIORAL NOTE (confirmed serial monitor 2026-05-23):
 //   The OEM device does NOT start telemetry automatically on MQTT connect.
 //   It sits idle until it receives {"start": "monitor"} or {"start": "standard"}.
-//   Our firmware matches this behavior: boot → idle (no telemetry until start command).
+//   Proof's mqtt_bridge.py MUST auto-send {"start": "monitor"} on every status
+//   topic arrival (i.e., every power cycle or broker reconnect).
 
 #include <Arduino.h>
 #include <M5Unified.h>
@@ -26,11 +39,17 @@
 
 #include "config.h"
 #include "mqtt_client.h"
+#include "channel_state.h"
+#include "telemetry.h"
+#include "command_handler.h"
 
 // ── Forward declarations ──────────────────────────────────────────────────────
 static void setupWiFi();
 static void onMQTTMessage(const String& topic, const uint8_t* payload, unsigned int len);
 static void updateDisplay();
+
+// ── Per-channel state (Phase 2) ───────────────────────────────────────────────
+static ChannelState ch1, ch2;
 
 // ── Global state ──────────────────────────────────────────────────────────────
 static bool  gMqttWasConnected = false;
@@ -94,6 +113,19 @@ void setup() {
     mqttMgr.onMessage(onMQTTMessage);
     mqttMgr.begin(cfg);
 
+    // ── Phase 2: channel state, telemetry, command handler ────────────────────
+    // Load stored SP/PID defaults into in-RAM channel state
+    ch1.sp    = cfg.ch1_sp;
+    ch2.sp    = cfg.ch2_sp;
+    ch1.maxpwm = 100;
+    ch2.maxpwm = 100;
+    // Phase 3 fills ch.temp from probe reads; for Phase 2 stub with 0
+    ch1.temp  = 0.0f;
+    ch2.temp  = 0.0f;
+
+    telemetry.begin(cfg, mqttMgr);
+    cmdHandler.begin(cfg, mqttMgr, telemetry, ch1, ch2);
+
     gStatusLine = mqttMgr.connected() ? "MQTT: OK" : "MQTT: connecting...";
     updateDisplay();
     log_i("Setup complete. State: idle (awaiting start command).");
@@ -103,6 +135,10 @@ void setup() {
 void loop() {
     M5.update();
     mqttMgr.loop();
+
+    // Phase 2: command timer tick + telemetry publish
+    cmdHandler.tick();
+    telemetry.loop(ch1, ch2);
 
     // Update display on MQTT state change
     bool nowConnected = mqttMgr.connected();
@@ -183,27 +219,27 @@ static void setupWiFi() {
 }
 
 // ── onMQTTMessage() ───────────────────────────────────────────────────────────
-// Phase 1: only handles {"status": true}.
-// Phase 2 replaces this with the full command dispatcher in command_handler.cpp.
+// Routes incoming messages to the appropriate handler.
+// The commands topic is dispatched to cmdHandler.
+// Profile update topics are noted here (Phase 6 will handle them).
 static void onMQTTMessage(const String& topic, const uint8_t* payload, unsigned int len) {
     log_d("[MQTT] RX  topic: %s  len: %u", topic.c_str(), len);
 
-    JsonDocument doc;
-    DeserializationError err = deserializeJson(doc, payload, len);
-    if (err) {
-        log_w("[MQTT] JSON parse error: %s", err.c_str());
+    String cmdsTopic = mqttMgr.fullTopic("commands");
+
+    if (topic == cmdsTopic) {
+        cmdHandler.handle(payload, len);
         return;
     }
 
-    // {"status": true} — re-publish retained status immediately
-    if (doc["status"].is<bool>() && doc["status"].as<bool>()) {
-        log_i("[CMD] status request → re-publishing");
-        mqttMgr.publishStatus();
+    // Profile update: smartpidM5/pro/<id>/profiles/update/<X>
+    // Phase 6 will parse and store the profile. For now, log receipt.
+    if (topic.indexOf("/profiles/update/") >= 0) {
+        log_i("[MQTT] Profile update received (Phase 6 pending): %s", topic.c_str());
         return;
     }
 
-    // Phase 1: all other commands are noted but not dispatched yet
-    log_d("[CMD] unhandled command (Phase 1) — will be dispatched in Phase 2");
+    log_d("[MQTT] Unhandled topic: %s", topic.c_str());
 }
 
 // ── updateDisplay() ───────────────────────────────────────────────────────────
