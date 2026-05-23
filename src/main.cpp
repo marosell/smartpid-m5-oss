@@ -59,8 +59,17 @@ static void parseAndSaveProfile(int slotN, const uint8_t* payload, unsigned int 
 static ChannelState ch1, ch2;
 
 // ── Global state ──────────────────────────────────────────────────────────────
-static bool  gMqttWasConnected = false;
-static String gStatusLine      = "booting...";
+static bool          gMqttWasConnected  = false;
+static String        gStatusLine        = "booting...";
+
+// Deferred auto-resume state.
+// On boot with saved runmode: we do NOT immediately apply channel states.
+// Instead we wait for MQTT to connect, publish "power restored", then after
+// 62 seconds publish "resume" and apply the saved states.  This matches the
+// OEM timing confirmed on bench (t=3s: "power restored", t=65s: "resume").
+// The 62-second window lets Proof re-send current SP before the device resumes.
+static bool          gPendingAutoResume = false;   // set in setup(), cleared on MQTT connect
+static unsigned long gAutoResumeAtMs   = 0;        // when > 0: millis() target to apply states
 
 // ── setup() ───────────────────────────────────────────────────────────────────
 void setup() {
@@ -140,32 +149,31 @@ void setup() {
     telemetry.begin(cfg, mqttMgr);
     cmdHandler.begin(cfg, mqttMgr, telemetry, ch1, ch2);
 
-    // ── Auto-resume: restore run state after power cycle ─────────────────────
-    // OEM behavior (confirmed from decompile PTR_s_Resume_last_process__400d04b0):
-    // If auto_resume==true AND a channel was running when power was cut, the device
-    // restores the channel runmode on the next boot without waiting for an MQTT
-    // start command. The OEM shows a "Resume last process?" dialog with a timeout
-    // that defaults to Yes; our implementation auto-resumes silently.
+    // ── Auto-resume: deferred power-restored + resume sequence ───────────────
+    // OEM bench timing (2026-05-23):
+    //   t= 3s  → publishes "power restored" event to events/standard
+    //   t=65s  → applies saved runmode, publishes "resume" event
     //
-    // Important: deliberate stop ({"stop": true}) clears saved state in NVS so
-    // a stop → power cycle → boot does NOT trigger auto-resume.
+    // This 62-second window lets Proof (or any subscriber) re-send the current SP
+    // before the device resumes control — so the device doesn't resume with a
+    // stale setpoint if the SP was changed between power cycles.
+    //
+    // We replicate this timing:
+    //   setup():  if saved runmode != IDLE, set gPendingAutoResume = true; do NOT
+    //             apply channel states here.
+    //   loop():   when MQTT first connects and gPendingAutoResume: publish
+    //             "power restored", schedule gAutoResumeAtMs = millis() + 62000.
+    //   loop():   when millis() >= gAutoResumeAtMs: apply saved states, publish "resume".
+    //
+    // Deliberate stop ({"stop": true}) calls saveRunState(0,0,false,false) which
+    // clears saved modes — so stop → power cycle does NOT trigger auto-resume.
     if (cfg.auto_resume) {
         Runmode r1 = (Runmode)cfg.ch1_saved_runmode;
         Runmode r2 = (Runmode)cfg.ch2_saved_runmode;
         if (r1 != Runmode::IDLE || r2 != Runmode::IDLE) {
-            ch1.runmode = r1;
-            ch2.runmode = r2;
-            ch1.paused  = cfg.ch1_saved_paused;
-            ch2.paused  = cfg.ch2_saved_paused;
-            log_i("[RESUME] Auto-resume: CH1=%s%s  CH2=%s%s",
-                  runmodeStr(r1), cfg.ch1_saved_paused ? " (paused)" : "",
-                  runmodeStr(r2), cfg.ch2_saved_paused ? " (paused)" : "");
-            // Publish "start" event once MQTT is connected.
-            // If MQTT connected in setup (common case), publish immediately;
-            // else mqttMgr.loop() will detect re-connect and Proof re-subscribes.
-            if (mqttMgr.connected()) {
-                telemetry.publishEvent("start");
-            }
+            gPendingAutoResume = true;
+            log_i("[RESUME] Power cycle with saved state CH1=%u CH2=%u — deferred resume pending",
+                  (uint8_t)r1, (uint8_t)r2);
         }
     }
 
@@ -225,10 +233,38 @@ void loop() {
         gStatusLine = nowConnected ? "MQTT: OK" : "MQTT: reconnecting...";
         display.notifyMqttChanged();
         if (nowConnected) {
-            log_i("MQTT reconnected — status published");
+            log_i("MQTT connected");
+            // "socket connected" event: OEM publishes this on every MQTT connect
+            // (confirmed from decompile — fires before any other event on connect)
+            telemetry.publishEvent("socket connected");
             // Re-announce all stored profiles so Proof stays in sync (OEM behavior)
             profiles.publishAll();
+            // Deferred auto-resume: publish "power restored" and arm 62-second timer
+            if (gPendingAutoResume) {
+                gPendingAutoResume = false;
+                telemetry.publishEvent("power restored");
+                gAutoResumeAtMs = millis() + 62000UL;
+                log_i("[RESUME] Published 'power restored' — will resume in 62s");
+            }
         }
+    }
+
+    // ── Deferred auto-resume apply ────────────────────────────────────────────
+    // When the 62-second window expires, apply saved channel states and publish
+    // "resume". After this point the device is live — PID and output control will
+    // pick up on the next sample tick.
+    if (gAutoResumeAtMs > 0 && millis() >= gAutoResumeAtMs) {
+        gAutoResumeAtMs = 0;
+        Runmode r1 = (Runmode)cfg.ch1_saved_runmode;
+        Runmode r2 = (Runmode)cfg.ch2_saved_runmode;
+        ch1.runmode = r1;
+        ch2.runmode = r2;
+        ch1.paused  = cfg.ch1_saved_paused;
+        ch2.paused  = cfg.ch2_saved_paused;
+        telemetry.publishEvent("resume");
+        log_i("[RESUME] Applied: CH1=%s%s  CH2=%s%s",
+              runmodeStr(r1), cfg.ch1_saved_paused ? " (paused)" : "",
+              runmodeStr(r2), cfg.ch2_saved_paused ? " (paused)" : "");
     }
 }
 

@@ -155,8 +155,9 @@ void OutputController::_updatePid(int chIdx, ChannelState& ch,
 //   Turn ON  when: temp >= (sp + hyst1)  AND fridge delay elapsed
 //   Turn OFF when: temp <= sp
 //
-// Fridge delay (ch.fridge_delay_min): minimum minutes the relay must remain OFF
+// Fridge delay (ch.fridge_delay_s): minimum seconds the relay must remain OFF
 // after turning off, to protect compressors.
+// CONFIRMED: unit is SECONDS (not minutes) — default 0 (see RE_FINDINGS.md).
 void OutputController::_updateOnOff(int chIdx, ChannelState& ch,
                                      OnOffState& oos,
                                      int heatingPin, int coolingPin) {
@@ -175,14 +176,14 @@ void OutputController::_updateOnOff(int chIdx, ChannelState& ch,
     }
 
     float hyst = (chIdx == 1) ? _cfg->ch1_hyst1 : _cfg->ch2_hyst1;
-    uint16_t fridgeDelayMin = (chIdx == 1) ? _cfg->ch1_fridge_delay
+    uint16_t fridgeDelaySec = (chIdx == 1) ? _cfg->ch1_fridge_delay
                                             : _cfg->ch2_fridge_delay;
 
     bool shouldHeat = (ch.sp > ch.temp);
     ch.mode = shouldHeat ? ControlMode::HEATING : ControlMode::COOLING;
 
     // Fridge delay: milliseconds the relay must stay OFF
-    unsigned long fridgeDelayMs = (unsigned long)fridgeDelayMin * 60000UL;
+    unsigned long fridgeDelayMs = (unsigned long)fridgeDelaySec * 1000UL;
     bool fridgeOk = (fridgeDelayMs == 0) ||
                     ((millis() - oos.relayOffMs) >= fridgeDelayMs);
 

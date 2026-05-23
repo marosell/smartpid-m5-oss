@@ -2,9 +2,10 @@
 // telemetry.h — Dynamic telemetry publisher and event publisher
 //
 // Publishes to:
-//   smartpidM5/pro/<id>/dynamic/CH1   — live CH1 data (NOT retained)
-//   smartpidM5/pro/<id>/dynamic/CH2   — live CH2 data (NOT retained)
-//   smartpidM5/pro/<id>/events/standard — run events (NOT retained)
+//   smartpidM5/pro/<id>/dynamic/CH1      — live CH1 data (NOT retained)
+//   smartpidM5/pro/<id>/dynamic/CH2      — live CH2 data (NOT retained)
+//   smartpidM5/pro/<id>/events/standard  — run events: start/stop/pause/resume/power-restored
+//   smartpidM5/pro/<id>/events/advanced  — profile sequencer events: profile/ramp N/soak N
 //
 // Timing:
 //   - CH1 + CH2 publish on the same tick, every cfg.sample_s seconds
@@ -29,8 +30,14 @@ public:
     void loop(const ChannelState& ch1, const ChannelState& ch2);
 
     // Publish an event to events/standard immediately.
+    // Used for: start, stop, pause, resume, power restored, socket connected.
     // payload: { "time": <boot_seconds>, "event": "<string>" }
     void publishEvent(const char* eventStr);
+
+    // Publish an event to events/advanced immediately.
+    // Used for profile sequencer events: "profile", "ramp N", "soak N".
+    // OEM decompile lines 32817-32824 confirm separate topic for advanced events.
+    void publishEventAdv(const char* eventStr);
 
     // Force an immediate telemetry tick (e.g. after command that changes state).
     void forceTick();

@@ -156,8 +156,8 @@ bool ProfileManager::startProfile(uint8_t chIdx, uint8_t slot, ChannelState& ch)
     log_i("[PROF] CH%u: starting slot %u (%u steps)",
           chIdx + 1, slot, _active[chIdx].step_count);
 
-    // Publish "profile" event (OEM event code 0x11)
-    _tele->publishEvent("profile");
+    // Publish "profile" event (OEM event code 0x11) — routes to events/advanced
+    _tele->publishEventAdv("profile");
 
     // Begin first step
     _beginRamp(chIdx, ch);
@@ -220,11 +220,11 @@ void ProfileManager::_beginRamp(uint8_t chIdx, ChannelState& ch) {
     run.rampFired    = false;
     run.soakFired    = false;
 
-    // Publish "ramp N" event (1-based step number)
+    // Publish "ramp N" event (1-based step number) — routes to events/advanced
     if (!run.rampFired) {
         char evtBuf[16];
         snprintf(evtBuf, sizeof(evtBuf), "ramp %u", (unsigned)(run.step + 1));
-        _tele->publishEvent(evtBuf);
+        _tele->publishEventAdv(evtBuf);
         run.rampFired = true;
         log_d("[PROF] CH%u step %u ramp → SP=%.1f over %lus",
               chIdx + 1, run.step + 1, step.setpoint, (unsigned long)step.ramp_s);
@@ -240,11 +240,11 @@ void ProfileManager::_beginSoak(uint8_t chIdx, ChannelState& ch) {
     run.phaseStartMs = millis();
     ch.sp            = step.setpoint;   // lock SP for soak
 
-    // Publish "soak N" event (1-based step number)
+    // Publish "soak N" event (1-based step number) — routes to events/advanced
     if (!run.soakFired) {
         char evtBuf[16];
         snprintf(evtBuf, sizeof(evtBuf), "soak %u", (unsigned)(run.step + 1));
-        _tele->publishEvent(evtBuf);
+        _tele->publishEventAdv(evtBuf);
         run.soakFired = true;
         log_d("[PROF] CH%u step %u soak at SP=%.1f for %lus",
               chIdx + 1, run.step + 1, step.setpoint, (unsigned long)step.soak_s);

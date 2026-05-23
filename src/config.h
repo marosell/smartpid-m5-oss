@@ -99,8 +99,10 @@ struct Config {
     // ── Cooling mode and compressor protection ────────────────────────────────
     bool     ch1_cooling_mode;   // false=heating only, true=cooling relay enabled
     bool     ch2_cooling_mode;
-    uint16_t ch1_fridge_delay;   // compressor protection: minimum off-time in minutes (default 3)
-    uint16_t ch2_fridge_delay;   // default 3
+    // CONFIRMED (RE_FINDINGS.md): Fridge Delay is in SECONDS, not minutes.
+    // OEM device display shows "0s" default. Range 0–600s (confirmed from UI_SPEC.md §8.1).
+    uint16_t ch1_fridge_delay;   // compressor protection: minimum off-time in SECONDS (default 0)
+    uint16_t ch2_fridge_delay;   // default 0
 
     // ── Control algorithm per channel ─────────────────────────────────────────
     // 0 = On/Off hysteresis  1 = PID (default)  2 = On/Off+PID combined

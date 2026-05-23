@@ -81,8 +81,8 @@ void Config::load() {
     // Cooling mode and compressor protection
     ch1_cooling_mode  = prefs.getBool("ch1_cool",   false);
     ch2_cooling_mode  = prefs.getBool("ch2_cool",   false);
-    ch1_fridge_delay  = prefs.getUShort("ch1_fdly", 3);
-    ch2_fridge_delay  = prefs.getUShort("ch2_fdly", 3);
+    ch1_fridge_delay  = prefs.getUShort("ch1_fdly", 0);
+    ch2_fridge_delay  = prefs.getUShort("ch2_fdly", 0);
 
     // Control algorithm
     ch1_control_algo = prefs.getUChar("ch1_algo", 1);   // 1 = PID default

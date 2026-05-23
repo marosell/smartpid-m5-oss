@@ -81,6 +81,7 @@ void TelemetryPublisher::_publishChannel(const char* chName, const ChannelState&
 
 // ── publishEvent ─────────────────────────────────────────────────────────────
 // Publishes to smartpidM5/pro/<id>/events/standard
+// Used for: start, stop, pause, resume, power restored, socket connected.
 // Payload: { "time": N, "event": "<string>" }
 void TelemetryPublisher::publishEvent(const char* eventStr) {
     if (!_mqtt->connected()) return;
@@ -95,5 +96,26 @@ void TelemetryPublisher::publishEvent(const char* eventStr) {
     String topic = _mqtt->fullTopic("events/standard");
     _mqtt->publish(topic.c_str(), payload.c_str(), /*retained=*/false);
 
-    log_i("[EVENT] %s", eventStr);
+    log_i("[EVENT/STD] %s", eventStr);
+}
+
+// ── publishEventAdv ───────────────────────────────────────────────────────────
+// Publishes to smartpidM5/pro/<id>/events/advanced
+// Used for profile sequencer events: "profile", "ramp N", "soak N".
+// OEM decompile lines 32817-32824: dynamic topic selection based on runmode.
+// Payload: { "time": N, "event": "<string>" }
+void TelemetryPublisher::publishEventAdv(const char* eventStr) {
+    if (!_mqtt->connected()) return;
+
+    JsonDocument doc;
+    doc["time"]  = bootSeconds();
+    doc["event"] = eventStr;
+
+    String payload;
+    serializeJson(doc, payload);
+
+    String topic = _mqtt->fullTopic("events/advanced");
+    _mqtt->publish(topic.c_str(), payload.c_str(), /*retained=*/false);
+
+    log_i("[EVENT/ADV] %s", eventStr);
 }
