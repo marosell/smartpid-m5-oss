@@ -44,6 +44,7 @@
 #include "command_handler.h"
 #include "probe.h"
 #include "output_control.h"
+#include "ota.h"
 
 // ── Forward declarations ──────────────────────────────────────────────────────
 static void setupWiFi();
@@ -133,6 +134,9 @@ void setup() {
     telemetry.begin(cfg, mqttMgr);
     cmdHandler.begin(cfg, mqttMgr, telemetry, ch1, ch2);
 
+    // ── Phase 4: OTA ─────────────────────────────────────────────────────────
+    otaMgr.begin("smartpid-m5");
+
     gStatusLine = mqttMgr.connected() ? "MQTT: OK" : "MQTT: connecting...";
     updateDisplay();
     log_i("Setup complete. State: idle (awaiting start command).");
@@ -142,6 +146,9 @@ void setup() {
 void loop() {
     M5.update();
     mqttMgr.loop();
+
+    // Phase 4: OTA
+    otaMgr.loop();
 
     // Phase 2+3: probe reads, PID update, command tick, telemetry, PWM output
     static unsigned long lastSampleMs = 0;
