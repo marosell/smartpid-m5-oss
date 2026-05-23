@@ -1,6 +1,11 @@
 // ota.cpp — ArduinoOTA endpoint
+//
+// OTA triggers the display to switch to UIScreen::OTA_PROGRESS for the
+// duration of the update. The display calls are forwarded through the global
+// DisplayManager instance declared in display.h.
 
 #include "ota.h"
+#include "display.h"
 #include <ArduinoOTA.h>
 
 OTAManager otaMgr;
@@ -9,16 +14,20 @@ void OTAManager::begin(const char* hostname) {
     ArduinoOTA.setHostname(hostname);
 
     ArduinoOTA.onStart([]() {
-        String type = (ArduinoOTA.getCommand() == U_FLASH) ? "firmware" : "filesystem";
-        log_i("[OTA] Start: updating %s", type.c_str());
+        bool isFs = (ArduinoOTA.getCommand() == U_SPIFFS);
+        log_i("[OTA] Start: updating %s", isFs ? "filesystem" : "firmware");
+        display.notifyOtaStart(isFs);
     });
 
     ArduinoOTA.onEnd([]() {
         log_i("[OTA] Complete — rebooting");
+        display.notifyOtaEnd();
     });
 
     ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
-        log_d("[OTA] Progress: %u%%", progress * 100 / total);
+        uint8_t pct = (uint8_t)(progress * 100U / total);
+        log_d("[OTA] Progress: %u%%", pct);
+        display.notifyOtaProgress(pct);
     });
 
     ArduinoOTA.onError([](ota_error_t error) {
@@ -31,6 +40,7 @@ void OTAManager::begin(const char* hostname) {
             case OTA_END_ERROR:     msg = "end failed";        break;
         }
         log_e("[OTA] Error #%u: %s", error, msg);
+        display.notifyOtaError(msg);
     });
 
     ArduinoOTA.begin();

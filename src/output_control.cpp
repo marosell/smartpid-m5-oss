@@ -45,40 +45,51 @@ void OutputController::begin(Config& cfg) {
     _pid2 = new PID(&_ch2Input, &_ch2Output, &_ch2SetPoint,
                     _cfg->ch2_kp, _cfg->ch2_ki, _cfg->ch2_kd, DIRECT);
 
-    _pid1->SetSampleTime((int)_cfg->sample_s * 1000);
-    _pid2->SetSampleTime((int)_cfg->sample_s * 1000);
+    // PID sample time is a separate parameter from the MQTT telemetry interval.
+    // OEM confirmed 1500ms via bench analysis (pid_sample_ms default = 1500).
+    _pid1->SetSampleTime((int)_cfg->pid_sample_ms);
+    _pid2->SetSampleTime((int)_cfg->pid_sample_ms);
     _pid1->SetOutputLimits(0, 100);   // output is 0–100 (% demand)
     _pid2->SetOutputLimits(0, 100);
     _pid1->SetMode(AUTOMATIC);
     _pid2->SetMode(AUTOMATIC);
 
-    log_i("[OUT] PID1 Kp=%.2f Ki=%.2f Kd=%.2f  SampleTime=%us",
-          _cfg->ch1_kp, _cfg->ch1_ki, _cfg->ch1_kd, _cfg->sample_s);
-    log_i("[OUT] PID2 Kp=%.2f Ki=%.2f Kd=%.2f  SampleTime=%us",
-          _cfg->ch2_kp, _cfg->ch2_ki, _cfg->ch2_kd, _cfg->sample_s);
+    log_i("[OUT] PID1 Kp=%.2f Ki=%.2f Kd=%.2f  SampleTime=%ums",
+          _cfg->ch1_kp, _cfg->ch1_ki, _cfg->ch1_kd, _cfg->pid_sample_ms);
+    log_i("[OUT] PID2 Kp=%.2f Ki=%.2f Kd=%.2f  SampleTime=%ums",
+          _cfg->ch2_kp, _cfg->ch2_ki, _cfg->ch2_kd, _cfg->pid_sample_ms);
 }
 
 // ── update ────────────────────────────────────────────────────────────────────
 // Called every sample_s from main loop (after probe read).
-// Runs PID computation and updates channel state.
+// Dispatches to PID or On/Off control path based on cfg.chN_control_algo.
 void OutputController::update(ChannelState& ch1, ChannelState& ch2) {
-    // CH1
-    _updateChannel(1, ch1, *_pid1, _ch1Input, _ch1SetPoint, _ch1Output,
-                   _pwm1, GPIO_DCOUT1, GPIO_RL1);
+    ControlAlgo algo1 = (ControlAlgo)_cfg->ch1_control_algo;
+    ControlAlgo algo2 = (ControlAlgo)_cfg->ch2_control_algo;
 
-    // CH2
-    _updateChannel(2, ch2, *_pid2, _ch2Input, _ch2SetPoint, _ch2Output,
+    if (algo1 == ControlAlgo::ON_OFF) {
+        _updateOnOff(1, ch1, _onoff1, GPIO_DCOUT1, GPIO_RL1);
+    } else {
+        _updatePid(1, ch1, *_pid1, _ch1Input, _ch1SetPoint, _ch1Output,
+                   _pwm1, GPIO_DCOUT1, GPIO_RL1);
+    }
+
+    if (algo2 == ControlAlgo::ON_OFF) {
+        _updateOnOff(2, ch2, _onoff2, GPIO_RL2, GPIO_RL2);
+    } else {
+        _updatePid(2, ch2, *_pid2, _ch2Input, _ch2SetPoint, _ch2Output,
                    _pwm2, GPIO_RL2, GPIO_RL2);
+    }
 }
 
-// ── _updateChannel ────────────────────────────────────────────────────────────
-void OutputController::_updateChannel(int chIdx, ChannelState& ch,
-                                       PID& pid,
-                                       double& input, double& sp, double& output,
-                                       PwmState& pwmState,
-                                       int heatingPin, int coolingPin) {
+// ── _updatePid ────────────────────────────────────────────────────────────────
+// PID control path — renamed from _updateChannel.
+void OutputController::_updatePid(int chIdx, ChannelState& ch,
+                                   PID& pid,
+                                   double& input, double& sp, double& output,
+                                   PwmState& pwmState,
+                                   int heatingPin, int coolingPin) {
     if (!ch.isRunning() || ch.paused) {
-        // Stopped or paused — all outputs OFF
         _setHeatingOutput(chIdx, 0, heatingPin, pwmState, _isPwmChannel(chIdx));
         _setCoolingOutput(chIdx, false, coolingPin);
         ch.pwm  = 0;
@@ -87,7 +98,6 @@ void OutputController::_updateChannel(int chIdx, ChannelState& ch,
     }
 
     if (ch.runmode == Runmode::MONITOR) {
-        // Monitor mode: probe reads but outputs always off
         _setHeatingOutput(chIdx, 0, heatingPin, pwmState, _isPwmChannel(chIdx));
         _setCoolingOutput(chIdx, false, coolingPin);
         ch.pwm  = 0;
@@ -95,13 +105,10 @@ void OutputController::_updateChannel(int chIdx, ChannelState& ch,
         return;
     }
 
-    // Determine control direction from SP vs temp
     bool shouldHeat = (ch.sp > ch.temp);
     ch.mode = shouldHeat ? ControlMode::HEATING : ControlMode::COOLING;
 
     if (shouldHeat) {
-        // ── Heating: run PID, apply maxpwm ceiling ─────────────────────────
-        // Set PID to DIRECT (output increases when input below setpoint)
         pid.SetControllerDirection(DIRECT);
         input  = (double)ch.temp;
         sp     = (double)ch.sp;
@@ -110,35 +117,113 @@ void OutputController::_updateChannel(int chIdx, ChannelState& ch,
 
         uint8_t pidDemand    = (uint8_t)constrain((int)output, 0, 100);
         uint8_t effectivePct = min((int)pidDemand, (int)ch.maxpwm);
-
-        ch.pwm = pidDemand;   // telemetry reports pre-ceiling PID demand
+        ch.pwm = pidDemand;
 
         _setCoolingOutput(chIdx, false, coolingPin);
         _setHeatingOutput(chIdx, effectivePct, heatingPin, pwmState, _isPwmChannel(chIdx));
 
-        log_d("[OUT] CH%d HEATING: sp=%.1f temp=%.1f pid=%d maxpwm=%d eff=%d",
+        log_d("[OUT] CH%d PID HEAT: sp=%.1f temp=%.1f pid=%d maxpwm=%d eff=%d",
               chIdx, ch.sp, ch.temp, pidDemand, ch.maxpwm, effectivePct);
     } else {
-        // ── Cooling: bang-bang relay control (ON when temp > SP) ────────────
-        // PID output driven to 0; cooling relay toggles based on SP threshold
         pid.SetControllerDirection(REVERSE);
         input  = (double)ch.temp;
         sp     = (double)ch.sp;
         output = 0.0;
         pid.Compute();
 
-        // For cooling we use simple bang-bang on the relay, not PID PWM
         bool coolOn = (ch.temp > ch.sp);
-        if (ch.maxpwm == 0) coolOn = false;  // maxpwm=0 overrides cooling too
-
+        if (ch.maxpwm == 0) coolOn = false;
         ch.pwm = coolOn ? (uint8_t)min(100, (int)ch.maxpwm) : 0;
 
         _setHeatingOutput(chIdx, 0, heatingPin, pwmState, _isPwmChannel(chIdx));
         _setCoolingOutput(chIdx, coolOn, coolingPin);
 
-        log_d("[OUT] CH%d COOLING: sp=%.1f temp=%.1f relay=%s",
+        log_d("[OUT] CH%d PID COOL: sp=%.1f temp=%.1f relay=%s",
               chIdx, ch.sp, ch.temp, coolOn ? "ON" : "OFF");
     }
+}
+
+// ── _updateOnOff ──────────────────────────────────────────────────────────────
+// On/Off hysteresis control path.
+// Extracted from OEM decompile (FUN_400d37f4).
+//
+// Heating direction (sp > temp at start):
+//   Turn ON  when: temp <= (sp - hyst1)  AND fridge delay elapsed
+//   Turn OFF when: temp >= sp
+//
+// Cooling direction (sp < temp at start):
+//   Turn ON  when: temp >= (sp + hyst1)  AND fridge delay elapsed
+//   Turn OFF when: temp <= sp
+//
+// Fridge delay (ch.fridge_delay_min): minimum minutes the relay must remain OFF
+// after turning off, to protect compressors.
+void OutputController::_updateOnOff(int chIdx, ChannelState& ch,
+                                     OnOffState& oos,
+                                     int heatingPin, int coolingPin) {
+    (void)coolingPin;   // On/Off uses single relay for both directions
+
+    if (!ch.isRunning() || ch.paused || ch.runmode == Runmode::MONITOR) {
+        if (oos.relayOn) {
+            digitalWrite(heatingPin, LOW);
+            oos.relayOn    = false;
+            oos.relayOffMs = millis();
+            log_d("[OUT] CH%d ON/OFF: forced OFF (stopped/paused)", chIdx);
+        }
+        ch.pwm  = 0;
+        ch.mode = ControlMode::OFF;
+        return;
+    }
+
+    float hyst = (chIdx == 1) ? _cfg->ch1_hyst1 : _cfg->ch2_hyst1;
+    uint16_t fridgeDelayMin = (chIdx == 1) ? _cfg->ch1_fridge_delay
+                                            : _cfg->ch2_fridge_delay;
+
+    bool shouldHeat = (ch.sp > ch.temp);
+    ch.mode = shouldHeat ? ControlMode::HEATING : ControlMode::COOLING;
+
+    // Fridge delay: milliseconds the relay must stay OFF
+    unsigned long fridgeDelayMs = (unsigned long)fridgeDelayMin * 60000UL;
+    bool fridgeOk = (fridgeDelayMs == 0) ||
+                    ((millis() - oos.relayOffMs) >= fridgeDelayMs);
+
+    bool newRelayState = oos.relayOn;  // start from current state (hysteresis)
+
+    if (shouldHeat) {
+        // Heating: turn ON below (sp - hyst), turn OFF at or above sp
+        if (!oos.relayOn) {
+            if (ch.temp <= (ch.sp - hyst) && fridgeOk && ch.maxpwm > 0) {
+                newRelayState = true;
+            }
+        } else {
+            if (ch.temp >= ch.sp || ch.maxpwm == 0) {
+                newRelayState = false;
+            }
+        }
+    } else {
+        // Cooling: turn ON above (sp + hyst), turn OFF at or below sp
+        if (!oos.relayOn) {
+            if (ch.temp >= (ch.sp + hyst) && fridgeOk && ch.maxpwm > 0) {
+                newRelayState = true;
+            }
+        } else {
+            if (ch.temp <= ch.sp || ch.maxpwm == 0) {
+                newRelayState = false;
+            }
+        }
+    }
+
+    // Apply state change if needed
+    if (newRelayState != oos.relayOn) {
+        oos.relayOn = newRelayState;
+        if (!newRelayState) {
+            oos.relayOffMs = millis();
+        }
+        digitalWrite(heatingPin, newRelayState ? HIGH : LOW);
+        log_d("[OUT] CH%d ON/OFF %s: sp=%.1f temp=%.1f hyst=%.1f",
+              chIdx, newRelayState ? "ON" : "OFF", ch.sp, ch.temp, hyst);
+    }
+
+    ch.pwm = oos.relayOn ? (uint8_t)min(100, (int)ch.maxpwm) : 0;
 }
 
 // ── _isPwmChannel ─────────────────────────────────────────────────────────────

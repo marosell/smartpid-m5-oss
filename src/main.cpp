@@ -42,14 +42,18 @@
 #include "channel_state.h"
 #include "telemetry.h"
 #include "command_handler.h"
+#include "profiles.h"
 #include "probe.h"
 #include "output_control.h"
 #include "ota.h"
+#include "display.h"
+#include "captive_portal.h"
 
 // ── Forward declarations ──────────────────────────────────────────────────────
 static void setupWiFi();
 static void onMQTTMessage(const String& topic, const uint8_t* payload, unsigned int len);
 static void updateDisplay();
+static void parseAndSaveProfile(int slotN, const uint8_t* payload, unsigned int len);
 
 // ── Per-channel state (Phase 2) ───────────────────────────────────────────────
 static ChannelState ch1, ch2;
@@ -76,6 +80,21 @@ void setup() {
     log_i("Serial:   %s", cfg.serial_hex);
     log_i("Topic ID: %s", cfg.topic_id);
     log_i("MQTT:     %s:%u", cfg.mqtt_host, cfg.mqtt_port);
+
+    // ── Phase 7: Captive portal ───────────────────────────────────────────────
+    // Run before splash/WiFi if no credentials in NVS or BtnA held at boot.
+    // If the portal fires, it blocks until the user submits credentials,
+    // then calls ESP.restart() — execution never returns here.
+    if (captivePortal.needed()) {
+        captivePortal.begin();
+        while (!captivePortal.done()) {
+            captivePortal.loop();
+            delay(1);
+        }
+        // done() means ESP.restart() was already called from within loop()
+        // This line is unreachable, but keeps the compiler happy:
+        while (true) { delay(5000); }
+    }
 
     // Splash screen
     M5.Display.fillScreen(TFT_BLACK);
@@ -121,11 +140,47 @@ void setup() {
     telemetry.begin(cfg, mqttMgr);
     cmdHandler.begin(cfg, mqttMgr, telemetry, ch1, ch2);
 
+    // ── Auto-resume: restore run state after power cycle ─────────────────────
+    // OEM behavior (confirmed from decompile PTR_s_Resume_last_process__400d04b0):
+    // If auto_resume==true AND a channel was running when power was cut, the device
+    // restores the channel runmode on the next boot without waiting for an MQTT
+    // start command. The OEM shows a "Resume last process?" dialog with a timeout
+    // that defaults to Yes; our implementation auto-resumes silently.
+    //
+    // Important: deliberate stop ({"stop": true}) clears saved state in NVS so
+    // a stop → power cycle → boot does NOT trigger auto-resume.
+    if (cfg.auto_resume) {
+        Runmode r1 = (Runmode)cfg.ch1_saved_runmode;
+        Runmode r2 = (Runmode)cfg.ch2_saved_runmode;
+        if (r1 != Runmode::IDLE || r2 != Runmode::IDLE) {
+            ch1.runmode = r1;
+            ch2.runmode = r2;
+            ch1.paused  = cfg.ch1_saved_paused;
+            ch2.paused  = cfg.ch2_saved_paused;
+            log_i("[RESUME] Auto-resume: CH1=%s%s  CH2=%s%s",
+                  runmodeStr(r1), cfg.ch1_saved_paused ? " (paused)" : "",
+                  runmodeStr(r2), cfg.ch2_saved_paused ? " (paused)" : "");
+            // Publish "start" event once MQTT is connected.
+            // If MQTT connected in setup (common case), publish immediately;
+            // else mqttMgr.loop() will detect re-connect and Proof re-subscribes.
+            if (mqttMgr.connected()) {
+                telemetry.publishEvent("start");
+            }
+        }
+    }
+
+    // ── Phase 6: Profile manager ──────────────────────────────────────────────
+    profiles.begin(cfg, mqttMgr, telemetry);
+
     // ── Phase 4: OTA ─────────────────────────────────────────────────────────
     otaMgr.begin("smartpid-m5");
 
+    // ── Phase 5: Display manager ──────────────────────────────────────────────
+    // begin() sets rotation, fills screen black, draws main menu.
+    // Replaces the placeholder updateDisplay() splash screen.
+    display.begin(cfg, mqttMgr);
+
     gStatusLine = mqttMgr.connected() ? "MQTT: OK" : "MQTT: connecting...";
-    updateDisplay();
     log_i("Setup complete. State: idle (awaiting start command).");
 }
 
@@ -147,6 +202,8 @@ void loop() {
         ch2.temp = probeReader.readTemp(2);
         // PID + output update (Phase 3)
         outputCtrl.update(ch1, ch2);
+        // Notify display: new temp/SP/PWM data available
+        display.notifyDataUpdate();
     }
     // Time-proportioning PWM must run every loop() iteration
     outputCtrl.pwmLoop();
@@ -154,14 +211,23 @@ void loop() {
     cmdHandler.tick();
     telemetry.loop(ch1, ch2);
 
-    // Update display on MQTT state change
+    // Phase 6: advance ramp/soak sequencer each iteration (loop() is a no-op when idle)
+    profiles.loop(0, ch1);
+    profiles.loop(1, ch2);
+
+    // Phase 5: update display state machine (polls buttons, fires ticks, partial redraws)
+    display.loop(ch1, ch2);
+
+    // Notify display + log on MQTT state change
     bool nowConnected = mqttMgr.connected();
     if (nowConnected != gMqttWasConnected) {
         gMqttWasConnected = nowConnected;
         gStatusLine = nowConnected ? "MQTT: OK" : "MQTT: reconnecting...";
-        updateDisplay();
+        display.notifyMqttChanged();
         if (nowConnected) {
             log_i("MQTT reconnected — status published");
+            // Re-announce all stored profiles so Proof stays in sync (OEM behavior)
+            profiles.publishAll();
         }
     }
 }
@@ -195,16 +261,11 @@ static void setupWiFi() {
     }
 
     if (strlen(ssid) == 0) {
-        log_e("No WiFi credentials in NVS. Write wifi_ssid + wifi_pass to NVS namespace '%s' and reboot.", SMARTPID_NVS_NS);
-        M5.Display.setCursor(10, 75);
-        M5.Display.setTextColor(TFT_RED, TFT_BLACK);
-        M5.Display.println("No WiFi creds!");
-        M5.Display.println("Write NVS keys:");
-        M5.Display.println("  wifi_ssid");
-        M5.Display.println("  wifi_pass");
-        M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
-        // Hang — user must provision credentials
-        while (true) { delay(5000); }
+        // Captive portal should have run before this point (checked in setup()).
+        // If we somehow reach here without credentials, reboot to trigger portal.
+        log_e("No WiFi credentials in NVS — rebooting to captive portal");
+        delay(500);
+        ESP.restart();
     }
 
     log_i("Connecting to SSID: %s", ssid);
@@ -257,14 +318,62 @@ static void onMQTTMessage(const String& topic, const uint8_t* payload, unsigned 
         return;
     }
 
-    // Profile update: smartpidM5/pro/<id>/profiles/update/<X>
-    // Phase 6 will parse and store the profile. For now, log receipt.
+    // Profile update: smartpidM5/pro/<id>/profiles/update/<N>
+    // N is 1-based (matches Proof's slot numbering); stored 0-based internally.
     if (topic.indexOf("/profiles/update/") >= 0) {
-        log_i("[MQTT] Profile update received (Phase 6 pending): %s", topic.c_str());
+        int lastSlash = topic.lastIndexOf('/');
+        if (lastSlash >= 0) {
+            int slotN = topic.substring(lastSlash + 1).toInt();  // 1-based
+            if (slotN >= 1 && slotN <= PROFILE_SLOTS) {
+                parseAndSaveProfile(slotN, payload, len);
+            } else {
+                log_w("[MQTT] Profile update: invalid slot %d in topic %s", slotN, topic.c_str());
+            }
+        }
         return;
     }
 
     log_d("[MQTT] Unhandled topic: %s", topic.c_str());
+}
+
+// ── parseAndSaveProfile() ─────────────────────────────────────────────────────
+// Parse a profile JSON payload from the MQTT profiles/update/<N> topic and
+// save it to NVS via profiles.save(). JSON format (as published by Proof):
+//   { "SetPoint.1": f, "Soak.1": s, "Ramp.1": r, ..., "SetPoint.8": f, ... }
+// Steps are detected by presence of "SetPoint.N" key; first missing key ends parse.
+// slotN is 1-based (topic numbering); stored 0-based.
+static void parseAndSaveProfile(int slotN, const uint8_t* payload, unsigned int len) {
+    JsonDocument doc;
+    DeserializationError err = deserializeJson(doc, payload, len);
+    if (err) {
+        log_w("[PROF] JSON parse error on slot %d update: %s", slotN, err.c_str());
+        return;
+    }
+
+    ProfileBlob blob = {};
+    blob.step_count = 0;
+
+    for (int i = 1; i <= PROFILE_MAX_STEPS; i++) {
+        char spKey[12], soakKey[12], rampKey[12];
+        snprintf(spKey,   sizeof(spKey),   "SetPoint.%d", i);
+        snprintf(soakKey, sizeof(soakKey), "Soak.%d",     i);
+        snprintf(rampKey, sizeof(rampKey), "Ramp.%d",     i);
+
+        if (doc[spKey].isNull()) break;  // no more steps in this profile
+
+        blob.steps[blob.step_count].setpoint = doc[spKey].as<float>();
+        blob.steps[blob.step_count].soak_s   = doc[soakKey] | (uint32_t)0;
+        blob.steps[blob.step_count].ramp_s   = doc[rampKey]  | (uint32_t)0;
+        blob.step_count++;
+    }
+
+    if (blob.step_count == 0) {
+        log_w("[PROF] Empty profile received for slot %d — ignoring", slotN);
+        return;
+    }
+
+    profiles.save((uint8_t)(slotN - 1), blob);
+    log_i("[PROF] Received and saved slot %d (%u steps) via MQTT", slotN, blob.step_count);
 }
 
 // ── updateDisplay() ───────────────────────────────────────────────────────────

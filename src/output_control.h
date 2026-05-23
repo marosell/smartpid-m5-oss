@@ -57,14 +57,18 @@
 #define GPIO_RL2      GPIO_CH1_OUT   // CH2 heating+cooling (relay)
 #define GPIO_DCOUT2   GPIO_CH3_OUT   // CH2 heating alt / spare
 
-// PID sample time in milliseconds (OEM: 15s × 1000ms)
-// Arduino-PID-Library runs the PID computation when Compute() is called;
-// we call it at every probe read (every sample_s). Set PID SampleTime to match.
-#define PID_SAMPLE_MS  (cfg.sample_s * 1000UL)
-
 // Time-proportioning PWM: one complete ON/OFF cycle per pwm_ms milliseconds.
 // OEM confirmed: 3500ms period. effectivePwm% of 3500ms is ON time.
 #define PWM_PERIOD_DEFAULT_MS  3500
+
+// ── Control algorithm selection ───────────────────────────────────────────────
+// Matches OEM config block offset 0x00 values (from Ghidra decompile).
+// Stored in cfg.ch1_control_algo / cfg.ch2_control_algo.
+enum class ControlAlgo : uint8_t {
+    ON_OFF     = 0,   // Dead-band hysteresis, no PID
+    PID        = 1,   // PID control (default)
+    ON_OFF_PID = 2,   // Combined (PID inside dead band)
+};
 
 class OutputController {
 public:
@@ -74,7 +78,7 @@ public:
     // Initialise GPIO pins and PID objects.
     void begin(Config& cfg);
 
-    // Run one PID + output update cycle for both channels.
+    // Run one control update cycle for both channels.
     // Call this every sample_s from loop() after probe reads.
     void update(ChannelState& ch1, ChannelState& ch2);
 
@@ -100,9 +104,35 @@ private:
         unsigned long cycleStartMs = 0;
     } _pwm1, _pwm2;
 
-    void _updateChannel(int chIdx, ChannelState& ch, PID& pid,
-                        double& input, double& sp, double& output,
-                        PwmState& pwmState, int heatingPin, int coolingPin);
+    // On/Off hysteresis state — per channel
+    // Tracks relay output state and fridge-delay timer independently of PID.
+    struct OnOffState {
+        bool          relayOn       = false;   // current relay state
+        unsigned long relayOffMs    = 0;       // millis() when relay last turned OFF
+    } _onoff1, _onoff2;
+
+    // ── PID path ──────────────────────────────────────────────────────────────
+    void _updatePid(int chIdx, ChannelState& ch, PID& pid,
+                    double& input, double& sp, double& output,
+                    PwmState& pwmState, int heatingPin, int coolingPin);
+
+    // ── On/Off hysteresis path (from Ghidra FUN_400d37f4) ────────────────────
+    // One-sided dead-band control with optional fridge/compressor delay.
+    //
+    // Heating direction:
+    //   Turn ON  when: pv <= (sp - hyst1)  AND fridge delay elapsed
+    //   Turn OFF when: pv >= sp
+    //
+    // Cooling direction:
+    //   Turn ON  when: pv >= (sp + hyst1)  AND fridge delay elapsed
+    //   Turn OFF when: pv <= sp
+    //
+    // hyst1 = cfg.chN_hyst1 (lower threshold, default 3.6°)
+    // Fridge delay = cfg.chN_fridge_delay minutes — minimum relay off-time
+    //   (compressor protection; 0 = no delay enforced)
+    void _updateOnOff(int chIdx, ChannelState& ch,
+                      OnOffState& oos,
+                      int heatingPin, int coolingPin);
 
     void _setHeatingOutput(int chIdx, uint8_t effectivePct,
                            int heatingPin, PwmState& pwmState, bool isPwm);

@@ -1,65 +1,98 @@
 #pragma once
 // probe.h — Temperature probe reader for SmartPID M5 OSS
 //
-// Phase 3 implementation: NTC probe via ESP32 internal ADC (confirmed working
-// on CH1 in serial boot test 2026-05-23 — reading ~75°F ambient).
+// ARCHITECTURE NOTE (from Ghidra analysis of OEM v2.8.0):
+// The OEM firmware reads all probe temperatures via external BLE sensor modules.
+// The main ESP32 MCU has no direct ADC/SPI/OneWire probe interface — "Probe Type"
+// in the OEM UI selects the BLE sensor packet format, not a wired interface.
 //
-// The M5Stack Core2 carrier board routes probe inputs:
-//   AIN0 → CH1 probe terminal
-//   AIN1 → CH2 probe terminal
+// This reimplementation reads probes DIRECTLY (wired to terminal blocks), which
+// is a deliberate architectural choice for the bench/panel application:
+//   - DS18B20: OneWire on a GPIO (this file — implemented)
+//   - NTC:     ESP32 ADC via voltage divider — implemented below
+//   - PT100 2W/3W: Unknown I2C chip at 0x77 (chip identity TBD, pending bench
+//             inspection). Falls back to NTC ADC path until chip is identified.
+//             BENCH-VERIFY: inspect carrier board, identify chip, write driver.
+//   - K-Type: SPI MAX31855/6675 or similar. Falls back to NTC ADC until bench.
+//             BENCH-VERIFY: same as above.
 //
-// ADC pin mapping (Phase 3 — NTC mode only):
-//   CH1: GPIO 36 (ADC1_CH0, also labeled VP on ESP32 modules)
-//   CH2: GPIO 39 (ADC1_CH3, also labeled VN on ESP32 modules)
-// These are the standard M5Stack Core2 analog input pins for external signals.
-// Exact mapping to AIN0/AIN1 terminals needs confirmation via bench test.
+// ADC GPIO pin mapping (NTC mode):
+//   CH1: GPIO 36 (ADC1_CH0 — input only)
+//   CH2: GPIO 39 (ADC1_CH3 — input only)
 //
-// NTC 10k thermistor math:
-//   Uses Steinhart-Hart simplified Beta equation.
-//   Beta coefficient is configurable (OEM: user-selectable in Unit Parameters).
-//   Default: 3950 (common NTC 10k value).
-//   Series resistor: 10kΩ (assumed standard half-bridge divider on carrier).
+// DS18B20 GPIO pin mapping:
+//   CH1: DS18B20_CH1_GPIO (see below) — BENCH-VERIFY
+//   CH2: DS18B20_CH2_GPIO (see below) — BENCH-VERIFY
 //
-// Disconnected probe sentinel: PROBE_SENTINEL_VALUE (9170000.0°F)
-// Published as-is to match OEM behavior (Proof does not expect null).
+// Physical mapping of all probe terminals to GPIOs needs bench confirmation.
 //
-// I2C device at 0x77 (unknown chip):
-//   Used by OEM for PT100 and K-type thermocouple probe types.
-//   Not implemented in Phase 3 — NTC only.
-//   To add: Ghidra analysis of FUN_400df184 will identify the chip.
+// NTC math: Steinhart-Hart simplified Beta equation.
+//   Beta coefficient comes from cfg.ntc_beta (default 3977, confirmed OEM display).
+//   Series resistor assumed 10kΩ, NTC R25 = 10kΩ.
+//   NTC Beta selectable list: 3380/3435/3630/3650/3950/3960/3977
+//
+// Disconnected probe sentinel: PROBE_SENTINEL_VALUE (9170000.0)
+//   Published as-is — Proof expects a large numeric, not null.
 
 #include <Arduino.h>
+#include <OneWire.h>
+#include <DallasTemperature.h>
 #include "config.h"
 
-// ADC GPIO pins for CH1 and CH2 probes on M5Stack Core2 carrier board.
-// IMPORTANT: These are the standard M5Stack Core2 pins. Physical wire routing
-// from AIN0/AIN1 terminals to these ADC inputs needs bench confirmation.
-// Swap CH1_ADC_PIN / CH2_ADC_PIN if readings appear on the wrong channel.
+// ── ADC pins (NTC mode — input only) ──────────────────────────────────────────
+// Swap if readings appear on the wrong channel after bench confirmation.
 #define CH1_ADC_PIN  36   // ADC1_CH0 (VP)
 #define CH2_ADC_PIN  39   // ADC1_CH3 (VN)
 
-// NTC 10k parameters
-#define NTC_BETA        3950      // default Beta coefficient
-#define NTC_R25         10000.0f  // NTC resistance at 25°C (10kΩ)
-#define NTC_RSERIES     10000.0f  // series resistor in voltage divider (10kΩ)
-#define NTC_VCC         3.3f      // ESP32 ADC reference (approximate)
+// ── DS18B20 GPIO pins (1-Wire mode) ───────────────────────────────────────────
+// BENCH-VERIFY: The SmartPID M5 PRO carrier board routes each probe terminal
+// to a bidirectional GPIO for 1-Wire (DS18B20) mode in addition to the ADC
+// path for NTC mode. The actual GPIOs depend on the carrier board PCB.
+//
+// Current guesses (M5Stack Gray M-Bus bidirectional GPIOs not used by outputs):
+//   CH1: GPIO 25 — DAC1, bidirectional, available on M-Bus
+//   CH2: GPIO 17 — available on M-Bus (UART2 TX repurposed as GPIO)
+//
+// Update DS18B20_CH1_GPIO / DS18B20_CH2_GPIO after bench inspection and
+// continuity test of probe-terminal-to-GPIO connections.
+#define DS18B20_CH1_GPIO  25   // BENCH-VERIFY: CH1 probe terminal → GPIO25?
+#define DS18B20_CH2_GPIO  17   // BENCH-VERIFY: CH2 probe terminal → GPIO17?
+
+// ── NTC voltage divider parameters ───────────────────────────────────────────
+#define NTC_R25         10000.0f  // NTC nominal resistance at 25°C (10kΩ)
+#define NTC_RSERIES     10000.0f  // series resistor in half-bridge divider (10kΩ)
 #define ADC_MAX         4095      // ESP32 12-bit ADC
 
 class ProbeReader {
 public:
-    // Initialise ADC (attenuation for 0–3.3V range, 12-bit resolution).
+    // Initialise ADC + DS18B20 buses.
+    // Starts the first DS18B20 temperature conversion so it's ready
+    // by the time readTemp() is called at the first sample_s tick.
     void begin();
 
     // Read channel (1 or 2) temperature.
-    // Returns PROBE_SENTINEL_VALUE (9170000.0) if probe open/disconnected.
-    // Temperature in device units (°F if cfg.temp_unit=="F", else °C).
+    // Returns PROBE_SENTINEL_VALUE if probe is open-circuit or disconnected.
+    // Temperature returned in device units (°F when cfg.temp_unit=="F", else °C).
     float readTemp(int channel);
 
-    // Raw NTC ADC read → temperature in °C via Steinhart-Hart Beta equation.
-    // Returns NAN on invalid reading (used to detect open circuit).
+    // NTC ADC count → temperature in °C via Steinhart-Hart Beta equation.
+    // Uses cfg.ntc_beta as the Beta coefficient (default 3977).
+    // Returns NAN on invalid reading.
     float adcToTempC(int adcValue);
 
 private:
+    // OneWire buses and DallasTemperature drivers (one per channel)
+    OneWire           _ow1{DS18B20_CH1_GPIO};
+    OneWire           _ow2{DS18B20_CH2_GPIO};
+    DallasTemperature _ds1{&_ow1};
+    DallasTemperature _ds2{&_ow2};
+
+    // DS18B20 async read state
+    bool _ds1Requested = false;
+    bool _ds2Requested = false;
+
+    float _readDS18B20(int channel);
+    float _readNtcAdc(int channel);
     float _toDeviceUnit(float tempC);
 };
 

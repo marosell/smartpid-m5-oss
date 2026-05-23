@@ -41,16 +41,73 @@ void Config::load() {
         strlcpy(temp_unit, "F", sizeof(temp_unit));
     }
 
-    // Control defaults
+    // Set points
     ch1_sp  = prefs.getFloat("ch1_sp",  131.0f);
     ch2_sp  = prefs.getFloat("ch2_sp",  104.0f);
-    ch1_kp  = prefs.getFloat("ch1_kp",  3.6f);
-    ch1_ki  = prefs.getFloat("ch1_ki",  4.5f);
-    ch1_kd  = prefs.getFloat("ch1_kd",  9.0f);
-    ch2_kp  = prefs.getFloat("ch2_kp",  3.6f);
-    ch2_ki  = prefs.getFloat("ch2_ki",  4.5f);
-    ch2_kd  = prefs.getFloat("ch2_kd",  9.0f);
+
+    // PWM period
     pwm_ms  = prefs.getUShort("pwm_ms", 3500);
+
+    // PID gains
+    // NOTE: 3.6/4.5/9.0 are Hysteresis1/Hysteresis2/ResetDT — NOT PID gains.
+    // Actual OEM PID defaults confirmed from device display: Kp=15.0, Ki=0.00, Kd=0.0
+    ch1_kp  = prefs.getFloat("ch1_kp",  15.0f);
+    ch1_ki  = prefs.getFloat("ch1_ki",   0.0f);
+    ch1_kd  = prefs.getFloat("ch1_kd",   0.0f);
+    ch2_kp  = prefs.getFloat("ch2_kp",  15.0f);
+    ch2_ki  = prefs.getFloat("ch2_ki",   0.0f);
+    ch2_kd  = prefs.getFloat("ch2_kd",   0.0f);
+
+    // PID sample time (separate from telemetry interval)
+    pid_sample_ms = prefs.getUShort("pid_samp_ms", 1500);
+
+    // Hysteresis / On-Off control thresholds
+    ch1_hyst1    = prefs.getFloat("ch1_hyst1",    3.6f);
+    ch1_hyst2    = prefs.getFloat("ch1_hyst2",    4.5f);
+    ch1_reset_dt = prefs.getFloat("ch1_reset_dt", 9.0f);
+    ch2_hyst1    = prefs.getFloat("ch2_hyst1",    3.6f);
+    ch2_hyst2    = prefs.getFloat("ch2_hyst2",    4.5f);
+    ch2_reset_dt = prefs.getFloat("ch2_reset_dt", 9.0f);
+
+    // Probe configuration
+    ch1_probe_type = (ProbeType)prefs.getUChar("ch1_probe",  (uint8_t)ProbeType::PT100_3W);
+    ch2_probe_type = (ProbeType)prefs.getUChar("ch2_probe",  (uint8_t)ProbeType::PT100_3W);
+    ch1_probe_cal  = prefs.getFloat("ch1_pcal", 0.0f);
+    ch2_probe_cal  = prefs.getFloat("ch2_pcal", 0.0f);
+
+    // NTC Beta
+    ntc_beta = prefs.getUShort("ntc_beta", 3977);
+
+    // Cooling mode and compressor protection
+    ch1_cooling_mode  = prefs.getBool("ch1_cool",   false);
+    ch2_cooling_mode  = prefs.getBool("ch2_cool",   false);
+    ch1_fridge_delay  = prefs.getUShort("ch1_fdly", 3);
+    ch2_fridge_delay  = prefs.getUShort("ch2_fdly", 3);
+
+    // Control algorithm
+    ch1_control_algo = prefs.getUChar("ch1_algo", 1);   // 1 = PID default
+    ch2_control_algo = prefs.getUChar("ch2_algo", 1);
+
+    // System behavior
+    multi_control = prefs.getBool("multi_ctrl",   false);
+    auto_resume   = prefs.getBool("auto_resume",  true);
+    button_beep   = prefs.getBool("btn_beep",     true);
+
+    // PID Auto-Tune
+    at_output_step = prefs.getUChar("at_out_step", 50);
+    at_noise_band  = prefs.getFloat("at_noise",    1.0f);
+    at_lookback_s  = prefs.getUChar("at_lookback", 10);
+    at_channel     = prefs.getUChar("at_ch",        0);
+
+    // Logging
+    log_mode      = prefs.getBool("log_mode",    false);
+    log_sample_s  = prefs.getUShort("log_samp_s", 15);
+
+    // Auto-resume run state
+    ch1_saved_runmode = prefs.getUChar("ch1_runmode", 0);
+    ch2_saved_runmode = prefs.getUChar("ch2_runmode", 0);
+    ch1_saved_paused  = prefs.getBool("ch1_paused",  false);
+    ch2_saved_paused  = prefs.getBool("ch2_paused",  false);
 
     prefs.end();
 }
@@ -60,23 +117,83 @@ void Config::save() {
     Preferences prefs;
     prefs.begin(SMARTPID_NVS_NS, /*readOnly=*/false);
 
-    prefs.putString("mqtt_host", mqtt_host);
-    prefs.putUShort("mqtt_port", mqtt_port);
-    prefs.putString("mqtt_user", mqtt_user);
-    prefs.putString("mqtt_pass", mqtt_pass);
-    prefs.putString("serial",    serial_hex);
-    prefs.putUShort("sample_s",  sample_s);
-    prefs.putString("temp_unit", temp_unit);
-    prefs.putFloat("ch1_sp",     ch1_sp);
-    prefs.putFloat("ch2_sp",     ch2_sp);
-    prefs.putFloat("ch1_kp",     ch1_kp);
-    prefs.putFloat("ch1_ki",     ch1_ki);
-    prefs.putFloat("ch1_kd",     ch1_kd);
-    prefs.putFloat("ch2_kp",     ch2_kp);
-    prefs.putFloat("ch2_ki",     ch2_ki);
-    prefs.putFloat("ch2_kd",     ch2_kd);
-    prefs.putUShort("pwm_ms",    pwm_ms);
+    prefs.putString("mqtt_host",   mqtt_host);
+    prefs.putUShort("mqtt_port",   mqtt_port);
+    prefs.putString("mqtt_user",   mqtt_user);
+    prefs.putString("mqtt_pass",   mqtt_pass);
+    prefs.putString("serial",      serial_hex);
+    prefs.putUShort("sample_s",    sample_s);
+    prefs.putString("temp_unit",   temp_unit);
 
+    prefs.putFloat("ch1_sp",       ch1_sp);
+    prefs.putFloat("ch2_sp",       ch2_sp);
+    prefs.putUShort("pwm_ms",      pwm_ms);
+
+    prefs.putFloat("ch1_kp",       ch1_kp);
+    prefs.putFloat("ch1_ki",       ch1_ki);
+    prefs.putFloat("ch1_kd",       ch1_kd);
+    prefs.putFloat("ch2_kp",       ch2_kp);
+    prefs.putFloat("ch2_ki",       ch2_ki);
+    prefs.putFloat("ch2_kd",       ch2_kd);
+    prefs.putUShort("pid_samp_ms", pid_sample_ms);
+
+    prefs.putFloat("ch1_hyst1",    ch1_hyst1);
+    prefs.putFloat("ch1_hyst2",    ch1_hyst2);
+    prefs.putFloat("ch1_reset_dt", ch1_reset_dt);
+    prefs.putFloat("ch2_hyst1",    ch2_hyst1);
+    prefs.putFloat("ch2_hyst2",    ch2_hyst2);
+    prefs.putFloat("ch2_reset_dt", ch2_reset_dt);
+
+    prefs.putUChar("ch1_probe",    (uint8_t)ch1_probe_type);
+    prefs.putUChar("ch2_probe",    (uint8_t)ch2_probe_type);
+    prefs.putFloat("ch1_pcal",     ch1_probe_cal);
+    prefs.putFloat("ch2_pcal",     ch2_probe_cal);
+    prefs.putUShort("ntc_beta",    ntc_beta);
+
+    prefs.putBool("ch1_cool",      ch1_cooling_mode);
+    prefs.putBool("ch2_cool",      ch2_cooling_mode);
+    prefs.putUShort("ch1_fdly",    ch1_fridge_delay);
+    prefs.putUShort("ch2_fdly",    ch2_fridge_delay);
+
+    prefs.putUChar("ch1_algo",     ch1_control_algo);
+    prefs.putUChar("ch2_algo",     ch2_control_algo);
+
+    prefs.putUChar("at_out_step",  at_output_step);
+    prefs.putFloat("at_noise",     at_noise_band);
+    prefs.putUChar("at_lookback",  at_lookback_s);
+    prefs.putUChar("at_ch",        at_channel);
+
+    prefs.putBool("multi_ctrl",    multi_control);
+    prefs.putBool("auto_resume",   auto_resume);
+    prefs.putBool("btn_beep",      button_beep);
+
+    prefs.putBool("log_mode",      log_mode);
+    prefs.putUShort("log_samp_s",  log_sample_s);
+
+    prefs.putUChar("ch1_runmode",  ch1_saved_runmode);
+    prefs.putUChar("ch2_runmode",  ch2_saved_runmode);
+    prefs.putBool("ch1_paused",    ch1_saved_paused);
+    prefs.putBool("ch2_paused",    ch2_saved_paused);
+
+    prefs.end();
+}
+
+// ── cfg.saveRunState() ────────────────────────────────────────────────────────
+// Persist only the 4 run-state fields. Called on every start/stop/pause/resume
+// to keep NVS in sync without the overhead of a full cfg.save().
+void Config::saveRunState(uint8_t ch1mode, uint8_t ch2mode,
+                           bool ch1paused, bool ch2paused) {
+    ch1_saved_runmode = ch1mode;
+    ch2_saved_runmode = ch2mode;
+    ch1_saved_paused  = ch1paused;
+    ch2_saved_paused  = ch2paused;
+
+    Preferences prefs;
+    prefs.begin(SMARTPID_NVS_NS, /*readOnly=*/false);
+    prefs.putUChar("ch1_runmode", ch1mode);
+    prefs.putUChar("ch2_runmode", ch2mode);
+    prefs.putBool("ch1_paused",   ch1paused);
+    prefs.putBool("ch2_paused",   ch2paused);
     prefs.end();
 }
 
@@ -94,8 +211,8 @@ void Config::saveMqtt() {
 
 // ── cfg.setSerial() ───────────────────────────────────────────────────────────
 // Set device serial and recompute topic ID. Persists the serial to NVS.
-// Call this once after first flash if you want the device to use the OEM
-// topic ID (i.e., to keep the same MQTT topics as the original firmware).
+// Call once after first flash if you want the device to use the OEM topic ID
+// (so Proof keeps the same MQTT topics without reconfiguration).
 void Config::setSerial(const String& hex14) {
     if (hex14.length() != 14) return;
     strlcpy(serial_hex, hex14.c_str(), sizeof(serial_hex));

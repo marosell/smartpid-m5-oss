@@ -4,6 +4,7 @@
 // Protocol spec:   /Users/Mike/Projects/Proof/docs/smartpid-mqtt-reference.md
 
 #include "command_handler.h"
+#include "profiles.h"
 #include <ArduinoJson.h>
 
 CommandHandler cmdHandler;
@@ -134,21 +135,39 @@ void CommandHandler::_cmdStart(const char* modeStr, int ch1Profile, int ch2Profi
                           : ControlMode::COOLING;
     }
 
-    // Assign profiles for advanced mode
+    // Assign profiles for advanced mode and start sequencer (Phase 6)
     if (targetMode == Runmode::ADVANCED) {
-        if (ch1Profile >= 1 && ch1Profile <= 10) _ch[0]->profile = ch1Profile;
-        if (ch2Profile >= 1 && ch2Profile <= 10) _ch[1]->profile = ch2Profile;
+        // Store 1-based slot number on ChannelState for telemetry/display
+        if (ch1Profile >= 1 && ch1Profile <= PROFILE_SLOTS) {
+            _ch[0]->profile = ch1Profile;
+            // startProfile() is 0-based; fires "profile" event internally
+            profiles.startProfile(0, (uint8_t)(ch1Profile - 1), *_ch[0]);
+        }
+        if (ch2Profile >= 1 && ch2Profile <= PROFILE_SLOTS) {
+            _ch[1]->profile = ch2Profile;
+            profiles.startProfile(1, (uint8_t)(ch2Profile - 1), *_ch[1]);
+        }
     }
 
     _tele->publishEvent("start");
+
+    // Persist run state so auto_resume can restore it after power cycle.
+    _cfg->saveRunState((uint8_t)targetMode, (uint8_t)targetMode,
+                       false, false);
 }
 
 // ── _cmdStop ──────────────────────────────────────────────────────────────────
 void CommandHandler::_cmdStop() {
     log_i("[CMD] stop");
+    // Stop profile sequencer before clearing channel state (Phase 6)
+    profiles.stop(0, *_ch[0]);
+    profiles.stop(1, *_ch[1]);
     _ch[0]->stop();
     _ch[1]->stop();
     _tele->publishEvent("stop");
+
+    // Clear saved run state — deliberate stop should NOT auto-resume.
+    _cfg->saveRunState(0, 0, false, false);
 }
 
 // ── _cmdPause ─────────────────────────────────────────────────────────────────
@@ -158,6 +177,10 @@ void CommandHandler::_cmdPause() {
     _ch[0]->paused = true;
     _ch[1]->paused = true;
     _tele->publishEvent("pause");
+
+    // Persist paused state — auto_resume will restore both mode and paused flag.
+    _cfg->saveRunState((uint8_t)_ch[0]->runmode, (uint8_t)_ch[1]->runmode,
+                       true, true);
 }
 
 // ── _cmdResume ────────────────────────────────────────────────────────────────
@@ -167,6 +190,10 @@ void CommandHandler::_cmdResume() {
     _ch[0]->paused = false;
     _ch[1]->paused = false;
     _tele->publishEvent("resume");
+
+    // Persist cleared paused state.
+    _cfg->saveRunState((uint8_t)_ch[0]->runmode, (uint8_t)_ch[1]->runmode,
+                       false, false);
 }
 
 // ── _cmdSetSP ─────────────────────────────────────────────────────────────────
