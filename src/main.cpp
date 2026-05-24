@@ -36,6 +36,8 @@
 #include <M5Unified.h>
 #include <WiFi.h>
 #include <ArduinoJson.h>
+#include <Preferences.h>
+#include <esp_ota_ops.h>    // esp_ota_set_boot_partition — OTA boot-loop rollback
 
 #include "config.h"
 #include "mqtt_client.h"
@@ -58,6 +60,66 @@ static void parseAndSaveProfile(int slotN, const uint8_t* payload, unsigned int 
 // ── Per-channel state (Phase 2) ───────────────────────────────────────────────
 static ChannelState ch1, ch2;
 
+// ── OTA boot-loop watchdog ────────────────────────────────────────────────────
+// CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE is NOT set in arduino-esp32 defaults,
+// so the ESP32 bootloader will NOT auto-rollback a crashing firmware image.
+// We implement software rollback via an NVS boot counter:
+//   - setup() increments "boot_tries" at the very start of every boot.
+//   - After MQTT connects (firmware confirmed working), the counter is cleared.
+//   - If we reach BOOT_LOOP_THRESHOLD without a successful MQTT connection
+//     (firmware is crash-looping after an OTA update), we call
+//     esp_ota_set_boot_partition() to switch back to the previous OTA slot
+//     and restart, recovering without USB access.
+//
+// This only activates after an OTA update fails — the counter is always
+// cleared on a healthy boot before any damage can occur.
+#define BOOT_LOOP_THRESHOLD   3   // roll back after this many consecutive failed boots
+static bool gFirmwareValidated = false;   // cleared in loop() once MQTT is confirmed OK
+
+static void otaBootWatchdogInit() {
+    Preferences prefs;
+    prefs.begin("smartpid_sys", /*readOnly=*/false);
+    uint8_t tries = prefs.getUChar("boot_tries", 0) + 1;
+    prefs.putUChar("boot_tries", tries);
+    prefs.end();
+
+    log_i("[BOOT] boot_tries = %u (threshold = %u)", tries, BOOT_LOOP_THRESHOLD);
+
+    if (tries >= BOOT_LOOP_THRESHOLD) {
+        log_e("[BOOT] Boot-loop detected (%u tries) — attempting OTA rollback", tries);
+        const esp_partition_t* running = esp_ota_get_running_partition();
+        const esp_partition_t* prev    = esp_ota_get_next_update_partition(running);
+        if (prev && prev != running) {
+            // Reset counter before rolling back (so new partition gets a clean slate)
+            Preferences p2;
+            p2.begin("smartpid_sys", false);
+            p2.putUChar("boot_tries", 0);
+            p2.end();
+            log_e("[BOOT] Rolling back: %s → %s — restarting now",
+                  running->label, prev->label);
+            esp_ota_set_boot_partition(prev);
+            esp_restart();
+        } else {
+            // No other partition to roll back to (single-app layout or first flash)
+            log_w("[BOOT] No rollback target found — clearing counter and continuing");
+            Preferences p2;
+            p2.begin("smartpid_sys", false);
+            p2.putUChar("boot_tries", 0);
+            p2.end();
+        }
+    }
+}
+
+static void otaBootWatchdogClear() {
+    if (gFirmwareValidated) return;
+    Preferences prefs;
+    prefs.begin("smartpid_sys", false);
+    prefs.putUChar("boot_tries", 0);
+    prefs.end();
+    gFirmwareValidated = true;
+    log_i("[BOOT] Firmware validated — boot counter cleared");
+}
+
 // ── Global state ──────────────────────────────────────────────────────────────
 static bool          gMqttWasConnected  = false;
 static String        gStatusLine        = "booting...";
@@ -73,7 +135,13 @@ static unsigned long gAutoResumeAtMs   = 0;        // when > 0: millis() target 
 
 // ── setup() ───────────────────────────────────────────────────────────────────
 void setup() {
-    // M5Unified init (handles AXP192 power, display, touch, IMU)
+    // OTA boot-loop watchdog — MUST be the very first thing.
+    // Increments NVS boot counter; if threshold exceeded, rolls back to previous
+    // OTA partition before any other initialisation runs.
+    // Uses a separate NVS namespace ("smartpid_sys") so cfg.load() can't interfere.
+    otaBootWatchdogInit();
+
+    // M5Unified init (handles display, IMU, power chip detection)
     auto mcfg = M5.config();
     M5.begin(mcfg);
 
@@ -234,6 +302,10 @@ void loop() {
         display.notifyMqttChanged();
         if (nowConnected) {
             log_i("MQTT connected");
+            // Firmware is confirmed healthy — clear the OTA boot-loop watchdog counter.
+            // Must happen after MQTT connects (proving WiFi + MQTT stack are intact)
+            // so a firmware that connects WiFi but hangs before MQTT still triggers rollback.
+            otaBootWatchdogClear();
             // "socket connected" event: OEM publishes this on every MQTT connect
             // (confirmed from decompile — fires before any other event on connect)
             telemetry.publishEvent("socket connected");
