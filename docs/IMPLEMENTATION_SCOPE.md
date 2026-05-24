@@ -1,3 +1,24 @@
+> ## ⚠ HISTORICAL PLANNING DOCUMENT — STATUS UPDATE
+>
+> This document was written before implementation began. All phases (1–7) and Phase 8+
+> (POWER_DIRECT mode) are **complete**. The firmware is tagged `v0.1.0` and awaiting
+> first hardware flash. For current status, see `docs/WORKPLAN.md`.
+>
+> The corrections block below remains valid — the body of this document contains errors
+> that were never corrected in-place. Source of truth for all confirmed values: `CLAUDE.md`
+> and the actual source files.
+>
+> **Phase 8 status correction:**
+> - Document says Phase 8 "Not started until Phase 3 acceptance criteria pass"
+> - **DONE:** POWER_DIRECT mode fully implemented (10 build steps + display menus).
+>   See `WORKPLAN.md` for the full command set and config fields.
+>
+> **File paths:**
+> - `RE_FINDINGS.md` → now at `research/RE_FINDINGS.md`
+> - `smartpid_decompiled.c` → now at `research/smartpid_decompiled.c`
+> - All other cross-references that used absolute `/Users/Mike/Projects/M5/` paths
+>   should be resolved relative to the repo root.
+>
 > ## ⚠ CORRECTIONS — READ BEFORE USING THIS DOCUMENT
 >
 > This document contains confirmed errors. The corrections below take precedence over the
