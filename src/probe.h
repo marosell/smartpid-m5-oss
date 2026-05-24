@@ -62,8 +62,14 @@
 // to a bidirectional GPIO for 1-Wire (DS18B20) mode in addition to the ADC
 // path for NTC mode. The actual GPIOs depend on the carrier board PCB.
 //
-// Current guesses (M5Stack Gray M-Bus bidirectional GPIOs not used by outputs):
-//   CH1: GPIO 25 — DAC1, bidirectional, available on M-Bus
+// ⚠️  GPIO 25 IS THE BUZZER — DO NOT USE FOR DS18B20.
+//   Confirmed from OEM decompile: FUN_4010efec calls FUN_400e5670(0x19, 0)
+//   which configures GPIO 25 (0x19) as LEDC output for the passive buzzer.
+//   GPIO 25 is also the M5Stack Gray internal DAC1. It is exclusively in use
+//   by buzzer.h / M5.Speaker. Assigning DS18B20_CH1_GPIO = 25 would conflict.
+//
+// Current best guesses for DS18B20 data lines (BENCH-VERIFY with continuity meter):
+//   CH1: GPIO 26 — DAC2, bidirectional, available on M-Bus (not the buzzer)
 //   CH2: GPIO 17 — available on M-Bus (UART2 TX repurposed as GPIO)
 //
 // Update DS18B20_CH1_GPIO / DS18B20_CH2_GPIO after bench inspection and
@@ -77,7 +83,7 @@
 // add an external 4.7 kΩ pull-up from the data pin to 3.3V.
 // Without a pull-up, DS18B20 will not respond and readTemp() will always
 // return PROBE_SENTINEL_VALUE regardless of probe connection.
-#define DS18B20_CH1_GPIO  25   // BENCH-VERIFY: CH1 probe terminal → GPIO25?
+#define DS18B20_CH1_GPIO  26   // BENCH-VERIFY: CH1 probe terminal → GPIO26? (NOT 25 — buzzer)
 #define DS18B20_CH2_GPIO  17   // BENCH-VERIFY: CH2 probe terminal → GPIO17?
 
 // ── NTC voltage divider parameters ───────────────────────────────────────────

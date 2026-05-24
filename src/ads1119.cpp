@@ -97,13 +97,26 @@ bool ADS1119::_startConversion(uint8_t config) {
 // ADS1119 sets DRDY=1 when a new result is available.
 bool ADS1119::_waitReady() {
     uint32_t deadline = millis() + ADS1119_CONV_TIMEOUT_MS;
+    int8_t pollCount = 0;
+    int16_t lastReg = 0;
     while ((int32_t)(millis() - deadline) < 0) {
         int16_t reg = _readReg();
-        if (reg < 0) return false;       // I2C error
-        if ((reg >> 7) & 1) return true;  // DRDY bit set
-        delay(2);
+        if (reg < 0) {
+            log_w("[ADS1119] _waitReady: RREG I2C error on poll %d", pollCount);
+            return false;
+        }
+        // Log first 5 polls so we can see what the register returns
+        if (pollCount < 5) {
+            log_i("[ADS1119] _waitReady poll %d: reg=0x%02X (DRDY=%d)",
+                  pollCount, (uint8_t)reg, (reg >> 7) & 1);
+        }
+        lastReg = reg;
+        pollCount++;
+        if ((reg >> 7) & 1) return true;  // DRDY bit 7 set = conversion complete
+        delay(10);
     }
-    log_d("[ADS1119] _waitReady timeout");
+    log_w("[ADS1119] _waitReady: timeout after %d polls, last reg=0x%02X",
+          pollCount, (uint8_t)lastReg);
     return false;
 }
 
@@ -120,39 +133,40 @@ int16_t ADS1119::_readReg() {
 // Configure MUX, start single-shot, wait, then RDATA.
 // Returns INT16_MIN on error.
 int16_t ADS1119::readRaw(int channel) {
-    // Select MUX based on channel
+    // Select MUX based on channel.
+    // GAIN_4X confirmed from OEM FUN_400fa2b4: always OR's 0x10 (bit 4) into config.
     uint8_t mux = (channel == 1) ? ADS1119_MUX_DIFF_01 : ADS1119_MUX_DIFF_23;
     uint8_t config = mux |
-                     ADS1119_GAIN_1X      |
+                     ADS1119_GAIN_4X      |   // OEM: 0x10 | 0x30 | 0x50 all have bit4=1
                      ADS1119_DR_20SPS     |
                      ADS1119_VREF_INT     |
                      ADS1119_CM_SINGLE;
 
     if (!_startConversion(config)) {
-        log_d("[ADS1119] CH%d: startConversion failed", channel);
+        log_w("[ADS1119] CH%d: startConversion failed (I2C error?)", channel);
         return INT16_MIN;
     }
     if (!_waitReady()) {
-        log_d("[ADS1119] CH%d: conversion timeout", channel);
+        log_w("[ADS1119] CH%d: conversion timeout (DRDY never set)", channel);
         return INT16_MIN;
     }
 
     // RDATA: read 2 bytes MSB first (signed 16-bit, 2's complement)
     uint8_t buf[2];
     if (!i2c_read(ADS1119_CMD_RDATA, buf, 2)) {
-        log_d("[ADS1119] CH%d: RDATA read failed", channel);
+        log_w("[ADS1119] CH%d: RDATA read failed", channel);
         return INT16_MIN;
     }
 
     int16_t raw = (int16_t)((buf[0] << 8) | buf[1]);
-    log_d("[ADS1119] CH%d raw: %d (0x%04X)", channel, raw, (uint16_t)raw);
+    log_i("[ADS1119] CH%d raw: %d (0x%04X)", channel, raw, (uint16_t)raw);
     return raw;
 }
 
 // ── readRaw3WireComp ──────────────────────────────────────────────────────────
 int16_t ADS1119::readRaw3WireComp() {
     uint8_t config = ADS1119_MUX_DIFF_12 |
-                     ADS1119_GAIN_1X     |
+                     ADS1119_GAIN_4X     |   // match GAIN_4X used for primary measurement
                      ADS1119_DR_20SPS    |
                      ADS1119_VREF_INT    |
                      ADS1119_CM_SINGLE;
@@ -178,13 +192,22 @@ int16_t ADS1119::readRaw3WireComp() {
 }
 
 // ── rawToOhms ─────────────────────────────────────────────────────────────────
-// Ratiometric conversion: R_probe = (raw / FULL_SCALE) * R_ref
-// FULL_SCALE = 32768 (2^15) for signed 16-bit with ×1 gain.
-// R_ref = ADS1119_REF_OHMS (150 Ω, from OEM decompile constant 0x96).
+// Voltage divider conversion (from OEM FUN_400df2f0):
+//   Circuit: V_excitation → R_ref (150 Ω) → R_pt100 → GND
+//   ADS1119 measures V across R_pt100 vs internal VREF (GAIN=4, VREF=2.048 V).
+//   V_excitation is designed so that V_max = VREF/GAIN = 0.512 V.
+//
+//   raw/FULL_SCALE = V_pt100 / V_excitation = R_pt100 / (R_ref + R_pt100)
+//   → R_pt100 = R_ref × frac / (1 − frac)   where frac = raw / FULL_SCALE
+//
+// This is a NON-LINEAR formula. For 3-wire compensation, convert to ohms
+// FIRST, then subtract lead resistance — do NOT subtract in raw space.
 float ADS1119::rawToOhms(int16_t raw) {
-    if (raw == INT16_MIN) return NAN;
+    if (raw == INT16_MIN || raw <= 0) return NAN;
     const float FULL_SCALE = 32768.0f;
-    return ((float)raw / FULL_SCALE) * (float)ADS1119_REF_OHMS;
+    float frac = (float)raw / FULL_SCALE;
+    if (frac >= 1.0f) return NAN;   // saturated (R→∞ or ADC error)
+    return (float)ADS1119_REF_OHMS * frac / (1.0f - frac);
 }
 
 // ── ohmsToTempC ───────────────────────────────────────────────────────────────
@@ -236,35 +259,41 @@ float ADS1119::readTempC(int channel) {
     float   tempC = ohmsToTempC(ohms);
 
     if (isnan(tempC)) {
-        log_d("[ADS1119] CH%d: raw=%d ohms=%.2f → NaN (no PT100?)",
+        log_i("[ADS1119] CH%d: raw=%d ohms=%.2f → NaN (no PT100?)",
               channel, raw, ohms);
     } else {
-        log_d("[ADS1119] CH%d: raw=%d ohms=%.3f → %.2f°C",
+        log_i("[ADS1119] CH%d: raw=%d ohms=%.3f → %.2f°C",
               channel, raw, ohms, tempC);
     }
     return tempC;
 }
 
 // ── readTempC_3wire ───────────────────────────────────────────────────────────
-// 3-wire PT100: measure RTD + lead, then subtract lead (AIN1−AIN2).
-// Assumes the two outer leads have equal resistance (standard 3-wire assumption).
+// 3-wire PT100: measure RTD + lead (primary channel), then measure lead alone
+// (AIN1−AIN2 compensation channel). Subtract lead resistance in ohms space.
+//
+// ⚠️  rawToOhms uses a non-linear voltage divider formula — subtracting raw counts
+// before converting gives incorrect results. Always convert to ohms first.
 float ADS1119::readTempC_3wire(int channel) {
-    int16_t rawProbe = readRaw(channel);      // RTD + lead1
-    int16_t rawComp  = readRaw3WireComp();    // lead1 ≈ lead2
+    int16_t rawProbe = readRaw(channel);      // RTD + lead1 resistance
+    int16_t rawComp  = readRaw3WireComp();    // lead resistance alone (lead1 ≈ lead2)
 
     if (rawProbe == INT16_MIN || rawComp == INT16_MIN) return NAN;
 
-    // Subtract lead resistance contribution (ratiometric counts cancel)
-    int16_t corrected = (int16_t)((int32_t)rawProbe - (int32_t)rawComp);
-    float   ohms      = rawToOhms(corrected);
-    float   tempC     = ohmsToTempC(ohms);
+    // Convert both to ohms, then subtract (non-linear formula requires this order)
+    float ohmsProbe = rawToOhms(rawProbe);
+    float ohmsComp  = rawToOhms(rawComp);
+    if (isnan(ohmsProbe) || isnan(ohmsComp)) return NAN;
+
+    float ohms  = ohmsProbe - ohmsComp;   // cancel lead resistance
+    float tempC = ohmsToTempC(ohms);
 
     if (isnan(tempC)) {
-        log_d("[ADS1119] CH%d 3W: probe=%d comp=%d ohms=%.2f → NaN",
-              channel, rawProbe, rawComp, ohms);
+        log_i("[ADS1119] CH%d 3W: probe=%d(%.2fΩ) comp=%d(%.2fΩ) net=%.2fΩ → NaN",
+              channel, rawProbe, ohmsProbe, rawComp, ohmsComp, ohms);
     } else {
-        log_d("[ADS1119] CH%d 3W: probe=%d comp=%d ohms=%.3f → %.2f°C",
-              channel, rawProbe, rawComp, ohms, tempC);
+        log_i("[ADS1119] CH%d 3W: probe=%.3fΩ comp=%.3fΩ net=%.3fΩ → %.2f°C",
+              channel, ohmsProbe, ohmsComp, ohms, tempC);
     }
     return tempC;
 }

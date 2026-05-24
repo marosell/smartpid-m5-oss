@@ -234,9 +234,10 @@ private:
 
     // Hold-repeat acceleration state — only active in VALUE_ENTRY_DIALOG.
     // _holdRepeatBtn: 0=none, 1=BtnA(−), 2=BtnC(+)
-    uint8_t       _holdRepeatBtn   = 0;
-    unsigned long _holdRepeatStart = 0;
-    unsigned long _holdRepeatNext  = 0;
+    uint8_t       _holdRepeatBtn      = 0;
+    unsigned long _holdRepeatStart    = 0;
+    unsigned long _holdRepeatNext     = 0;
+    bool          _dispatchFromRepeat = false;  // true while dispatching a hold-repeat event; suppresses beep
 
     // BtnA edge-detection — GPIO39 can be glitchy in wasPressed() on the M5Stack
     // Basic/Gray (ADC input-only pin; M5Unified's wasPressed() misses quick taps).

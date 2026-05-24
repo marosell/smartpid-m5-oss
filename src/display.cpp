@@ -18,6 +18,7 @@
 
 #include "display.h"
 #include "output_control.h"   // for output label strings
+#include "buzzer.h"            // buttonBeep() — OEM FUN_400fa44c
 #include <WiFi.h>
 #include <time.h>
 
@@ -154,7 +155,9 @@ void DisplayManager::loop(ChannelState& ch1, ChannelState& ch2) {
             else if (held < 6000ul) interval = 50ul;   // 20/s
             else                    interval = 20ul;   // 50/s — fast cruise
             _holdRepeatNext = nowR + interval;
+            _dispatchFromRepeat = true;
             _dispatch(btn == 1u ? UIEvent::BTN_A : UIEvent::BTN_C);
+            _dispatchFromRepeat = false;
         }
     } else {
         _holdRepeatBtn = 0;   // reset when leaving value entry
@@ -288,6 +291,15 @@ void DisplayManager::_goTo(UIScreen s) {
 // _dispatch() — route UIEvent to the current screen's handler
 // ────────────────────────────────────────────────────────────────────────────
 void DisplayManager::_dispatch(UIEvent ev) {
+    // Button beep — play a short confirmation tone on each new button press.
+    // OEM: FUN_400fa44c → FUN_4010f050 → LEDC GPIO 25, ~1000 Hz, ~32 ms.
+    // Only fire on actual button taps — not on TICK_1S, DATA_UPDATE, MQTT_CHANGED,
+    // BTN_BACK (hold gesture), or hold-repeat events (_dispatchFromRepeat).
+    if ((ev == UIEvent::BTN_A || ev == UIEvent::BTN_B || ev == UIEvent::BTN_C)
+        && !_dispatchFromRepeat) {
+        buttonBeep();
+    }
+
     // BTN_BACK (BtnB hold): navigate to logical parent, restoring saved position
     if (ev == UIEvent::BTN_BACK) {
         UIScreen parent = _logicalParent();
