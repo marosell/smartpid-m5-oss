@@ -98,6 +98,8 @@ enum class UIScreen : uint8_t {
     SETUP_HW,               // Hardware Setup (output types, probe types)
     SETUP_UNIT,             // Unit Parameters (temp unit, calibration, NTC beta…)
     SETUP_PROCESS,          // Process Parameters (SP, PID gains, hysteresis…)
+    SETUP_POWER,            // Power Setup (relay modes, reflux timer)
+    SETUP_PROCESS_P,        // Process Parameters (P) — POWER_DIRECT mode params
     SETUP_CLOCK,            // Clock Setup (set time/date/NTP)
     SETUP_SOUND_ALARMS,     // Sound Alarms sub-menu
     SETUP_PID_AUTOTUNE,     // PID Auto Tune config
@@ -236,10 +238,12 @@ private:
     void _handleListSelect(UIEvent ev);
     void _handleValueEntry(UIEvent ev);
     void _handleInfoSingle(UIEvent ev);
-    void _handleSetupHw(UIEvent ev);      // handles SETUP_MENU + SETUP_HW + WIFI_LOGGING + PROFILE_MENU
-    void _handleSetupUnit(UIEvent ev);    // handles SETUP_UNIT
-    void _handleSetupProcess(UIEvent ev); // handles SETUP_PROCESS
-    void _handleProfileEdit(UIEvent ev);  // handles PROFILE_EDIT (24-item profile step editor)
+    void _handleSetupHw(UIEvent ev);       // handles SETUP_MENU + SETUP_HW + WIFI_LOGGING + PROFILE_MENU
+    void _handleSetupUnit(UIEvent ev);     // handles SETUP_UNIT
+    void _handleSetupProcess(UIEvent ev);  // handles SETUP_PROCESS
+    void _handleSetupPower(UIEvent ev);    // handles SETUP_POWER
+    void _handleSetupProcessP(UIEvent ev); // handles SETUP_PROCESS_P
+    void _handleProfileEdit(UIEvent ev);   // handles PROFILE_EDIT (24-item profile step editor)
 
     // ── Full-screen draw functions ────────────────────────────────────────────
     void _drawScreen();
@@ -258,6 +262,8 @@ private:
     void _drawSetupHw();
     void _drawSetupUnit();
     void _drawSetupProcess();
+    void _drawSetupPower();
+    void _drawSetupProcessP();
     void _drawSetupClock();
     void _drawWifiLogging();
     void _drawWifiStatus();     // WiFi Status / Log Config / WiFi Mode screens

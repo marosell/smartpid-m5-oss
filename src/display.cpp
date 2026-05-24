@@ -31,9 +31,9 @@ DisplayManager display;
 
 // ── Main menu items (from spec §6 + OEM screenshots) ──────────────────────
 static const char* const kMainMenuItems[] = {
-    "Start", "Monitor", "Setup", "WiFi/Logging", "Profile", "Info"
+    "Start", "Power", "Monitor", "Setup", "WiFi/Logging", "Profile", "Info"
 };
-static const int kMainMenuCount = 6;
+static const int kMainMenuCount = 7;
 
 // ── Context menu items (from spec §7.4 + screenshot IMG_2615) ─────────────
 static const char* const kCtxMenuItems[] = {
@@ -43,10 +43,11 @@ static const int kCtxMenuCount = 6;
 
 // ── Setup sub-menu items ───────────────────────────────────────────────────
 static const char* const kSetupMenuItems[] = {
-    "Hardware Setup", "Unit Parameters", "Process Parameters",
+    "Thermal Setup", "Unit Parameters", "Process Params (T)",
+    "Power Setup", "Process Params (P)",
     "PID Auto Tune", "Exit"
 };
-static const int kSetupMenuCount = 5;
+static const int kSetupMenuCount = 7;
 
 // ── Info menu items (from spec §12) ──────────────────────────────────────
 static const char* const kInfoMenuItems[] = {
@@ -191,10 +192,12 @@ void DisplayManager::_dispatch(UIEvent ev) {
         case UIScreen::INFO_MENU:              _handleInfoSingle(ev);      break;
         case UIScreen::INFO_SINGLE_VALUE:      _handleInfoSingle(ev);      break;
         case UIScreen::SETUP_MENU:
-        case UIScreen::SETUP_HW:               _handleSetupHw(ev);      break;
-        case UIScreen::SETUP_UNIT:             _handleSetupUnit(ev);    break;
-        case UIScreen::SETUP_PROCESS:          _handleSetupProcess(ev); break;
-        case UIScreen::WIFI_LOGGING:           _handleSetupHw(ev);      break;
+        case UIScreen::SETUP_HW:               _handleSetupHw(ev);       break;
+        case UIScreen::SETUP_UNIT:             _handleSetupUnit(ev);     break;
+        case UIScreen::SETUP_PROCESS:          _handleSetupProcess(ev);  break;
+        case UIScreen::SETUP_POWER:            _handleSetupPower(ev);    break;
+        case UIScreen::SETUP_PROCESS_P:        _handleSetupProcessP(ev); break;
+        case UIScreen::WIFI_LOGGING:           _handleSetupHw(ev);       break;
         case UIScreen::PROFILE_MENU:           _handleSetupHw(ev);      break;
         case UIScreen::PROFILE_EDIT:           _handleProfileEdit(ev);  break;
         case UIScreen::ERROR_SCREEN:
@@ -244,6 +247,8 @@ void DisplayManager::_drawScreen() {
         case UIScreen::SETUP_HW:               _drawSetupHw();             break;
         case UIScreen::SETUP_UNIT:             _drawSetupUnit();           break;
         case UIScreen::SETUP_PROCESS:          _drawSetupProcess();        break;
+        case UIScreen::SETUP_POWER:            _drawSetupPower();          break;
+        case UIScreen::SETUP_PROCESS_P:        _drawSetupProcessP();       break;
         case UIScreen::SETUP_CLOCK:            _drawSetupClock();          break;
         case UIScreen::WIFI_LOGGING:           _drawWifiLogging();         break;
         case UIScreen::WIFI_STATUS:
@@ -489,32 +494,34 @@ void DisplayManager::_handleMainMenu(UIEvent ev) {
             break;
         case UIEvent::BTN_B:
             switch (_menuSel) {
-                case 0: // Start
-                    if (_ch1 && _ch2) {
-                        // Trigger start standard via command handler would need a ref.
-                        // For now, update channel state directly and enter running screen.
-                        if (_ch1) { _ch1->runmode = Runmode::STANDARD; _ch1->paused = false; }
-                        if (_ch2) { _ch2->runmode = Runmode::STANDARD; _ch2->paused = false; }
-                    }
+                case 0: // Start (STANDARD thermal mode)
+                    if (_ch1) { _ch1->runmode = Runmode::STANDARD; _ch1->paused = false; }
+                    if (_ch2) { _ch2->runmode = Runmode::STANDARD; _ch2->paused = false; }
                     _runScreen = 0;
                     _goTo(UIScreen::RUNNING_CH_DETAIL);
                     break;
-                case 1: // Monitor
+                case 1: // Power (POWER_DIRECT mode)
+                    if (_ch1) { _ch1->runmode = Runmode::POWER_DIRECT; _ch1->paused = false; }
+                    if (_ch2) { _ch2->runmode = Runmode::POWER_DIRECT; _ch2->paused = false; }
+                    _runScreen = 0;
+                    _goTo(UIScreen::RUNNING_CH_DETAIL);
+                    break;
+                case 2: // Monitor
                     if (_ch1) { _ch1->runmode = Runmode::MONITOR; _ch1->paused = false; }
                     if (_ch2) { _ch2->runmode = Runmode::MONITOR; _ch2->paused = false; }
                     _runScreen = 0;
                     _goTo(UIScreen::RUNNING_CH_DETAIL);
                     break;
-                case 2: // Setup
+                case 3: // Setup
                     _goTo(UIScreen::SETUP_MENU);
                     break;
-                case 3: // WiFi/Logging
+                case 4: // WiFi/Logging
                     _goTo(UIScreen::WIFI_LOGGING);
                     break;
-                case 4: // Profile
+                case 5: // Profile
                     _goTo(UIScreen::PROFILE_MENU);
                     break;
-                case 5: // Info
+                case 6: // Info
                     _goTo(UIScreen::INFO_MENU);
                     break;
             }
@@ -1409,6 +1416,29 @@ static const char* const kProcItems[] = {
 };
 static const int kProcCount = 22;
 
+// ── Relay mode option strings (POWER_DIRECT setup) ────────────────────────
+static const char* const kRelayModeOpts[] = {
+    "Off", "ACC Sync", "Remote", "Reflux Timer"
+};
+static const int kRelayModeCount = 4;
+
+// ── Power Setup item list (spec §8.4, new) ────────────────────────────────
+static const char* const kPwrSetupItems[] = {
+    "RL1 Mode",   "RL1 On ms",   "RL1 Cycle ms",
+    "RL2 Mode",   "RL2 On ms",   "RL2 Cycle ms",
+    "Exit"
+};
+static const int kPwrSetupCount = 7;
+
+// ── Process Parameters (P) item list (spec §8.5, new) ─────────────────────
+static const char* const kProcPItems[] = {
+    "Distill Pwr",    "Accel Mode",    "Accel Temp",
+    "Accel Pwr",      "Finish Temp",   "Watchdog",
+    "Watchdog Safe",  "Timer Temp",    "Timer",
+    "On Expire",      "Ramp",          "Exit"
+};
+static const int kProcPCount = 12;
+
 // ────────────────────────────────────────────────────────────────────────────
 // _drawSetupHw — SETUP_MENU (top-level list) + SETUP_HW (hardware items)
 // ────────────────────────────────────────────────────────────────────────────
@@ -1422,7 +1452,7 @@ void DisplayManager::_drawSetupHw() {
     if (!_cfg) return;
     const Config& c = *_cfg;
 
-    _drawHeader("Hardware Setup");
+    _drawHeader("Thermal Setup");
     _drawFooter("\x1e up", "select", "back \x1f");
 
     char vbufs[kHwCount][16];
@@ -1554,11 +1584,13 @@ void DisplayManager::_handleSetupHw(UIEvent ev) {
 
             if (_screen == UIScreen::SETUP_MENU) {
                 switch (_menuSel) {
-                    case 0: _goTo(UIScreen::SETUP_HW);           break;
-                    case 1: _goTo(UIScreen::SETUP_UNIT);         break;
-                    case 2: _goTo(UIScreen::SETUP_PROCESS);      break;
-                    case 3: _goTo(UIScreen::SETUP_PID_AUTOTUNE); break;
-                    case 4: _goTo(UIScreen::MAIN_MENU);          break;
+                    case 0: _goTo(UIScreen::SETUP_HW);           break;  // Thermal Setup
+                    case 1: _goTo(UIScreen::SETUP_UNIT);         break;  // Unit Parameters
+                    case 2: _goTo(UIScreen::SETUP_PROCESS);      break;  // Process Params (T)
+                    case 3: _goTo(UIScreen::SETUP_POWER);        break;  // Power Setup
+                    case 4: _goTo(UIScreen::SETUP_PROCESS_P);    break;  // Process Params (P)
+                    case 5: _goTo(UIScreen::SETUP_PID_AUTOTUNE); break;  // PID Auto Tune
+                    case 6: _goTo(UIScreen::MAIN_MENU);          break;  // Exit
                 }
             } else if (_screen == UIScreen::SETUP_HW && _cfg) {
                 switch (_menuSel) {
@@ -2174,6 +2206,277 @@ void DisplayManager::_handleProfileEdit(UIEvent ev) {
             _goTo(UIScreen::VALUE_ENTRY_DIALOG);
             break;
         }
+        default: break;
+    }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// _drawSetupPower — Power Setup screen (spec §8.4, new)
+// Relay mode selection and reflux timer parameters for RL1 + RL2.
+// ────────────────────────────────────────────────────────────────────────────
+void DisplayManager::_drawSetupPower() {
+    if (!_cfg) return;
+    const Config& c = *_cfg;
+
+    _drawHeader("Power Setup");
+    _drawFooter("\x1e up", "select", "back \x1f");
+
+    char vbufs[kPwrSetupCount][16];
+    const char* vals[kPwrSetupCount] = {};
+    strlcpy(vbufs[0], relayModeStr((RelayMode)c.pwr_relay1_mode), sizeof(vbufs[0])); vals[0] = vbufs[0];
+    snprintf(vbufs[1], sizeof(vbufs[1]), "%lu ms", (unsigned long)c.pwr_r1_on_ms);   vals[1] = vbufs[1];
+    snprintf(vbufs[2], sizeof(vbufs[2]), "%lu ms", (unsigned long)c.pwr_r1_cycle_ms); vals[2] = vbufs[2];
+    strlcpy(vbufs[3], relayModeStr((RelayMode)c.pwr_relay2_mode), sizeof(vbufs[3])); vals[3] = vbufs[3];
+    snprintf(vbufs[4], sizeof(vbufs[4]), "%lu ms", (unsigned long)c.pwr_r2_on_ms);   vals[4] = vbufs[4];
+    snprintf(vbufs[5], sizeof(vbufs[5]), "%lu ms", (unsigned long)c.pwr_r2_cycle_ms); vals[5] = vbufs[5];
+    // [6] Exit — no value
+
+    _drawMenuList(kPwrSetupItems, vals, kPwrSetupCount, _menuSel, _menuScroll);
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// _handleSetupPower — Power Setup button handler
+// ────────────────────────────────────────────────────────────────────────────
+void DisplayManager::_handleSetupPower(UIEvent ev) {
+    switch (ev) {
+        case UIEvent::BTN_A:
+            if (_menuSel > 0) {
+                _menuSel--;
+                if (_menuSel < _menuScroll) _menuScroll = _menuSel;
+                _needsFullRedraw = true;
+            }
+            break;
+        case UIEvent::BTN_C:
+            if (_menuSel < kPwrSetupCount - 1) {
+                _menuSel++;
+                if (_menuSel >= _menuScroll + MENU_ITEMS_VIS)
+                    _menuScroll = _menuSel - MENU_ITEMS_VIS + 1;
+                _needsFullRedraw = true;
+            } else {
+                _goTo(UIScreen::SETUP_MENU);
+            }
+            break;
+        case UIEvent::BTN_B:
+            if (!_cfg) break;
+            _savedMenuSel    = _menuSel;
+            _savedMenuScroll = _menuScroll;
+            switch (_menuSel) {
+                case 0: { // RL1 Mode
+                    strlcpy(_listTitle, "RL1 Mode", sizeof(_listTitle));
+                    _listOptions = kRelayModeOpts; _listCount = (int8_t)kRelayModeCount;
+                    _listSel = (int8_t)_cfg->pwr_relay1_mode;
+                    _listCallback = [](int8_t i){
+                        cfg.pwr_relay1_mode = (uint8_t)i; cfg.savePowerParams();
+                    };
+                    _goTo(UIScreen::LIST_SELECT_DIALOG);
+                    break;
+                }
+                case 1: // RL1 On ms
+                    strlcpy(_editLabel, "RL1 On ms", sizeof(_editLabel));
+                    strlcpy(_editUnit, " ms", sizeof(_editUnit));
+                    _editValue = (float)_cfg->pwr_r1_on_ms;
+                    _editMin = 0.0f; _editMax = 60000.0f; _editStep = 100.0f;
+                    _editCallback = [](float v){ cfg.pwr_r1_on_ms = (uint32_t)v; cfg.savePowerParams(); };
+                    _goTo(UIScreen::VALUE_ENTRY_DIALOG);
+                    break;
+                case 2: // RL1 Cycle ms
+                    strlcpy(_editLabel, "RL1 Cycle ms", sizeof(_editLabel));
+                    strlcpy(_editUnit, " ms", sizeof(_editUnit));
+                    _editValue = (float)_cfg->pwr_r1_cycle_ms;
+                    _editMin = 0.0f; _editMax = 60000.0f; _editStep = 100.0f;
+                    _editCallback = [](float v){ cfg.pwr_r1_cycle_ms = (uint32_t)v; cfg.savePowerParams(); };
+                    _goTo(UIScreen::VALUE_ENTRY_DIALOG);
+                    break;
+                case 3: { // RL2 Mode
+                    strlcpy(_listTitle, "RL2 Mode", sizeof(_listTitle));
+                    _listOptions = kRelayModeOpts; _listCount = (int8_t)kRelayModeCount;
+                    _listSel = (int8_t)_cfg->pwr_relay2_mode;
+                    _listCallback = [](int8_t i){
+                        cfg.pwr_relay2_mode = (uint8_t)i; cfg.savePowerParams();
+                    };
+                    _goTo(UIScreen::LIST_SELECT_DIALOG);
+                    break;
+                }
+                case 4: // RL2 On ms
+                    strlcpy(_editLabel, "RL2 On ms", sizeof(_editLabel));
+                    strlcpy(_editUnit, " ms", sizeof(_editUnit));
+                    _editValue = (float)_cfg->pwr_r2_on_ms;
+                    _editMin = 0.0f; _editMax = 60000.0f; _editStep = 100.0f;
+                    _editCallback = [](float v){ cfg.pwr_r2_on_ms = (uint32_t)v; cfg.savePowerParams(); };
+                    _goTo(UIScreen::VALUE_ENTRY_DIALOG);
+                    break;
+                case 5: // RL2 Cycle ms
+                    strlcpy(_editLabel, "RL2 Cycle ms", sizeof(_editLabel));
+                    strlcpy(_editUnit, " ms", sizeof(_editUnit));
+                    _editValue = (float)_cfg->pwr_r2_cycle_ms;
+                    _editMin = 0.0f; _editMax = 60000.0f; _editStep = 100.0f;
+                    _editCallback = [](float v){ cfg.pwr_r2_cycle_ms = (uint32_t)v; cfg.savePowerParams(); };
+                    _goTo(UIScreen::VALUE_ENTRY_DIALOG);
+                    break;
+                case 6: _goTo(UIScreen::SETUP_MENU); break; // Exit
+            }
+            break;
+        default: break;
+    }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// _drawSetupProcessP — Process Parameters (P) screen (spec §8.5, new)
+// POWER_DIRECT mode parameters: power, accel phase, finish latch, watchdog,
+// timer, ramp.
+// ────────────────────────────────────────────────────────────────────────────
+void DisplayManager::_drawSetupProcessP() {
+    if (!_cfg) return;
+    const Config& c = *_cfg;
+
+    _drawHeader("Process Params (P)");
+    _drawFooter("\x1e up", "select", "back \x1f");
+
+    char vbufs[kProcPCount][16];
+    const char* vals[kProcPCount] = {};
+
+    snprintf(vbufs[0],  sizeof(vbufs[0]),  "%d%%", c.pwr_distill_pct);          vals[0]  = vbufs[0];
+    strlcpy(vbufs[1],  c.pwr_acc_mode ? "On" : "Off", sizeof(vbufs[1]));        vals[1]  = vbufs[1];
+    if (c.pwr_dast > 0.0f) snprintf(vbufs[2], sizeof(vbufs[2]), "%.1f\xc2\xb0", c.pwr_dast);
+    else                   strlcpy(vbufs[2],  "Off", sizeof(vbufs[2]));          vals[2]  = vbufs[2];
+    snprintf(vbufs[3],  sizeof(vbufs[3]),  "%d%%", c.pwr_dout);                  vals[3]  = vbufs[3];
+    if (c.pwr_dfsp > 0.0f) snprintf(vbufs[4], sizeof(vbufs[4]), "%.1f\xc2\xb0", c.pwr_dfsp);
+    else                   strlcpy(vbufs[4],  "Off", sizeof(vbufs[4]));          vals[4]  = vbufs[4];
+    if (c.pwr_wdog_s > 0) snprintf(vbufs[5], sizeof(vbufs[5]), "%lu s", (unsigned long)c.pwr_wdog_s);
+    else                  strlcpy(vbufs[5],  "Off", sizeof(vbufs[5]));           vals[5]  = vbufs[5];
+    snprintf(vbufs[6],  sizeof(vbufs[6]),  "%d%%", c.pwr_wdog_safe);             vals[6]  = vbufs[6];
+    if (c.pwr_dtsp > 0.0f) snprintf(vbufs[7], sizeof(vbufs[7]), "%.1f\xc2\xb0", c.pwr_dtsp);
+    else                   strlcpy(vbufs[7],  "Off", sizeof(vbufs[7]));          vals[7]  = vbufs[7];
+    if (c.pwr_timer_s > 0) snprintf(vbufs[8], sizeof(vbufs[8]), "%lu s", (unsigned long)c.pwr_timer_s);
+    else                   strlcpy(vbufs[8],  "Off", sizeof(vbufs[8]));          vals[8]  = vbufs[8];
+    strlcpy(vbufs[9],  c.pwr_deo ? "Shutoff" : "Continue", sizeof(vbufs[9]));   vals[9]  = vbufs[9];
+    if (c.pwr_ramp_s > 0) snprintf(vbufs[10], sizeof(vbufs[10]), "%lu s", (unsigned long)c.pwr_ramp_s);
+    else                  strlcpy(vbufs[10], "Off", sizeof(vbufs[10]));          vals[10] = vbufs[10];
+    // [11] Exit — no value
+
+    _drawMenuList(kProcPItems, vals, kProcPCount, _menuSel, _menuScroll);
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// _handleSetupProcessP — Process Parameters (P) button handler
+// ────────────────────────────────────────────────────────────────────────────
+void DisplayManager::_handleSetupProcessP(UIEvent ev) {
+    switch (ev) {
+        case UIEvent::BTN_A:
+            if (_menuSel > 0) {
+                _menuSel--;
+                if (_menuSel < _menuScroll) _menuScroll = _menuSel;
+                _needsFullRedraw = true;
+            }
+            break;
+        case UIEvent::BTN_C:
+            if (_menuSel < kProcPCount - 1) {
+                _menuSel++;
+                if (_menuSel >= _menuScroll + MENU_ITEMS_VIS)
+                    _menuScroll = _menuSel - MENU_ITEMS_VIS + 1;
+                _needsFullRedraw = true;
+            } else {
+                _goTo(UIScreen::SETUP_MENU);
+            }
+            break;
+        case UIEvent::BTN_B:
+            if (!_cfg) break;
+            _savedMenuSel    = _menuSel;
+            _savedMenuScroll = _menuScroll;
+            switch (_menuSel) {
+                case 0: // Distill Pwr — target DC OUT % at distillation phase
+                    strlcpy(_editLabel, "Distill Pwr", sizeof(_editLabel));
+                    strlcpy(_editUnit, "%", sizeof(_editUnit));
+                    _editValue = (float)_cfg->pwr_distill_pct;
+                    _editMin = 0.0f; _editMax = 100.0f; _editStep = 1.0f;
+                    _editCallback = [](float v){ cfg.pwr_distill_pct = (uint8_t)v; cfg.savePowerParams(); };
+                    _goTo(UIScreen::VALUE_ENTRY_DIALOG);
+                    break;
+                case 1: { // Accel Mode — enable/disable acceleration phase
+                    static const char* const opts[] = { "Off", "On" };
+                    strlcpy(_listTitle, "Accel Mode", sizeof(_listTitle));
+                    _listOptions = opts; _listCount = 2;
+                    _listSel = _cfg->pwr_acc_mode ? 1 : 0;
+                    _listCallback = [](int8_t i){ cfg.pwr_acc_mode = (i == 1); cfg.savePowerParams(); };
+                    _goTo(UIScreen::LIST_SELECT_DIALOG);
+                    break;
+                }
+                case 2: // Accel Temp (dAST) — temperature that ends accel phase (0=off)
+                    strlcpy(_editLabel, "Accel Temp", sizeof(_editLabel));
+                    strlcpy(_editUnit, _cfg->temp_unit, sizeof(_editUnit));
+                    _editValue = _cfg->pwr_dast;
+                    _editMin = 0.0f; _editMax = 200.0f; _editStep = 0.5f;
+                    _editCallback = [](float v){ cfg.pwr_dast = v; cfg.savePowerParams(); };
+                    _goTo(UIScreen::VALUE_ENTRY_DIALOG);
+                    break;
+                case 3: // Accel Pwr (dOUT) — DC OUT % during accel phase
+                    strlcpy(_editLabel, "Accel Pwr", sizeof(_editLabel));
+                    strlcpy(_editUnit, "%", sizeof(_editUnit));
+                    _editValue = (float)_cfg->pwr_dout;
+                    _editMin = 0.0f; _editMax = 100.0f; _editStep = 1.0f;
+                    _editCallback = [](float v){ cfg.pwr_dout = (uint8_t)v; cfg.savePowerParams(); };
+                    _goTo(UIScreen::VALUE_ENTRY_DIALOG);
+                    break;
+                case 4: // Finish Temp (dFSP) — latch-off temperature (0=off)
+                    strlcpy(_editLabel, "Finish Temp", sizeof(_editLabel));
+                    strlcpy(_editUnit, _cfg->temp_unit, sizeof(_editUnit));
+                    _editValue = _cfg->pwr_dfsp;
+                    _editMin = 0.0f; _editMax = 200.0f; _editStep = 0.5f;
+                    _editCallback = [](float v){ cfg.pwr_dfsp = v; cfg.savePowerParams(); };
+                    _goTo(UIScreen::VALUE_ENTRY_DIALOG);
+                    break;
+                case 5: // Watchdog — MQTT timeout seconds (0=off)
+                    strlcpy(_editLabel, "Watchdog", sizeof(_editLabel));
+                    strlcpy(_editUnit, " s", sizeof(_editUnit));
+                    _editValue = (float)_cfg->pwr_wdog_s;
+                    _editMin = 0.0f; _editMax = 3600.0f; _editStep = 1.0f;
+                    _editCallback = [](float v){ cfg.pwr_wdog_s = (uint32_t)v; cfg.savePowerParams(); };
+                    _goTo(UIScreen::VALUE_ENTRY_DIALOG);
+                    break;
+                case 6: // Watchdog Safe — power % held when watchdog fires
+                    strlcpy(_editLabel, "Watchdog Safe", sizeof(_editLabel));
+                    strlcpy(_editUnit, "%", sizeof(_editUnit));
+                    _editValue = (float)_cfg->pwr_wdog_safe;
+                    _editMin = 0.0f; _editMax = 100.0f; _editStep = 1.0f;
+                    _editCallback = [](float v){ cfg.pwr_wdog_safe = (uint8_t)v; cfg.savePowerParams(); };
+                    _goTo(UIScreen::VALUE_ENTRY_DIALOG);
+                    break;
+                case 7: // Timer Temp (dtSP) — temperature that arms the run timer (0=off)
+                    strlcpy(_editLabel, "Timer Temp", sizeof(_editLabel));
+                    strlcpy(_editUnit, _cfg->temp_unit, sizeof(_editUnit));
+                    _editValue = _cfg->pwr_dtsp;
+                    _editMin = 0.0f; _editMax = 200.0f; _editStep = 0.5f;
+                    _editCallback = [](float v){ cfg.pwr_dtsp = v; cfg.savePowerParams(); };
+                    _goTo(UIScreen::VALUE_ENTRY_DIALOG);
+                    break;
+                case 8: // Timer — run timer duration in seconds (0=off)
+                    strlcpy(_editLabel, "Timer", sizeof(_editLabel));
+                    strlcpy(_editUnit, " s", sizeof(_editUnit));
+                    _editValue = (float)_cfg->pwr_timer_s;
+                    _editMin = 0.0f; _editMax = 86400.0f; _editStep = 60.0f;
+                    _editCallback = [](float v){ cfg.pwr_timer_s = (uint32_t)v; cfg.savePowerParams(); };
+                    _goTo(UIScreen::VALUE_ENTRY_DIALOG);
+                    break;
+                case 9: { // On Expire — action when timer expires
+                    static const char* const opts[] = { "Continue", "Shutoff" };
+                    strlcpy(_listTitle, "On Expire", sizeof(_listTitle));
+                    _listOptions = opts; _listCount = 2;
+                    _listSel = _cfg->pwr_deo ? 1 : 0;
+                    _listCallback = [](int8_t i){ cfg.pwr_deo = (uint8_t)(i == 1 ? 1 : 0); cfg.savePowerParams(); };
+                    _goTo(UIScreen::LIST_SELECT_DIALOG);
+                    break;
+                }
+                case 10: // Ramp — soft-start ramp duration in seconds (0=instant)
+                    strlcpy(_editLabel, "Ramp", sizeof(_editLabel));
+                    strlcpy(_editUnit, " s", sizeof(_editUnit));
+                    _editValue = (float)_cfg->pwr_ramp_s;
+                    _editMin = 0.0f; _editMax = 3600.0f; _editStep = 1.0f;
+                    _editCallback = [](float v){ cfg.pwr_ramp_s = (uint32_t)v; cfg.savePowerParams(); };
+                    _goTo(UIScreen::VALUE_ENTRY_DIALOG);
+                    break;
+                case 11: _goTo(UIScreen::SETUP_MENU); break; // Exit
+            }
+            break;
         default: break;
     }
 }
