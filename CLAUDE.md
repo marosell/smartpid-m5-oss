@@ -8,79 +8,95 @@ asking questions.
 
 ## Project Purpose
 
-Open-source clean port of the SmartPID M5 PRO firmware targeting the **M5Stack Gray** hardware.
-Goal: behaviorally identical to OEM firmware v2.8.0 (embedded app version 0.2.3).
+Open-source clean firmware for the **M5Stack Gray** hardware, behaviorally identical to OEM
+firmware v2.8.0 (embedded app version 0.2.3).
 
-**Approach (as of 2026-05-24 strategic pivot):** Start from the Ghidra-decompiled OEM source at
-`research/smartpid_decompiled.c` as ground truth. Clean up naming and structure; do not invent
-logic. See PRIME DIRECTIVE below.
+**Approach (as of 2026-05-24 strategic pivot):** The decompiled OEM source IS the source.
+We are not copying from it — we are cleaning it up and using it directly. The workflow is:
+
+1. Take `research/smartpid_decompiled_v2.c` (Ghidra re-export, 8717 functions, properly typed)
+2. Rename `FUN_XXXXXXXX` → meaningful names in-place
+3. Rename `DAT_` / `PTR_` globals → typed named variables
+4. Resolve remaining `(code *)PTR_FUN_...` indirect calls to ESP-IDF function declarations
+5. Make it compile under PlatformIO targeting `m5stack-grey`
+6. Flash and validate — the behavior is OEM behavior because the code IS OEM code
+
+**No code is written from scratch.** No code is "copied" — it is cleaned up in-place.
+Every function in the final firmware traces directly to the decompile.
 
 **A from-scratch reimplementation was attempted and abandoned.** It is archived at git tag
-`archive/from-scratch-reimplementation` and branch `archive/reimplementation` for reference.
-Do not restore it as the active approach.
+`archive/from-scratch-reimplementation` and branch `archive/reimplementation`. Do not restore it.
 
-**Design constraint:** All hardware logic, control math, and protocol behavior must match the
-OEM implementation as closely as the language boundary allows. Safety-critical behavior (output
-limits, auto-resume, power-cycle recovery) must be identical. This is a port, not a redesign.
-
-**New features:** Deferred until the base firmware passes Phase 3 hardware bench validation.
+**New features:** Deferred until the cleaned-up decompile compiles and passes bench validation.
 
 ---
 
-## ⚠️ PRIME DIRECTIVE — DECOMPILE FIRST, REWRITE NEVER
+## ⚠️ PRIME DIRECTIVE — CLEAN THE DECOMPILE, NEVER REWRITE IT
 
-**Before writing any new function, calculation, UI element, control logic, or data structure,
-you MUST first search the decompiled OEM firmware for the equivalent implementation and copy
-it as closely as the language boundary allows.**
-
-The decompiled OEM firmware is at `/Users/Mike/Projects/M5/smartpid-m5-oss/research/smartpid_decompiled.c`
-(350,653 lines, 8MB). It is the ground truth for how this device is supposed to behave.
+The active source file is `research/smartpid_decompiled_v2.c`. This IS the firmware.
+**We clean it up. We do not rewrite it or replace pieces of it.**
 
 ### The rule
 
-> **If the OEM wrote it, we copy it. We do not invent our own version.**
+> **The decompile is the source. Cleaning is the only permitted change until it compiles.**
 
-This applies to:
-- Temperature conversion math (NTC beta equation, PT100 resistance-to-temp, K-type cold junction)
-- PID algorithm parameters, sample timing, output scaling
-- On/Off hysteresis dead-band logic, fridge delay behavior
-- Ramp/soak sequencer: stage transitions, event timing, SP interpolation
-- Any calibration offset math
-- Display layout: pixel coordinates, color values, font sizes, update regions
-- Menu navigation: state transitions, button debounce timing
-- Profile storage: exact field order, byte offsets, sentinel values, NVS key names
-- Auto-resume: exactly what state is saved, in what order, under what NVS keys
-- Event strings: exact text of every MQTT event published
-- Any numeric constants (timeouts, thresholds, defaults, ranges)
+Permitted changes to the decompile (in order — do not skip ahead):
+1. **Rename** `FUN_XXXXXXXX` → meaningful name (based on RE_FINDINGS.md or grep context)
+2. **Rename** `DAT_XXXXXXXX` / `PTR_FUN_XXXXXXXX` globals → typed named variables
+3. **Declare** ESP-IDF / ROM function prototypes to satisfy the compiler for indirect calls
+4. **Add headers** (`#include <esp_system.h>`, `<driver/i2c.h>`, etc.) as needed
+5. **Typedef** Ghidra struct types to match OEM layouts confirmed by Ghidra + bench
+6. **Split** into multiple `.c` / `.h` files for compilation unit manageability — **zero logic change**
 
-### How to use the decompile
+NOT permitted until the decompile compiles and validates on hardware:
+- Changing any algorithm, constant, or control flow
+- Adding MQTT topics, commands, or fields that aren't in the OEM firmware
+- Restructuring data types in ways that change binary layout
 
-The file is too large to read linearly. Use targeted search:
+### Working file
 
-```bash
-# Find a specific constant or string
-grep -n "3977\|NTC\|ntc_beta" /Users/Mike/Projects/M5/smartpid-m5-oss/research/smartpid_decompiled.c | head -40
-
-# Find a function near a known string
-grep -n "Hysteresis\|hyst\|dead.band" /Users/Mike/Projects/M5/smartpid-m5-oss/research/smartpid_decompiled.c | head -40
-# Then: Read the file at the found line numbers ±40 lines for context
-
-# Find display drawing calls
-grep -n "FUN_4010eb04\|FUN_400fb6d4" /Users/Mike/Projects/M5/smartpid-m5-oss/research/smartpid_decompiled.c | head -60
+```
+research/smartpid_decompiled_v2.c   ← THE source (322K lines, 8717 functions)
 ```
 
-Key Ghidra function signatures confirmed in RE_FINDINGS.md:
-- `FUN_4010eb04(display, string, x, y)` — drawString
-- `FUN_400fb6d4(x, y, w, h, color, fill)` — fillRect
-- `FUN_400febe8(title, options_array, num_options, current_val, flags)` — enum picker menu
-- `FUN_400fed48(label, min, max, current, flags)` — integer entry dialog
-- `FUN_400feee8(label, min, max, current, decimals, ...)` — float entry dialog
-- `FUN_400f7590(probe_type)` — returns minimum temp range for probe type
-- `FUN_400f75dc(probe_type)` — returns maximum temp range for probe type
+Use targeted grep — do not read it linearly:
 
-String constants are readable via PTR_s_XXX labels in the decompile. Screen coordinates
-and color constants are passed as literal arguments to the draw functions and are fully
-extractable.
+```bash
+# Find a function by known string it uses
+grep -n "Hysteresis\|hyst\|dead.band" research/smartpid_decompiled_v2.c | head -20
+
+# Find all callers of a known function
+grep -n "FUN_400df2f0" research/smartpid_decompiled_v2.c
+
+# Find all global uses of a specific DAT_ address
+grep -n "DAT_400d0018" research/smartpid_decompiled_v2.c | head -30
+```
+
+Key functions confirmed in RE_FINDINGS.md (use `smartpid_decompiled_v2.c` line numbers):
+- `FUN_400df2f0` — PT100 2W resistance→°C (formula fully decoded)
+- `FUN_400df34c` — PT100 3W (with lead compensation)
+- `FUN_400fa1f0` — ADS1119 struct init (addr=0x40, I2C bus handle)
+- `FUN_400fa204` — ADS1119 raw counts → voltage
+- `FUN_400fa224` — ADS1119 single-byte command (START=0x08)
+- `FUN_400fa24c` — ADS1119 WREG (write config register)
+- `FUN_400fa2b4` — ADS1119 MUX channel select + START
+- `FUN_4010eb04` — drawString (display, string, x, y)
+- `FUN_400fb6d4` — fillRect (x, y, w, h, color, fill)
+- `FUN_400febe8` — enum picker menu
+- `FUN_400fed48` — integer entry dialog
+- `FUN_400feee8` — float entry dialog
+- `FUN_400f7590` — probe temp range min
+- `FUN_400f75dc` — probe temp range max
+
+### When writing from scratch IS permitted
+
+Only for code that has no equivalent in the decompile:
+1. The PlatformIO `platformio.ini` build configuration
+2. OTA / WiFi provisioning bootstrap (if the OEM used a different boot path)
+3. Any M5Stack Gray hardware abstraction that the OEM handled via a BLE puck or
+   other path not applicable to the wired-probe bench configuration
+
+In all such cases: **document why in a comment at the top of the function.**
 
 ### When the decompile is not sufficient
 
