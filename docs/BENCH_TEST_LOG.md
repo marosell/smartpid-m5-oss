@@ -5,16 +5,30 @@ Fill in results during hardware validation.
 
 ## Setup
 
-- Device: SmartPID M5 PRO, serial `040531000000E0`
-- Broker: local Mosquitto, credentials `proof/test123`
-- Monitoring: `mosquitto_sub -h localhost -u proof -P test123 -t 'smartpidM5/pro/+/#' -v`
+- Device: SmartPID M5 PRO, serial `000C3BA7C0E8FC`, MQTT ID `791402d5ac0fe1`
+- Broker: `10.0.1.203:1883`, credentials `proof/proof`
+- Monitoring: `mosquitto_sub -h 10.0.1.203 -u proof -P proof -t 'smartpidM5/pro/791402d5ac0fe1/#' -v`
 - Voltmeter: on DC OUT terminal / GND
+
+## MQTT command reference
+
+```bash
+# Stop
+mosquitto_pub -h 10.0.1.203 -u proof -P proof -t 'smartpidM5/pro/791402d5ac0fe1/commands' -m '{"stop":true}'
+
+# Start monitor
+mosquitto_pub -h 10.0.1.203 -u proof -P proof -t 'smartpidM5/pro/791402d5ac0fe1/commands' -m '{"start":"monitor"}'
+
+# Start power direct + set level
+mosquitto_pub -h 10.0.1.203 -u proof -P proof -t 'smartpidM5/pro/791402d5ac0fe1/commands' -m '{"start":"power"}'
+mosquitto_pub -h 10.0.1.203 -u proof -P proof -t 'smartpidM5/pro/791402d5ac0fe1/commands' -m '{"CH1 power":100}'
+```
 
 ## Acceptance criteria
 
 | Test | Description | Expected | Result |
 |---|---|---|---|
-| A1 | DC OUT at 0% | 0V constant | |
+| A1 | DC OUT at 0% | 0V constant | ✅ 0V |
 | A2 | DC OUT at 100% | ~4.82V constant | |
 | A3 | DC OUT at 50% | Cycling ~1750ms on / ~1750ms off | |
 | B1 | `{"CH2 maxpwm": 10}` in standard mode | ~10% duty cycle on DC OUT 2 | |

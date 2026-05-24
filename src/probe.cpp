@@ -1,14 +1,23 @@
 // probe.cpp — Temperature probe reader
 //
 // Implemented probe types:
-//   NTC  — ESP32 internal ADC + Steinhart-Hart Beta equation (working on bench)
+//   NTC     — ESP32 internal ADC + Steinhart-Hart Beta equation
 //   DS18B20 — OneWire via DallasTemperature library (BENCH-VERIFY GPIO pins)
+//   PT100_2W — ADS1119 at 0x40, AIN0-AIN1 (CH1) or AIN2-AIN3 (CH2), 2-wire Callendar-Van Dusen
+//   PT100_3W — ADS1119 at 0x40, same + AIN1-AIN2 lead compensation
+//   K_TYPE  — ADS1119 at 0x40 differential input; conversion is linear approximation
+//             (confirmed from decompile: uses same AIN pairs as PT100_2W)
 //
-// Placeholder (ADC fallback) probe types — pending carrier board inspection:
-//   PT100_2W, PT100_3W — I2C chip at 0x77 (chip identity TBD)
-//   K_TYPE            — SPI chip TBD
+// I2C bus identity (confirmed 2026-05-24 scan + OEM decompile analysis):
+//   0x40 = ADS1119 (TI 16-bit I2C ADC) — probe temperature measurement
+//   0x41 = GPIO expander (relay/output control) — NOT an ADS1119
 //
-// See probe.h for architecture notes, GPIO pin assignments, and verification steps.
+// AIN assignments (confirmed from OEM FUN_400fa2b4):
+//   CH1: AIN0 − AIN1  (differential)
+//   CH2: AIN2 − AIN3  (differential)
+//   3W compensation: AIN1 − AIN2
+//
+// See probe.h and ads1119.h for full architecture notes and GPIO pin assignments.
 
 #include "probe.h"
 #include <math.h>
@@ -22,6 +31,11 @@ void ProbeReader::begin() {
     analogSetAttenuation(ADC_11db);
     log_i("[PROBE] ADC init: 12-bit, 11dB (GPIO%d/GPIO%d)  NTC_BETA=%u",
           CH1_ADC_PIN, CH2_ADC_PIN, (unsigned)cfg.ntc_beta);
+
+    // ADS1119: initialise PT100 / K-Type ADC (I2C 0x40, via M5.In_I2C)
+    if (!ads1119.begin()) {
+        log_w("[PROBE] ADS1119 not found at 0x40 — PT100/K-Type probes unavailable");
+    }
 
     // DS18B20: initialise both 1-Wire buses and start first conversion.
     // We use non-blocking (setWaitForConversion=false) so the main loop
@@ -68,17 +82,43 @@ float ProbeReader::readTemp(int channel) {
         return _readDS18B20(channel);
     }
 
-    // PT100_2W, PT100_3W, K_TYPE: I2C/SPI chip at 0x77 — chip identity TBD.
-    // BENCH-VERIFY: Identify chip, write driver, wire here.
-    // Until then, fall back to NTC ADC path (reading will be incorrect
-    // for non-NTC probes, but it is non-zero and keeps the firmware runnable).
-    if (pt == ProbeType::PT100_2W || pt == ProbeType::PT100_3W ||
-        pt == ProbeType::K_TYPE) {
-        log_d("[PROBE] CH%d: PT100/K-Type driver pending (BENCH-VERIFY) — using NTC ADC fallback",
-              channel);
+    // PT100_2W: 2-wire RTD via ADS1119 differential (AIN0-AIN1 or AIN2-AIN3).
+    if (pt == ProbeType::PT100_2W) {
+        float tempC = ads1119.readTempC(channel);
+        if (isnan(tempC)) return PROBE_SENTINEL_VALUE;
+        float cal    = (channel == 1) ? cfg.ch1_probe_cal : cfg.ch2_probe_cal;
+        return _toDeviceUnit(tempC) + cal;
     }
 
-    // NTC (and fallback for unimplemented types)
+    // PT100_3W: 3-wire RTD with lead compensation via AIN1-AIN2 differential.
+    if (pt == ProbeType::PT100_3W) {
+        float tempC = ads1119.readTempC_3wire(channel);
+        if (isnan(tempC)) return PROBE_SENTINEL_VALUE;
+        float cal    = (channel == 1) ? cfg.ch1_probe_cal : cfg.ch2_probe_cal;
+        return _toDeviceUnit(tempC) + cal;
+    }
+
+    // K_TYPE: thermocouple via ADS1119 differential — same AIN pairs as PT100_2W.
+    // The OEM uses FUN_400df2f0 (a simpler linear curve without CVD linearization).
+    // We apply the same PT100 driver as a first approximation; K-type has a
+    // significantly different R-T curve and this WILL give wrong readings until a
+    // proper K-type conversion is implemented.  The sentinel path is preserved so
+    // an open thermocouple returns PROBE_SENTINEL_VALUE, not garbage.
+    // BENCH-VERIFY: confirm K-type signal path polarity and reference resistor.
+    if (pt == ProbeType::K_TYPE) {
+        log_d("[PROBE] CH%d: K-Type via ADS1119 (linear approx — calibration required)", channel);
+        int16_t raw = ads1119.readRaw(channel);
+        if (raw == INT16_MIN) return PROBE_SENTINEL_VALUE;
+        // K-type thermocouple: linear approx 0 mV = 0°C, Seebeck ~41 µV/°C
+        // ADS1119 at 1x gain and 2.048V internal ref: LSB = 2.048/32768 V = 62.5 µV
+        // Temp(°C) ≈ raw_µV / 41 µV/°C = (raw * 62.5) / 41
+        float tempC = ((float)raw * 62.5f) / 41.0f;
+        if (tempC < -200.0f || tempC > 1300.0f) return PROBE_SENTINEL_VALUE;
+        float cal = (channel == 1) ? cfg.ch1_probe_cal : cfg.ch2_probe_cal;
+        return _toDeviceUnit(tempC) + cal;
+    }
+
+    // NTC: ESP32 internal ADC
     return _readNtcAdc(channel);
 }
 

@@ -8,7 +8,7 @@ or data structure, search the decompile for the OEM equivalent and copy it.
 
 **Search workflow:**
 ```bash
-grep -n "<keyword>" /Users/Mike/Projects/M5/smartpid_decompiled.c | head -60
+grep -n "<keyword>" /Users/Mike/Projects/M5/smartpid-m5-oss/research/smartpid_decompiled.c | head -60
 # Then read ±40 lines around the most promising hit for context
 ```
 
@@ -165,9 +165,35 @@ Selectable list: 3380 / 3435 / 3630 / 3650 / 3950 / 3960 / 3977.
 Fixed as default in config.cpp.
 
 ### Probe type: PT100 3-Wire
-Both channels configured as **PT100 3-Wire** on bench unit. This correlates with
-the I2C device at 0x77 — almost certainly a MAX31865 or similar RTD interface chip.
-ProbeType enum added to config.h with all six OEM options.
+Both channels configured as **PT100 3-Wire** on bench unit.
+
+### I2C chip identities — confirmed 2026-05-24 (bench scan + decompile analysis)
+
+**0x40 = ADS1119 (TI 16-bit I2C delta-sigma ADC)**
+- Confirmed: `FUN_400fa1f0` initialises the probe struct with address byte = 0x40
+- AIN pin assignments confirmed from `FUN_400fa2b4` (config bytes 0x10/0x30/0x50):
+  - CH1 probe: **AIN0 − AIN1** differential (config bits[7:5] = 000 → 0x00)
+  - CH2 probe: **AIN2 − AIN3** differential (config bits[7:5] = 001 → 0x20)
+  - 3-wire lead comp: **AIN1 − AIN2** (config bits[7:5] = 010 → 0x40)
+- ADS1119 commands in use: WREG (0x40) to write config, START/SYNC (0x08), RDATA (0x10), RREG (0x20)
+- Reference resistor: **150 Ω** (constant 0x96 passed to `FUN_400df2f0`)
+- OEM probe type dispatch (`FUN_400f9d30` at address 0x400f9d30):
+  - type 1: DS18B20 (`FUN_400df3e4`)
+  - type 2: NTC via ADS1119 (`FUN_400df228`, uses `DAT_400d0018+0x15` = ntc_beta_index)
+  - type 3: K-Type (`FUN_400df2f0(adcVal, 150)` — linear, no cold junction)
+  - type 4: PT100 3-Wire (`FUN_400df34c(ch1_adc, ch2_adc, 150)` — two differential reads)
+  - type 5: PT100 2-Wire (`FUN_400df228 + FUN_400df558` — CVD linearization table)
+  - types 6+: BLE sensor modules (checked: `5 < probe_type`)
+
+**0x41 = I2C GPIO expander (relay/output control)**
+- Confirmed: `FUN_400fa378` and `FUN_400fa3c0` hardcode `beginTransmission(0x41)`
+- `FUN_400fa3fc`: read-modify-write of register 1 (individual relay bit control)
+- `FUN_400fa3a8`: writes 0x00 or 0xFF to register 3 (direction/bulk control at init)
+- Used by `FUN_400f9c78` to set output enable bits — this is relay/DCOUT control
+- Chip identity: likely PCA9534 / TCA9534 (register layout matches: reg1=output, reg3=config)
+  but not confirmed from markings. Our firmware drives relays via direct GPIO; no driver needed.
+
+**Driver implemented:** `src/ads1119.cpp` — PT100 2W/3W via IEC 60751 CVD, K-type linear approx.
 
 ### Complete UI structure (see docs/UI_SPEC.md)
 65 screenshots (IMG_2538–IMG_2618) document every OEM screen:

@@ -98,6 +98,7 @@ static int8_t      gProfileEditIdx = 0; // menu item index (0–23) being edited
 void DisplayManager::begin(Config& cfg, MQTTManager& mqtt) {
     _cfg  = &cfg;
     _mqtt = &mqtt;
+    M5.BtnB.setHoldThresh(700);   // 700ms hold on BtnB = back
 
     // Configure NTP for wall-clock display (non-blocking; falls back to --:--)
     configTime(0, 0, "pool.ntp.org", "time.nist.gov");
@@ -118,10 +119,46 @@ void DisplayManager::loop(ChannelState& ch1, ChannelState& ch2) {
     _ch1 = &ch1;
     _ch2 = &ch2;
 
-    // Poll buttons — dispatch each independently (multiple can fire at once)
-    if (M5.BtnA.wasPressed()) _dispatch(UIEvent::BTN_A);
-    if (M5.BtnB.wasPressed()) _dispatch(UIEvent::BTN_B);
-    if (M5.BtnC.wasPressed()) _dispatch(UIEvent::BTN_C);
+    // Poll buttons — dispatch each independently.
+    // BtnA (GPIO39) is an ADC input-only pin; wasPressed() can miss brief taps
+    // due to ADC noise on the M5Stack Basic/Gray. Use isPressed() with manual
+    // rising-edge detection instead — _prevBtnA persists between loop() calls.
+    // BtnB: wasClicked() fires on release of a short press; wasHold() fires
+    //       after 700ms — the two are mutually exclusive on the same press.
+    // BtnC: wasPressed() works reliably on GPIO37.
+    {
+        bool nowBtnA = M5.BtnA.isPressed();
+        if (nowBtnA && !_prevBtnA) { _dispatch(UIEvent::BTN_A); }
+        _prevBtnA = nowBtnA;
+    }
+    if (M5.BtnB.wasClicked()) { _dispatch(UIEvent::BTN_B); }
+    if (M5.BtnB.wasHold())    { _dispatch(UIEvent::BTN_BACK); }
+    if (M5.BtnC.wasPressed()) { _dispatch(UIEvent::BTN_C); }
+
+    // Hold-repeat with acceleration for all value entry/adjustment dialogs (BtnA=−, BtnC=+)
+    if (_screen == UIScreen::VALUE_ENTRY_DIALOG  ||
+        _screen == UIScreen::SET_MAXPOWER_DIALOG ||
+        _screen == UIScreen::SET_TIMER_DIALOG) {
+        unsigned long nowR = millis();
+        // 0=none, 1=BtnA(−), 2=BtnC(+)
+        uint8_t btn = M5.BtnA.isPressed() ? 1u : (M5.BtnC.isPressed() ? 2u : 0u);
+        if (btn != _holdRepeatBtn) {
+            _holdRepeatBtn   = btn;
+            _holdRepeatStart = nowR;
+            _holdRepeatNext  = nowR + 500ul;   // 500ms initial delay before repeat begins
+        } else if (btn != 0 && nowR >= _holdRepeatNext) {
+            unsigned long held = nowR - _holdRepeatStart;
+            unsigned long interval;
+            if      (held < 1500ul) interval = 200ul;  //  5/s — slow start
+            else if (held < 3000ul) interval = 100ul;  // 10/s
+            else if (held < 6000ul) interval = 50ul;   // 20/s
+            else                    interval = 20ul;   // 50/s — fast cruise
+            _holdRepeatNext = nowR + interval;
+            _dispatch(btn == 1u ? UIEvent::BTN_A : UIEvent::BTN_C);
+        }
+    } else {
+        _holdRepeatBtn = 0;   // reset when leaving value entry
+    }
 
     // 1-second tick
     unsigned long now = millis();
@@ -166,18 +203,116 @@ void DisplayManager::notifyMqttChanged() { _needsIconRedraw = true;  }
 // ────────────────────────────────────────────────────────────────────────────
 // _goTo() — transition to a new screen
 // ────────────────────────────────────────────────────────────────────────────
+UIScreen DisplayManager::_logicalParent() const {
+    switch (_screen) {
+        // Dialogs can be opened from any screen — use _prevScreen
+        case UIScreen::LIST_SELECT_DIALOG:
+        case UIScreen::VALUE_ENTRY_DIALOG:
+        case UIScreen::ERROR_SCREEN:
+            return _prevScreen;
+
+        // Running screens → main menu
+        case UIScreen::RUNNING_CH_DETAIL:
+        case UIScreen::RUNNING_GRAPH_CH1:
+        case UIScreen::RUNNING_GRAPH_CH2:
+        case UIScreen::RUNNING_DUAL_OVERVIEW:
+            return UIScreen::MAIN_MENU;
+
+        // Context + running dialogs → running detail
+        case UIScreen::CONTEXT_MENU:
+        case UIScreen::SET_TIMER_DIALOG:
+        case UIScreen::SET_MAXPOWER_DIALOG:
+            return UIScreen::RUNNING_CH_DETAIL;
+
+        // Setup sub-screens → setup menu
+        case UIScreen::SETUP_HW:
+        case UIScreen::SETUP_UNIT:
+        case UIScreen::SETUP_PROCESS:
+        case UIScreen::SETUP_POWER:
+        case UIScreen::SETUP_PROCESS_P:
+        case UIScreen::SETUP_CLOCK:
+        case UIScreen::SETUP_SOUND_ALARMS:
+        case UIScreen::SETUP_PID_AUTOTUNE:
+        case UIScreen::SETUP_PID_AUTOTUNE_RUN:
+            return UIScreen::SETUP_MENU;
+
+        // WiFi sub-screens → wifi menu
+        case UIScreen::WIFI_LOG_CONFIG:
+        case UIScreen::WIFI_STATUS:
+        case UIScreen::WIFI_MODE_SELECT:
+        case UIScreen::MQTT_BROKER_CONFIG:
+            return UIScreen::WIFI_LOGGING;
+
+        // Profile sub-screens → profile menu
+        case UIScreen::PROFILE_EDIT:
+            return UIScreen::PROFILE_MENU;
+
+        // Info sub-screens → info menu
+        case UIScreen::INFO_SINGLE_VALUE:
+            return UIScreen::INFO_MENU;
+
+        // Top-level menus → main menu
+        case UIScreen::SETUP_MENU:
+        case UIScreen::WIFI_LOGGING:
+        case UIScreen::PROFILE_MENU:
+        case UIScreen::INFO_MENU:
+            return UIScreen::MAIN_MENU;
+
+        // OTA in progress — no back
+        case UIScreen::OTA_PROGRESS:
+        case UIScreen::MAIN_MENU:
+        default:
+            return UIScreen::MAIN_MENU;
+    }
+}
+
+void DisplayManager::_navPush() {
+    if (_navDepth < NAV_STACK_DEPTH) {
+        _navStack[_navDepth].sel    = _menuSel;
+        _navStack[_navDepth].scroll = _menuScroll;
+        _navDepth++;
+    }
+}
+
 void DisplayManager::_goTo(UIScreen s) {
     _prevScreen  = _screen;
     _screen      = s;
     _menuSel     = 0;
     _menuScroll  = 0;
     _needsFullRedraw = true;
+    // Reset nav stack when explicitly navigating to a root screen
+    if (s == UIScreen::MAIN_MENU) _navDepth = 0;
 }
 
 // ────────────────────────────────────────────────────────────────────────────
 // _dispatch() — route UIEvent to the current screen's handler
 // ────────────────────────────────────────────────────────────────────────────
 void DisplayManager::_dispatch(UIEvent ev) {
+    // BTN_BACK (BtnB hold): navigate to logical parent, restoring saved position
+    if (ev == UIEvent::BTN_BACK) {
+        UIScreen parent = _logicalParent();
+        if (parent != _screen) {
+            log_i("[NAV] back %d → %d", (int)_screen, (int)parent);
+            bool isDialog = (_screen == UIScreen::VALUE_ENTRY_DIALOG ||
+                             _screen == UIScreen::LIST_SELECT_DIALOG  ||
+                             _screen == UIScreen::ERROR_SCREEN);
+            int8_t restoreSel = 0, restoreScroll = 0;
+            if (isDialog) {
+                // Dialogs save position in _savedMenuSel/_savedMenuScroll
+                restoreSel    = _savedMenuSel;
+                restoreScroll = _savedMenuScroll;
+            } else if (_navDepth > 0) {
+                _navDepth--;
+                restoreSel    = _navStack[_navDepth].sel;
+                restoreScroll = _navStack[_navDepth].scroll;
+            }
+            _goTo(parent);
+            _menuSel    = restoreSel;
+            _menuScroll = restoreScroll;
+        }
+        return;
+    }
+
     switch (_screen) {
         case UIScreen::MAIN_MENU:              _handleMainMenu(ev);        break;
         case UIScreen::RUNNING_CH_DETAIL:      _handleRunningChDetail(ev); break;
@@ -276,10 +411,15 @@ void DisplayManager::_drawScreen() {
 void DisplayManager::_drawHeader(const char* title) {
     M5.Display.fillRect(0, HDR_Y, DISP_W, HDR_H, COL_ACCENT);
     M5.Display.setTextColor(COL_BG, COL_ACCENT);
-    M5.Display.setTextSize(1);
-    M5.Display.setTextDatum(lgfx::top_left);
-    M5.Display.drawString(title, MARGIN_L + 1, HDR_Y + 4);
+    M5.Display.setTextSize(2);
+    M5.Display.setTextDatum(lgfx::middle_left);
+    M5.Display.drawString(title, MARGIN_L + 1, HDR_Y + HDR_H / 2);
     _drawStatusIcons();
+}
+
+// _drawNavFooter — standard footer for all navigable menu/list screens.
+void DisplayManager::_drawNavFooter() {
+    _drawFooter("\x1e Up", "Sel/Back", "Down \x1f");
 }
 
 // _drawFooter — fills the 20px COL_ACCENT footer bar and draws button labels.
@@ -287,7 +427,7 @@ void DisplayManager::_drawHeader(const char* title) {
 void DisplayManager::_drawFooter(const char* lblA, const char* lblB, const char* lblC) {
     M5.Display.fillRect(0, FTR_Y, DISP_W, FTR_H, COL_ACCENT);
     M5.Display.setTextColor(COL_BG, COL_ACCENT);
-    M5.Display.setTextSize(1);
+    M5.Display.setTextSize(2);
 
     // Left label (BtnA zone, ~x=5 to x=106)
     M5.Display.setTextDatum(lgfx::middle_left);
@@ -362,7 +502,7 @@ void DisplayManager::_drawMenuList(const char* const items[], const char* const 
 
         // Label
         M5.Display.setTextDatum(lgfx::middle_left);
-        M5.Display.setTextSize(1);
+        M5.Display.setTextSize(2);
         M5.Display.setTextColor(isSelected ? COL_ACCENT : COL_TEXT, COL_BG);
         M5.Display.drawString(items[idx], MARGIN_L + 6, y + (itemH - 2) / 2);
 
@@ -471,7 +611,7 @@ void DisplayManager::_drawTogglePill(int x, int y, int w, int h, bool on) {
 
 void DisplayManager::_drawMainMenu() {
     _drawHeader("SmartPID");
-    _drawFooter("\x1e up", "select", "down \x1f");
+    _drawNavFooter();
     _drawMenuList(kMainMenuItems, nullptr, kMainMenuCount, _menuSel, _menuScroll);
 }
 
@@ -481,16 +621,22 @@ void DisplayManager::_handleMainMenu(UIEvent ev) {
             if (_menuSel > 0) {
                 _menuSel--;
                 if (_menuSel < _menuScroll) _menuScroll = _menuSel;
-                _needsFullRedraw = true;
+            } else {
+                _menuSel   = kMainMenuCount - 1;
+                _menuScroll = (kMainMenuCount > MENU_ITEMS_VIS) ? kMainMenuCount - MENU_ITEMS_VIS : 0;
             }
+            _needsFullRedraw = true;
             break;
         case UIEvent::BTN_C:
             if (_menuSel < kMainMenuCount - 1) {
                 _menuSel++;
                 if (_menuSel >= _menuScroll + MENU_ITEMS_VIS)
                     _menuScroll = _menuSel - MENU_ITEMS_VIS + 1;
-                _needsFullRedraw = true;
+            } else {
+                _menuSel    = 0;
+                _menuScroll = 0;
             }
+            _needsFullRedraw = true;
             break;
         case UIEvent::BTN_B:
             switch (_menuSel) {
@@ -513,16 +659,16 @@ void DisplayManager::_handleMainMenu(UIEvent ev) {
                     _goTo(UIScreen::RUNNING_CH_DETAIL);
                     break;
                 case 3: // Setup
-                    _goTo(UIScreen::SETUP_MENU);
+                    _navPush(); _goTo(UIScreen::SETUP_MENU);
                     break;
                 case 4: // WiFi/Logging
-                    _goTo(UIScreen::WIFI_LOGGING);
+                    _navPush(); _goTo(UIScreen::WIFI_LOGGING);
                     break;
                 case 5: // Profile
-                    _goTo(UIScreen::PROFILE_MENU);
+                    _navPush(); _goTo(UIScreen::PROFILE_MENU);
                     break;
                 case 6: // Info
-                    _goTo(UIScreen::INFO_MENU);
+                    _navPush(); _goTo(UIScreen::INFO_MENU);
                     break;
             }
             break;
@@ -929,7 +1075,7 @@ void DisplayManager::_drawContextMenu() {
     // (we do a full fillScreen earlier in _drawScreen, so redraw running bg)
     // For simplicity, just draw the overlay on black background
     _drawHeader("Menu");
-    _drawFooter("\x1e up", "select", "back");
+    _drawNavFooter();
 
     // Overlay box: ~200px wide, centered, sized to fit items
     const int boxW = 200;
@@ -1005,7 +1151,7 @@ void DisplayManager::_handleContextMenu(UIEvent ev) {
 
 void DisplayManager::_drawSetTimerDialog() {
     _drawHeader("Set Timer");
-    _drawFooter("\x1e +", "OK", "- \x1f");
+    _drawFooter("- \x1f", "OK", "\x1e +");
 
     // Red border value box
     _drawRedBorderBox(20, 80, DISP_W - 40, 60);
@@ -1019,7 +1165,7 @@ void DisplayManager::_drawSetTimerDialog() {
 
 void DisplayManager::_drawSetMaxPowerDialog() {
     _drawHeader(_editLabel);
-    _drawFooter("\x1e +", "OK", "- \x1f");
+    _drawFooter("- \x1f", "OK", "\x1e +");
 
     _drawRedBorderBox(20, 80, DISP_W - 40, 60);
     char buf[12];
@@ -1033,8 +1179,16 @@ void DisplayManager::_drawSetMaxPowerDialog() {
 void DisplayManager::_handleSetTimer(UIEvent ev) {
     if (!_ch1 || !_ch2) return;
     switch (ev) {
-        case UIEvent::BTN_A: _editValue += 60.0f; _needsFullRedraw = true; break;
-        case UIEvent::BTN_C: if (_editValue >= 60.0f) { _editValue -= 60.0f; _needsFullRedraw = true; } break;
+        case UIEvent::BTN_A:   // − (left): subtract 60s with wrap
+            _editValue -= 60.0f;
+            if (_editValue < 0.0f) _editValue = 86340.0f;  // wrap to 23h 59m
+            _needsFullRedraw = true;
+            break;
+        case UIEvent::BTN_C:   // + (right): add 60s with wrap
+            _editValue += 60.0f;
+            if (_editValue > 86400.0f) _editValue = 0.0f;
+            _needsFullRedraw = true;
+            break;
         case UIEvent::BTN_B:
             _ch1->countdown = (uint32_t)_editValue;
             _ch2->countdown = (uint32_t)_editValue;
@@ -1046,12 +1200,14 @@ void DisplayManager::_handleSetTimer(UIEvent ev) {
 
 void DisplayManager::_handleSetMaxPower(UIEvent ev) {
     switch (ev) {
-        case UIEvent::BTN_A:
-            _editValue = constrain(_editValue + _editStep, _editMin, _editMax);
+        case UIEvent::BTN_A:   // − (left): decrement with wrap
+            _editValue -= _editStep;
+            if (_editValue < _editMin) _editValue = _editMax;
             _needsFullRedraw = true;
             break;
-        case UIEvent::BTN_C:
-            _editValue = constrain(_editValue - _editStep, _editMin, _editMax);
+        case UIEvent::BTN_C:   // + (right): increment with wrap
+            _editValue += _editStep;
+            if (_editValue > _editMax) _editValue = _editMin;
             _needsFullRedraw = true;
             break;
         case UIEvent::BTN_B:
@@ -1082,16 +1238,22 @@ void DisplayManager::_handleListSelect(UIEvent ev) {
             if (_listSel > 0) {
                 _listSel--;
                 if (_listSel < _menuScroll) _menuScroll = _listSel;
-                _needsFullRedraw = true;
+            } else {
+                _listSel    = _listCount - 1;
+                _menuScroll = (_listCount > MENU_ITEMS_VIS) ? _listCount - MENU_ITEMS_VIS : 0;
             }
+            _needsFullRedraw = true;
             break;
         case UIEvent::BTN_C:
             if (_listSel < _listCount - 1) {
                 _listSel++;
                 if (_listSel >= _menuScroll + MENU_ITEMS_VIS)
                     _menuScroll = _listSel - MENU_ITEMS_VIS + 1;
-                _needsFullRedraw = true;
+            } else {
+                _listSel    = 0;
+                _menuScroll = 0;
             }
+            _needsFullRedraw = true;
             break;
         case UIEvent::BTN_B: {
             if (_listCallback) _listCallback(_listSel);
@@ -1111,7 +1273,7 @@ void DisplayManager::_handleListSelect(UIEvent ev) {
 
 void DisplayManager::_drawValueEntryDialog() {
     _drawHeader(_editLabel);
-    _drawFooter("\x1e +", "OK", "- cancel");
+    _drawFooter("- \x1f", "OK", "\x1e +");
 
     _drawRedBorderBox(MARGIN_L, 80, DISP_W - MARGIN_L * 2, 70);
     char buf[20];
@@ -1124,25 +1286,18 @@ void DisplayManager::_drawValueEntryDialog() {
 
 void DisplayManager::_handleValueEntry(UIEvent ev) {
     switch (ev) {
-        case UIEvent::BTN_A:
-            _editValue = constrain(_editValue + _editStep, _editMin, _editMax);
+        case UIEvent::BTN_A:   // − (left button): decrement with wrap
+            _editValue -= _editStep;
+            if (_editValue < _editMin) _editValue = _editMax;
             _needsFullRedraw = true;
             break;
-        case UIEvent::BTN_C:
-            // BtnC: decrement OR cancel (cancel if already at min)
-            if (_editValue > _editMin) {
-                _editValue = constrain(_editValue - _editStep, _editMin, _editMax);
-                _needsFullRedraw = true;
-            } else {
-                // cancel — restore menu position
-                int8_t s = _savedMenuSel, sc = _savedMenuScroll;
-                _goTo(_prevScreen);
-                _menuSel = s; _menuScroll = sc;
-            }
+        case UIEvent::BTN_C:   // + (right button): increment with wrap
+            _editValue += _editStep;
+            if (_editValue > _editMax) _editValue = _editMin;
+            _needsFullRedraw = true;
             break;
-        case UIEvent::BTN_B: {
+        case UIEvent::BTN_B: { // OK: save and return (hold BtnB = cancel via BTN_BACK)
             if (_editCallback) _editCallback(_editValue);
-            // confirm — restore menu position
             int8_t s = _savedMenuSel, sc = _savedMenuScroll;
             _goTo(_prevScreen);
             _menuSel = s; _menuScroll = sc;
@@ -1158,7 +1313,7 @@ void DisplayManager::_handleValueEntry(UIEvent ev) {
 
 void DisplayManager::_drawInfoMenu() {
     _drawHeader("Info");
-    _drawFooter("\x1e up", "select", "back");
+    _drawNavFooter();
     _drawMenuList(kInfoMenuItems, nullptr, kInfoMenuCount, _menuSel, _menuScroll);
 }
 
@@ -1183,11 +1338,20 @@ void DisplayManager::_handleInfoSingle(UIEvent ev) {
     if (_screen == UIScreen::INFO_MENU) {
         switch (ev) {
             case UIEvent::BTN_A:
-                if (_menuSel > 0) { _menuSel--; _needsFullRedraw = true; }
+                if (_menuSel > 0) {
+                    _menuSel--;
+                } else {
+                    _menuSel = kInfoMenuCount - 1;
+                }
+                _needsFullRedraw = true;
                 break;
             case UIEvent::BTN_C:
-                if (_menuSel < kInfoMenuCount - 1) { _menuSel++; _needsFullRedraw = true; }
-                else _goTo(UIScreen::MAIN_MENU);
+                if (_menuSel < kInfoMenuCount - 1) {
+                    _menuSel++;
+                } else {
+                    _menuSel = 0;
+                }
+                _needsFullRedraw = true;
                 break;
             case UIEvent::BTN_B: {
                 // Populate info value and go to single-value screen
@@ -1206,9 +1370,9 @@ void DisplayManager::_handleInfoSingle(UIEvent ev) {
                         else strlcpy(_errorMsg, "N/A", sizeof(_errorMsg));
                         break;
                     case 5: strlcpy(_errorMsg, (_mqtt && _mqtt->connected()) ? "OK" : "FAIL", sizeof(_errorMsg)); break;
-                    case 6: _goTo(UIScreen::MAIN_MENU); return;
+                    case 6: _goTo(UIScreen::MAIN_MENU); return;  // Exit — resets stack
                 }
-                _goTo(UIScreen::INFO_SINGLE_VALUE);
+                _navPush(); _goTo(UIScreen::INFO_SINGLE_VALUE);
                 break;
             }
             default: break;
@@ -1445,7 +1609,7 @@ static const int kProcPCount = 12;
 void DisplayManager::_drawSetupHw() {
     if (_screen == UIScreen::SETUP_MENU) {
         _drawHeader("Setup");
-        _drawFooter("\x1e up", "select", "back \x1f");
+        _drawNavFooter();
         _drawMenuList(kSetupMenuItems, nullptr, kSetupMenuCount, _menuSel, _menuScroll);
         return;
     }
@@ -1453,7 +1617,7 @@ void DisplayManager::_drawSetupHw() {
     const Config& c = *_cfg;
 
     _drawHeader("Thermal Setup");
-    _drawFooter("\x1e up", "select", "back \x1f");
+    _drawNavFooter();
 
     char vbufs[kHwCount][16];
     const char* vals[kHwCount] = {};
@@ -1477,7 +1641,7 @@ void DisplayManager::_drawSetupUnit() {
     const Config& c = *_cfg;
 
     _drawHeader("Unit Parameters");
-    _drawFooter("\x1e up", "select", "back \x1f");
+    _drawNavFooter();
 
     char vbufs[kUnitCount][16];
     const char* vals[kUnitCount] = {};
@@ -1501,7 +1665,7 @@ void DisplayManager::_drawSetupProcess() {
     const Config& c = *_cfg;
 
     _drawHeader("Process Parameters");
-    _drawFooter("\x1e up", "select", "back \x1f");
+    _drawNavFooter();
 
     char vbufs[kProcCount][16];
     const char* vals[kProcCount] = {};
@@ -1565,18 +1729,22 @@ void DisplayManager::_handleSetupHw(UIEvent ev) {
             if (_menuSel > 0) {
                 _menuSel--;
                 if (_menuSel < _menuScroll) _menuScroll = _menuSel;
-                _needsFullRedraw = true;
+            } else {
+                _menuSel    = count - 1;
+                _menuScroll = (count > MENU_ITEMS_VIS) ? count - MENU_ITEMS_VIS : 0;
             }
+            _needsFullRedraw = true;
             break;
         case UIEvent::BTN_C:
             if (_menuSel < count - 1) {
                 _menuSel++;
                 if (_menuSel >= _menuScroll + MENU_ITEMS_VIS)
                     _menuScroll = _menuSel - MENU_ITEMS_VIS + 1;
-                _needsFullRedraw = true;
             } else {
-                _goTo(parent);
+                _menuSel    = 0;
+                _menuScroll = 0;
             }
+            _needsFullRedraw = true;
             break;
         case UIEvent::BTN_B: {
             _savedMenuSel    = _menuSel;
@@ -1584,13 +1752,13 @@ void DisplayManager::_handleSetupHw(UIEvent ev) {
 
             if (_screen == UIScreen::SETUP_MENU) {
                 switch (_menuSel) {
-                    case 0: _goTo(UIScreen::SETUP_HW);           break;  // Thermal Setup
-                    case 1: _goTo(UIScreen::SETUP_UNIT);         break;  // Unit Parameters
-                    case 2: _goTo(UIScreen::SETUP_PROCESS);      break;  // Process Params (T)
-                    case 3: _goTo(UIScreen::SETUP_POWER);        break;  // Power Setup
-                    case 4: _goTo(UIScreen::SETUP_PROCESS_P);    break;  // Process Params (P)
-                    case 5: _goTo(UIScreen::SETUP_PID_AUTOTUNE); break;  // PID Auto Tune
-                    case 6: _goTo(UIScreen::MAIN_MENU);          break;  // Exit
+                    case 0: _navPush(); _goTo(UIScreen::SETUP_HW);           break;  // Thermal Setup
+                    case 1: _navPush(); _goTo(UIScreen::SETUP_UNIT);         break;  // Unit Parameters
+                    case 2: _navPush(); _goTo(UIScreen::SETUP_PROCESS);      break;  // Process Params (T)
+                    case 3: _navPush(); _goTo(UIScreen::SETUP_POWER);        break;  // Power Setup
+                    case 4: _navPush(); _goTo(UIScreen::SETUP_PROCESS_P);    break;  // Process Params (P)
+                    case 5: _navPush(); _goTo(UIScreen::SETUP_PID_AUTOTUNE); break;  // PID Auto Tune
+                    case 6: _goTo(UIScreen::MAIN_MENU);                       break;  // Exit — resets stack
                 }
             } else if (_screen == UIScreen::SETUP_HW && _cfg) {
                 switch (_menuSel) {
@@ -1672,7 +1840,7 @@ void DisplayManager::_handleSetupHw(UIEvent ev) {
                     }
                     case 1: { // Status — show WiFi SSID, IP, RSSI
                         // Reuse INFO_SINGLE_VALUE as a 4-line status screen
-                        _goTo(UIScreen::WIFI_STATUS);
+                        _navPush(); _goTo(UIScreen::WIFI_STATUS);
                         break;
                     }
                     case 2: { // WiFi Mode — Off/Client/AP/Auto
@@ -1690,10 +1858,10 @@ void DisplayManager::_handleSetupHw(UIEvent ev) {
                     }
                     case 3: // SSID — show current; editable only via captive portal
                     case 4: // Password — show as "****" for security
-                        _goTo(UIScreen::WIFI_STATUS);
+                        _navPush(); _goTo(UIScreen::WIFI_STATUS);
                         break;
-                    case 5: _goTo(UIScreen::MQTT_BROKER_CONFIG); break;
-                    case 6: _goTo(UIScreen::MAIN_MENU);          break;
+                    case 5: _navPush(); _goTo(UIScreen::MQTT_BROKER_CONFIG); break;
+                    case 6: _goTo(UIScreen::MAIN_MENU); break;  // Exit — resets stack
                     default: break;
                 }
             } else if (_screen == UIScreen::PROFILE_MENU) {
@@ -1711,7 +1879,7 @@ void DisplayManager::_handleSetupHw(UIEvent ev) {
                         } else {
                             gProfileSlot = (int8_t)firstExisting;
                             profiles.load((uint8_t)gProfileSlot, gProfileEdit);
-                            _goTo(UIScreen::PROFILE_EDIT);
+                            _navPush(); _goTo(UIScreen::PROFILE_EDIT);
                         }
                         break;
                     }
@@ -1726,7 +1894,7 @@ void DisplayManager::_handleSetupHw(UIEvent ev) {
                         } else {
                             gProfileSlot = (int8_t)firstEmpty;
                             gProfileEdit = {};  // blank profile
-                            _goTo(UIScreen::PROFILE_EDIT);
+                            _navPush(); _goTo(UIScreen::PROFILE_EDIT);
                         }
                         break;
                     }
@@ -1748,18 +1916,22 @@ void DisplayManager::_handleSetupUnit(UIEvent ev) {
             if (_menuSel > 0) {
                 _menuSel--;
                 if (_menuSel < _menuScroll) _menuScroll = _menuSel;
-                _needsFullRedraw = true;
+            } else {
+                _menuSel    = kUnitCount - 1;
+                _menuScroll = (kUnitCount > MENU_ITEMS_VIS) ? kUnitCount - MENU_ITEMS_VIS : 0;
             }
+            _needsFullRedraw = true;
             break;
         case UIEvent::BTN_C:
             if (_menuSel < kUnitCount - 1) {
                 _menuSel++;
                 if (_menuSel >= _menuScroll + MENU_ITEMS_VIS)
                     _menuScroll = _menuSel - MENU_ITEMS_VIS + 1;
-                _needsFullRedraw = true;
             } else {
-                _goTo(UIScreen::SETUP_MENU);
+                _menuSel    = 0;
+                _menuScroll = 0;
             }
+            _needsFullRedraw = true;
             break;
         case UIEvent::BTN_B:
             if (!_cfg) break;
@@ -1840,18 +2012,22 @@ void DisplayManager::_handleSetupProcess(UIEvent ev) {
             if (_menuSel > 0) {
                 _menuSel--;
                 if (_menuSel < _menuScroll) _menuScroll = _menuSel;
-                _needsFullRedraw = true;
+            } else {
+                _menuSel    = kProcCount - 1;
+                _menuScroll = (kProcCount > MENU_ITEMS_VIS) ? kProcCount - MENU_ITEMS_VIS : 0;
             }
+            _needsFullRedraw = true;
             break;
         case UIEvent::BTN_C:
             if (_menuSel < kProcCount - 1) {
                 _menuSel++;
                 if (_menuSel >= _menuScroll + MENU_ITEMS_VIS)
                     _menuScroll = _menuSel - MENU_ITEMS_VIS + 1;
-                _needsFullRedraw = true;
             } else {
-                _goTo(UIScreen::SETUP_MENU);
+                _menuSel    = 0;
+                _menuScroll = 0;
             }
+            _needsFullRedraw = true;
             break;
         case UIEvent::BTN_B:
             if (!_cfg) break;
@@ -2009,7 +2185,7 @@ void DisplayManager::_drawSetupClock() {
 
 void DisplayManager::_drawWifiLogging() {
     _drawHeader("WiFi/Logging");
-    _drawFooter("\x1e up", "select", "back");
+    _drawNavFooter();
     _drawMenuList(kWifiMenuItems, nullptr, kWifiMenuCount, _menuSel, _menuScroll);
 }
 
@@ -2078,7 +2254,7 @@ void DisplayManager::_drawWifiStatus() {
 
 void DisplayManager::_drawProfileMenu() {
     _drawHeader("Ramp/Soak Profiles");
-    _drawFooter("\x1e up", "select", "back \x1f");
+    _drawNavFooter();
     // Show total saved profile count as a value on "View" and "Edit/Delete" rows
     char countBuf[6];
     snprintf(countBuf, sizeof(countBuf), "%d", profiles.count());
@@ -2096,7 +2272,7 @@ void DisplayManager::_drawProfileEdit() {
              gProfileSlot + 1,
              gProfileEdit.magic == PROFILE_MAGIC ? gProfileEdit.step_count : 0);
     _drawHeader(hdr);
-    _drawFooter("\x1e up", "edit", "down \x1f");
+    _drawNavFooter();
 
     // Build value column strings for all 24 items
     char vbufs[kProfileEditCount][16];
@@ -2134,20 +2310,22 @@ void DisplayManager::_handleProfileEdit(UIEvent ev) {
             if (_menuSel > 0) {
                 _menuSel--;
                 if (_menuSel < _menuScroll) _menuScroll = _menuSel;
-                _needsFullRedraw = true;
             } else {
-                _goTo(UIScreen::PROFILE_MENU);
+                _menuSel    = kProfileEditCount - 1;
+                _menuScroll = (kProfileEditCount > MENU_ITEMS_VIS) ? kProfileEditCount - MENU_ITEMS_VIS : 0;
             }
+            _needsFullRedraw = true;
             break;
         case UIEvent::BTN_C:
             if (_menuSel < kProfileEditCount - 1) {
                 _menuSel++;
                 if (_menuSel >= _menuScroll + MENU_ITEMS_VIS)
                     _menuScroll = _menuSel - MENU_ITEMS_VIS + 1;
-                _needsFullRedraw = true;
             } else {
-                _goTo(UIScreen::PROFILE_MENU);
+                _menuSel    = 0;
+                _menuScroll = 0;
             }
+            _needsFullRedraw = true;
             break;
         case UIEvent::BTN_B: {
             gProfileEditIdx  = _menuSel;
@@ -2219,7 +2397,7 @@ void DisplayManager::_drawSetupPower() {
     const Config& c = *_cfg;
 
     _drawHeader("Power Setup");
-    _drawFooter("\x1e up", "select", "back \x1f");
+    _drawNavFooter();
 
     char vbufs[kPwrSetupCount][16];
     const char* vals[kPwrSetupCount] = {};
@@ -2243,18 +2421,22 @@ void DisplayManager::_handleSetupPower(UIEvent ev) {
             if (_menuSel > 0) {
                 _menuSel--;
                 if (_menuSel < _menuScroll) _menuScroll = _menuSel;
-                _needsFullRedraw = true;
+            } else {
+                _menuSel    = kPwrSetupCount - 1;
+                _menuScroll = (kPwrSetupCount > MENU_ITEMS_VIS) ? kPwrSetupCount - MENU_ITEMS_VIS : 0;
             }
+            _needsFullRedraw = true;
             break;
         case UIEvent::BTN_C:
             if (_menuSel < kPwrSetupCount - 1) {
                 _menuSel++;
                 if (_menuSel >= _menuScroll + MENU_ITEMS_VIS)
                     _menuScroll = _menuSel - MENU_ITEMS_VIS + 1;
-                _needsFullRedraw = true;
             } else {
-                _goTo(UIScreen::SETUP_MENU);
+                _menuSel    = 0;
+                _menuScroll = 0;
             }
+            _needsFullRedraw = true;
             break;
         case UIEvent::BTN_B:
             if (!_cfg) break;
@@ -2330,7 +2512,7 @@ void DisplayManager::_drawSetupProcessP() {
     const Config& c = *_cfg;
 
     _drawHeader("Process Params (P)");
-    _drawFooter("\x1e up", "select", "back \x1f");
+    _drawNavFooter();
 
     char vbufs[kProcPCount][16];
     const char* vals[kProcPCount] = {};
@@ -2405,7 +2587,7 @@ void DisplayManager::_handleSetupProcessP(UIEvent ev) {
                     strlcpy(_editLabel, "Accel Temp", sizeof(_editLabel));
                     strlcpy(_editUnit, _cfg->temp_unit, sizeof(_editUnit));
                     _editValue = _cfg->pwr_dast;
-                    _editMin = 0.0f; _editMax = 200.0f; _editStep = 0.5f;
+                    _editMin = 0.0f; _editMax = 200.0f; _editStep = 1.0f;
                     _editCallback = [](float v){ cfg.pwr_dast = v; cfg.savePowerParams(); };
                     _goTo(UIScreen::VALUE_ENTRY_DIALOG);
                     break;
@@ -2421,7 +2603,7 @@ void DisplayManager::_handleSetupProcessP(UIEvent ev) {
                     strlcpy(_editLabel, "Finish Temp", sizeof(_editLabel));
                     strlcpy(_editUnit, _cfg->temp_unit, sizeof(_editUnit));
                     _editValue = _cfg->pwr_dfsp;
-                    _editMin = 0.0f; _editMax = 200.0f; _editStep = 0.5f;
+                    _editMin = 0.0f; _editMax = 200.0f; _editStep = 1.0f;
                     _editCallback = [](float v){ cfg.pwr_dfsp = v; cfg.savePowerParams(); };
                     _goTo(UIScreen::VALUE_ENTRY_DIALOG);
                     break;
@@ -2445,7 +2627,7 @@ void DisplayManager::_handleSetupProcessP(UIEvent ev) {
                     strlcpy(_editLabel, "Timer Temp", sizeof(_editLabel));
                     strlcpy(_editUnit, _cfg->temp_unit, sizeof(_editUnit));
                     _editValue = _cfg->pwr_dtsp;
-                    _editMin = 0.0f; _editMax = 200.0f; _editStep = 0.5f;
+                    _editMin = 0.0f; _editMax = 200.0f; _editStep = 1.0f;
                     _editCallback = [](float v){ cfg.pwr_dtsp = v; cfg.savePowerParams(); };
                     _goTo(UIScreen::VALUE_ENTRY_DIALOG);
                     break;

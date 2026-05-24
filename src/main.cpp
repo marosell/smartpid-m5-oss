@@ -151,6 +151,38 @@ void setup() {
     log_i("==============================");
     log_i("SmartPID M5 OSS — Phase 1 boot");
     log_i("==============================");
+    log_i("[BOARD] M5.getBoard() = %d  (1=M5Stack/Basic/Gray, 3=Core2)", (int)M5.getBoard());
+
+    // ── I2C bus scan ──────────────────────────────────────────────────────────
+    // One-time scan to enumerate every device on the I2C bus.
+    // Uses M5.In_I2C.scanID() — M5Unified's own I2C stack is already
+    // initialised by M5.begin() and owns the bus under ESP-IDF v5's new
+    // i2c-ng driver.  Arduino Wire cannot claim the same bus (bus 0), so
+    // Wire.begin() must NOT be called here.
+    // M5Stack Basic/Gray: SDA=GPIO21, SCL=GPIO22.
+    // Expected devices:
+    //   ADS1119 (PT100 ADC): 0x40–0x45 depending on ADDR pin strapping
+    //   MPU6886 / SH200Q (IMU, Gray only): 0x68 or 0x6C
+    //   IP5306 (power management): 0x75
+    {
+        log_i("[I2C] Scanning bus via M5.In_I2C (SDA=%d SCL=%d)...",
+              M5.In_I2C.getSDA(), M5.In_I2C.getSCL());
+        // scanID(bool*) fills a 120-element array: index = address (1–119)
+        bool present[120] = {};
+        M5.In_I2C.scanID(present);
+        int found = 0;
+        for (int addr = 1; addr < 120; addr++) {
+            if (present[addr]) {
+                log_i("[I2C]   found device at 0x%02X", (uint8_t)addr);
+                found++;
+            }
+        }
+        if (found == 0) {
+            log_w("[I2C] No devices found — check carrier board and SDA/SCL wiring");
+        } else {
+            log_i("[I2C] Scan complete: %d device(s)", found);
+        }
+    }
 
     // Load config from NVS ("smartpid" namespace)
     cfg.load();
@@ -399,6 +431,10 @@ static void setupWiFi() {
 
     log_i("Connecting to SSID: %s", ssid);
     WiFi.mode(WIFI_STA);
+    WiFi.setSleep(false);   // ESP32 modem sleep generates ~200µs pulses on GPIO39
+                             // (BtnA) that cause false/missed presses. Disabling
+                             // modem sleep eliminates this hardware interference.
+                             // See: github.com/m5stack/M5Stack/issues/52
     WiFi.begin(ssid, pass);
 
     // Wait up to 30 seconds for connection

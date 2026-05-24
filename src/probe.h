@@ -1,20 +1,31 @@
 #pragma once
 // probe.h — Temperature probe reader for SmartPID M5 OSS
 //
-// ARCHITECTURE NOTE (from Ghidra analysis of OEM v2.8.0):
-// The OEM firmware reads all probe temperatures via external BLE sensor modules.
-// The main ESP32 MCU has no direct ADC/SPI/OneWire probe interface — "Probe Type"
-// in the OEM UI selects the BLE sensor packet format, not a wired interface.
+// ARCHITECTURE NOTE (from Ghidra analysis of OEM v2.8.0 + bench measurements):
+// The OEM firmware supports BOTH BLE sensor pucks AND direct wired probes via
+// terminal blocks. "Probe Type" in the OEM UI selects the measurement approach.
 //
-// This reimplementation reads probes DIRECTLY (wired to terminal blocks), which
-// is a deliberate architectural choice for the bench/panel application:
-//   - DS18B20: OneWire on a GPIO (this file — implemented)
-//   - NTC:     ESP32 ADC via voltage divider — implemented below
-//   - PT100 2W/3W: Unknown I2C chip at 0x77 (chip identity TBD, pending bench
-//             inspection). Falls back to NTC ADC path until chip is identified.
-//             BENCH-VERIFY: inspect carrier board, identify chip, write driver.
-//   - K-Type: SPI MAX31855/6675 or similar. Falls back to NTC ADC until bench.
-//             BENCH-VERIFY: same as above.
+// This reimplementation reads probes DIRECTLY (wired to terminal blocks):
+//   - NTC:     ESP32 ADC (GPIO36/39) via voltage divider — implemented
+//   - DS18B20: OneWire on a GPIO — implemented (BENCH-VERIFY GPIO pins)
+//   - PT100 2W/3W, K-Type: ADS1119 (TI 16-bit I2C delta-sigma ADC) at 0x40 —
+//             IMPLEMENTED (ads1119.cpp).
+//
+// Confirmed from I2C scan (2026-05-24) + OEM decompile (FUN_400fa1f0):
+//   0x40 = ADS1119 (probe ADC)  — ADDR pin → GND
+//   0x41 = GPIO expander (relay/output control) — NOT an ADS1119
+//
+// AIN assignments (confirmed from OEM FUN_400fa2b4, config bytes 0x10/0x30/0x50):
+//   CH1 input → AIN0 − AIN1 differential
+//   CH2 input → AIN2 − AIN3 differential
+//   3-wire lead compensation → AIN1 − AIN2 differential
+//
+// Reference resistor: 150 Ω (0x96, from OEM FUN_400df2f0 constant).
+// See ads1119.h for full protocol, config register layout, and CVD math.
+//
+//   - K-Type: same AIN pairs as PT100_2W; OEM uses a simpler linear curve
+//             (FUN_400df2f0). This firmware applies a linear Seebeck approx.
+//             BENCH-VERIFY: confirm signal path polarity on carrier PCB.
 //
 // ADC GPIO pin mapping (NTC mode):
 //   CH1: GPIO 36 (ADC1_CH0 — input only)
@@ -38,6 +49,7 @@
 #include <OneWire.h>
 #include <DallasTemperature.h>
 #include "config.h"
+#include "ads1119.h"
 
 // ── ADC pins (NTC mode — input only) ──────────────────────────────────────────
 // Swap if readings appear on the wrong channel after bench confirmation.

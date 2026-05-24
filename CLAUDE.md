@@ -25,7 +25,7 @@ identical. This is a reimplementation, not a redesign.
 you MUST first search the decompiled OEM firmware for the equivalent implementation and copy
 it as closely as the language boundary allows.**
 
-The decompiled OEM firmware is at `/Users/Mike/Projects/M5/smartpid_decompiled.c`
+The decompiled OEM firmware is at `/Users/Mike/Projects/M5/smartpid-m5-oss/research/smartpid_decompiled.c`
 (350,653 lines, 8MB). It is the ground truth for how this device is supposed to behave.
 
 ### The rule
@@ -51,14 +51,14 @@ The file is too large to read linearly. Use targeted search:
 
 ```bash
 # Find a specific constant or string
-grep -n "3977\|NTC\|ntc_beta" /Users/Mike/Projects/M5/smartpid_decompiled.c | head -40
+grep -n "3977\|NTC\|ntc_beta" /Users/Mike/Projects/M5/smartpid-m5-oss/research/smartpid_decompiled.c | head -40
 
 # Find a function near a known string
-grep -n "Hysteresis\|hyst\|dead.band" /Users/Mike/Projects/M5/smartpid_decompiled.c | head -40
+grep -n "Hysteresis\|hyst\|dead.band" /Users/Mike/Projects/M5/smartpid-m5-oss/research/smartpid_decompiled.c | head -40
 # Then: Read the file at the found line numbers ±40 lines for context
 
 # Find display drawing calls
-grep -n "FUN_4010eb04\|FUN_400fb6d4" /Users/Mike/Projects/M5/smartpid_decompiled.c | head -60
+grep -n "FUN_4010eb04\|FUN_400fb6d4" /Users/Mike/Projects/M5/smartpid-m5-oss/research/smartpid_decompiled.c | head -60
 ```
 
 Key Ghidra function signatures confirmed in RE_FINDINGS.md:
@@ -131,7 +131,7 @@ Use `#include <M5Unified.h>` and `M5.Lcd` / `M5.BtnA.wasPressed()` for Phase 5.
 | `/Users/Mike/Projects/M5/serial-boot-log-2026-05-23.md` | OEM serial boot capture — boot behavior, MQTT idle-until-commanded behavior |
 | `/Users/Mike/Projects/Proof/docs/smartpid-mqtt-reference.md` | Complete MQTT topic/payload reference |
 | `/Users/Mike/Projects/Proof/docs/smartpid-bench-results.md` | Primary behavioral spec — every command confirmed against hardware |
-| `/Users/Mike/Projects/M5/smartpid_decompiled.c` | Ghidra decompile output (350K lines, 8MB) — use targeted grep, do not read linearly |
+| `/Users/Mike/Projects/M5/smartpid-m5-oss/research/smartpid_decompiled.c` | Ghidra decompile output (350K lines, 8MB) — use targeted grep, do not read linearly |
 
 ---
 
@@ -170,7 +170,7 @@ for ON/OFF control mode. See config.h comments.
 | Fridge delay unit | seconds | Stored as uint16 in `ch1_fridge_delay` / `ch2_fridge_delay`. Default = 0s. |
 | Default SP CH1 | 131.0°F (= 55°C) | |
 | Default SP CH2 | 104.0°F (= 40°C) | |
-| Probe type (bench unit) | PT100_3W (both channels) | I2C device at 0x77 serves PT100 interface |
+| Probe type (bench unit) | PT100_3W (both channels) | ADS1119 at 0x40; 4-input MUX serves both channels (confirmed 2026-05-24) |
 
 ### Profile binary format (confirmed from Ghidra decompile)
 
@@ -189,12 +189,30 @@ The OEM supports BOTH direct wired probes (primary) AND optional BLE external se
 This reimplementation reads probes directly (wired to terminal blocks), which is the intended
 panel/bench configuration:
 
-- NTC: ESP32 ADC (working, CH1 reads ~75°F ambient)
-- PT100 3-Wire: I2C device at 0x77 (chip identity TBD; likely MAX31865 or similar)
-- DS18B20: OneWire on probe GPIO terminal (not yet implemented)
-- K-Type: SPI MAX31855/MAX31865 (not yet implemented)
+**I2C bus identity — confirmed from bench scan + OEM decompile (2026-05-24):**
+- `0x40` = **ADS1119** (TI 16-bit I2C delta-sigma ADC) — probe temperature measurement
+  - ADDR pin → GND (confirmed from `FUN_400fa1f0`: struct addr field = 0x40)
+  - AIN assignments (confirmed from `FUN_400fa2b4`, config bytes 0x10/0x30/0x50):
+    - CH1: AIN0 − AIN1 (differential)
+    - CH2: AIN2 − AIN3 (differential)
+    - 3-wire lead comp: AIN1 − AIN2 (differential)
+  - Reference resistor: 150 Ω (constant 0x96 from OEM `FUN_400df2f0`)
+  - Driver: `src/ads1119.cpp` — **implemented**
+- `0x41` = **I2C GPIO expander** — relay/output control
+  - Hardcoded in OEM `FUN_400fa378`/`FUN_400fa3c0` (beginTransmission(0x41))
+  - Register 1: individual relay bit control (read-modify-write)
+  - Register 3: bulk direction/state (0x00=all outputs, 0xff=all inputs)
+  - Chip identity unknown (PCA9534/TCA9534 likely — our firmware does not use it)
 
-The I2C device at 0x77 is the PT100/K-type interface chip — NOT unused "future expandability."
+**Implemented probe types:**
+- NTC: ESP32 ADC GPIO36/39 — working
+- DS18B20: OneWire GPIO25/17 — implemented (BENCH-VERIFY GPIO pin assignments)
+- PT100 2W: ADS1119 AIN0-AIN1 (CH1) / AIN2-AIN3 (CH2) + IEC 60751 CVD — implemented
+- PT100 3W: same + AIN1-AIN2 lead compensation — implemented
+- K-Type: ADS1119 differential + linear Seebeck approx — implemented (rough; no cold junction)
+
+**OEM probe type enum** (at `DAT_400d0018` offsets +9/+10):
+- 0: OFF, 1: DS18B20, 2: NTC-via-ADS1119(?), 3: K-Type, 4: PT100-3W, 5: PT100-2W, 6-9: BLE
 
 ### Critical behavioral note from OEM serial monitor
 
@@ -218,7 +236,8 @@ smartpid-m5-oss/
     telemetry.h / .cpp    — dynamic telemetry + event publisher
     channel_state.h / .cpp— per-channel state machine (Runmode, ControlMode enums)
     output_control.h/.cpp — PID + On/Off hysteresis control, time-proportioning PWM
-    probe.h / .cpp        — temperature probe reading (NTC via ADC; PT100/DS18B20 pending)
+    probe.h / .cpp        — temperature probe reading (NTC, DS18B20, PT100, K-type all wired)
+    ads1119.h / .cpp      — TI ADS1119 I2C ADC driver (PT100 Callendar-Van Dusen + K-type)
     profiles.h / .cpp     — ramp/soak profile storage + sequencer (Phase 6 — NOT wired in)
     ota.h / .cpp          — ArduinoOTA endpoint (hostname: smartpid-m5)
     util/
@@ -296,12 +315,14 @@ See `docs/UI_SPEC.md` for full specification. Key implementation notes:
 
 **Value entry dialogs:** overlay box, red border around current value, BtnA=increment, BtnC=decrement, BtnB=confirm.
 
-### 4. Remaining probe types
+### 4. Remaining probe work
 
-Add to `probe.cpp` dispatch in `readTemp()`:
-- DS18B20: OneWire library on probe GPIO terminal
-- PT100 3-Wire: I2C device at 0x77 (identify chip, then driver)
-- K-Type: MAX31855 or MAX31865 via SPI
+All wired probe types are now implemented in `probe.cpp` + `ads1119.cpp`. Outstanding items:
+- **BENCH-VERIFY**: DS18B20 GPIO pin assignments (GPIO25/17 are guesses; use continuity meter)
+- **BENCH-VERIFY**: PT100 AIN polarity — flash with PT100 probe connected and log raw counts
+- **K-Type cold junction**: Current linear Seebeck approximation ignores cold junction temp;
+  a proper driver needs ambient temp from another channel and the K-type lookup table
+- **Ref resistor confirmation**: 150 Ω assumed from OEM constant 0x96; measure physical resistor
 
 ### 5. Auto-resume logic
 
@@ -524,7 +545,7 @@ Always verify `pio run` succeeds before committing. Do not commit with a broken 
 - Do NOT commit until `pio run` succeeds
 - Do NOT add `Co-Authored-By` trailers to commits
 - Do NOT save work under `/Users/Mike/Projects/Proof/` — all M5 firmware work stays in `/Users/Mike/Projects/M5/`
-- The Ghidra decompile at `/Users/Mike/Projects/M5/smartpid_decompiled.c` (350K lines, 8MB) is the source of truth for OEM implementation details. Use targeted `grep` — do not read it linearly.
+- The Ghidra decompile at `/Users/Mike/Projects/M5/smartpid-m5-oss/research/smartpid_decompiled.c` (350K lines, 8MB) is the source of truth for OEM implementation details. Use targeted `grep` — do not read it linearly.
 
 ---
 

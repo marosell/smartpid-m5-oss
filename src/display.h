@@ -134,8 +134,9 @@ enum class UIScreen : uint8_t {
 enum class UIEvent : uint8_t {
     NONE,
     BTN_A,          // BtnA pressed (up / increment)
-    BTN_B,          // BtnB pressed (select / confirm / next screen)
+    BTN_B,          // BtnB short click (select / confirm / next screen)
     BTN_C,          // BtnC pressed (down / decrement / menu / cancel)
+    BTN_BACK,       // BtnB held ≥700ms — back / cancel from any screen
     TICK_1S,        // 1-second timer — redraw countup timer, header clock
     DATA_UPDATE,    // New probe reading available — redraw temp/SP/PWM values
     MQTT_CHANGED,   // MQTT connect/disconnect — redraw status icon
@@ -223,8 +224,34 @@ private:
     int8_t   _savedMenuSel    = 0;
     int8_t   _savedMenuScroll = 0;
 
+    // Navigation stack — remembers scroll/sel when descending into sub-menus.
+    // Pushed before every _goTo() that goes deeper; popped on BTN_BACK.
+    // Max depth 6 covers: main→setup→unit→(dialog) with room to spare.
+    struct NavPos { int8_t sel; int8_t scroll; };
+    static const int NAV_STACK_DEPTH = 6;
+    NavPos  _navStack[NAV_STACK_DEPTH] = {};
+    int8_t  _navDepth = 0;
+
+    // Hold-repeat acceleration state — only active in VALUE_ENTRY_DIALOG.
+    // _holdRepeatBtn: 0=none, 1=BtnA(−), 2=BtnC(+)
+    uint8_t       _holdRepeatBtn   = 0;
+    unsigned long _holdRepeatStart = 0;
+    unsigned long _holdRepeatNext  = 0;
+
+    // BtnA edge-detection — GPIO39 can be glitchy in wasPressed() on the M5Stack
+    // Basic/Gray (ADC input-only pin; M5Unified's wasPressed() misses quick taps).
+    // isPressed() is stable, so we track the rising edge manually.
+    bool _prevBtnA = false;
+
     // ── Screen transition ─────────────────────────────────────────────────────
     void _goTo(UIScreen s);
+    // Push current _menuSel/_menuScroll onto the nav stack before _goTo().
+    void _navPush();
+
+    // Returns the logical parent screen for BTN_BACK navigation.
+    // Dialogs (LIST_SELECT, VALUE_ENTRY, ERROR) use _prevScreen since they can
+    // be opened from any parent. All other screens have a fixed hierarchy parent.
+    UIScreen _logicalParent() const;
 
     // ── Event dispatch ────────────────────────────────────────────────────────
     void _dispatch(UIEvent ev);
@@ -285,6 +312,10 @@ private:
     // drawFooter: fills COL_ACCENT bar, draws 3 button labels
     // Labels are short strings: BtnA label (left), BtnB (center), BtnC (right)
     void _drawFooter(const char* lblA, const char* lblB, const char* lblC);
+
+    // Standard footer for all navigable menu/list screens:
+    //   BtnA=Up  BtnB=Select (hold=Back)  BtnC=Down
+    void _drawNavFooter();
 
     // drawStatusIcons: WiFi + cloud icons in header at x≈270–315
     void _drawStatusIcons();
