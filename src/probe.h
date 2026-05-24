@@ -50,6 +50,7 @@
 #include <DallasTemperature.h>
 #include "config.h"
 #include "ads1119.h"
+#include "io_expander.h"
 
 // ── ADC pins (NTC mode — input only) ──────────────────────────────────────────
 // Swap if readings appear on the wrong channel after bench confirmation.

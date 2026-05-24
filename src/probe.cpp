@@ -37,6 +37,13 @@ void ProbeReader::begin() {
         log_w("[PROBE] ADS1119 not found at 0x40 — PT100/K-Type probes unavailable");
     }
 
+    // IO expander: configure probe excitation switching (I2C 0x41).
+    // Mirrors OEM FUN_400f9cc0 init sequence: configure output latch per
+    // probe type, then enable all pins as outputs (reg 3 = 0x00).
+    if (!ioExpander.begin()) {
+        log_w("[PROBE] IO expander not found at 0x41 — probe excitation switching unavailable");
+    }
+
     // DS18B20: initialise both 1-Wire buses and start first conversion.
     // We use non-blocking (setWaitForConversion=false) so the main loop
     // isn't stalled by the ~750ms DS18B20 conversion time.
