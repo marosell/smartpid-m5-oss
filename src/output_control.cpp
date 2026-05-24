@@ -1,23 +1,22 @@
-// output_control.cpp — Two-channel PID + output driver (Phase 3)
+// output_control.cpp — Two-channel output driver
 //
-// Behavioral spec: /Users/Mike/Projects/Proof/docs/smartpid-bench-results.md
+// Paths:
+//   STANDARD / ADVANCED: PID or On/Off hysteresis control
+//   POWER_DIRECT:        Fixed duty DC OUT + relay modes + acceleration phase
+//                        + finish latch + watchdog + soft-start ramp + reflux timer
 //
-// Physical behavior confirmed by bench tests:
-//   DC OUT 0%:   0V constant
-//   DC OUT 100%: 4.82V constant (internal AC-derived supply)
-//   DC OUT 50%:  cycling 0V ↔ 4.82V at 3500ms period
-//   maxpwm=30 with SP pinned: ON ~1050ms, OFF ~2450ms (30% × 3500ms)
-//   RL2 with maxpwm=100: relay energised, no clicking
-//   maxpwm=0 on energised relay: single click, relay off, silent
+// Bench-confirmed timing:
+//   DC OUT 50% at 3500ms → ON ~1750ms, OFF ~1750ms
+//   DC OUT 30% at 3500ms → ON ~1050ms, OFF ~2450ms ✓
+//   RL2 with maxpwm=100: relay energised (no clicking)
+//   maxpwm=0 on energised relay: single click, relay off
 
 #include "output_control.h"
 #include <Arduino.h>
 
 OutputController outputCtrl;
 
-// ── Constructor / Destructor ──────────────────────────────────────────────────
 OutputController::OutputController() {}
-
 OutputController::~OutputController() {
     delete _pid1;
     delete _pid2;
@@ -27,17 +26,13 @@ OutputController::~OutputController() {
 void OutputController::begin(Config& cfg) {
     _cfg = &cfg;
 
-    // Configure output GPIO pins
     const int pins[] = {GPIO_CH0_OUT, GPIO_CH1_OUT, GPIO_CH2_OUT, GPIO_CH3_OUT};
     for (int pin : pins) {
         pinMode(pin, OUTPUT);
-        digitalWrite(pin, LOW);   // all outputs OFF at boot
+        digitalWrite(pin, LOW);
     }
     log_i("[OUT] GPIO init: pins 12/13/26/16 → LOW");
 
-    // Allocate PID objects now that we have the config pointers.
-    // Arduino-PID-Library constructor: PID(input*, output*, setpoint*, Kp, Ki, Kd, direction)
-    // DIRECT = output increases when input is below setpoint (heating direction)
     delete _pid1;
     delete _pid2;
     _pid1 = new PID(&_ch1Input, &_ch1Output, &_ch1SetPoint,
@@ -45,11 +40,9 @@ void OutputController::begin(Config& cfg) {
     _pid2 = new PID(&_ch2Input, &_ch2Output, &_ch2SetPoint,
                     _cfg->ch2_kp, _cfg->ch2_ki, _cfg->ch2_kd, DIRECT);
 
-    // PID sample time is a separate parameter from the MQTT telemetry interval.
-    // OEM confirmed 1500ms via bench analysis (pid_sample_ms default = 1500).
     _pid1->SetSampleTime((int)_cfg->pid_sample_ms);
     _pid2->SetSampleTime((int)_cfg->pid_sample_ms);
-    _pid1->SetOutputLimits(0, 100);   // output is 0–100 (% demand)
+    _pid1->SetOutputLimits(0, 100);
     _pid2->SetOutputLimits(0, 100);
     _pid1->SetMode(AUTOMATIC);
     _pid2->SetMode(AUTOMATIC);
@@ -61,20 +54,27 @@ void OutputController::begin(Config& cfg) {
 }
 
 // ── update ────────────────────────────────────────────────────────────────────
-// Called every sample_s from main loop (after probe read).
-// Dispatches to PID or On/Off control path based on cfg.chN_control_algo.
+// Dispatch each channel to the appropriate control path.
 void OutputController::update(ChannelState& ch1, ChannelState& ch2) {
     ControlAlgo algo1 = (ControlAlgo)_cfg->ch1_control_algo;
     ControlAlgo algo2 = (ControlAlgo)_cfg->ch2_control_algo;
 
-    if (algo1 == ControlAlgo::ON_OFF) {
+    // CH1: DC OUT 1 (GPIO_DCOUT1) is the primary heating output.
+    //       RL1 (GPIO_RL1) is the cooling/relay output.
+    if (ch1.runmode == Runmode::POWER_DIRECT) {
+        _updatePowerDirect(1, ch1, GPIO_DCOUT1, GPIO_RL1, _pwm1);
+    } else if (algo1 == ControlAlgo::ON_OFF) {
         _updateOnOff(1, ch1, _onoff1, GPIO_DCOUT1, GPIO_RL1);
     } else {
         _updatePid(1, ch1, *_pid1, _ch1Input, _ch1SetPoint, _ch1Output,
                    _pwm1, GPIO_DCOUT1, GPIO_RL1);
     }
 
-    if (algo2 == ControlAlgo::ON_OFF) {
+    // CH2: RL2 (GPIO_RL2) is the heating/relay output.
+    //       DC OUT 2 (GPIO_DCOUT2) is used for POWER_DIRECT.
+    if (ch2.runmode == Runmode::POWER_DIRECT) {
+        _updatePowerDirect(2, ch2, GPIO_DCOUT2, GPIO_RL2, _pwm2);
+    } else if (algo2 == ControlAlgo::ON_OFF) {
         _updateOnOff(2, ch2, _onoff2, GPIO_RL2, GPIO_RL2);
     } else {
         _updatePid(2, ch2, *_pid2, _ch2Input, _ch2SetPoint, _ch2Output,
@@ -82,23 +82,208 @@ void OutputController::update(ChannelState& ch1, ChannelState& ch2) {
     }
 }
 
+// ── _updatePowerDirect ────────────────────────────────────────────────────────
+// POWER_DIRECT control path.
+//
+// Priority order (highest to lowest):
+//   1. Probe sentinel      → force all off (safety)
+//   2. Finish latch (dFSP) → outputs latched off; set pulse flag for event
+//   3. Not running/paused  → all off
+//   4. Watchdog fired      → DC OUT at watchdog_safe_pct, relay off
+//   5. Acceleration phase  → DC OUT at dOUT%, relay per relay_mode (ACC_SYNC)
+//   6. Normal run          → DC OUT at distill_power_pct (with ramp), relay per relay_mode
+//
+// Writes ch.power_pct to reflect actual current duty (post-ramp, post-accel).
+void OutputController::_updatePowerDirect(int chIdx, ChannelState& ch,
+                                           int dcOutPin, int relayPin,
+                                           PwmState& pwmState) {
+    // 1. Probe sentinel: force all off, do NOT set finish latch
+    if (ch.temp >= (PROBE_SENTINEL_VALUE / 2.0f)) {
+        pwmState.dutyCurrent = 0;
+        if (pwmState.pinHigh) {
+            digitalWrite(dcOutPin, LOW);
+            pwmState.pinHigh = false;
+        }
+        if (ch.relay_state) {
+            digitalWrite(relayPin, LOW);
+            ch.relay_state = false;
+        }
+        ch.power_pct = 0;
+        log_w("[OUT] CH%d PROBE DISCONNECTED (temp=%.0f) — outputs forced OFF",
+              chIdx, ch.temp);
+        return;
+    }
+
+    // 2. Finish latch: detect dFSP crossing and latch all outputs off
+    if (ch.dFSP > 0.0f && !ch.finishLatch && ch.temp >= ch.dFSP) {
+        ch.finishLatch      = true;
+        ch.finishLatchJustSet = true;   // pulse: CommandHandler.tick() will publish event
+        log_i("[OUT] CH%d dFSP crossed (%.1f ≥ %.1f) — finish latch set",
+              chIdx, ch.temp, ch.dFSP);
+    }
+    if (ch.finishLatch) {
+        pwmState.dutyCurrent = 0;
+        digitalWrite(dcOutPin, LOW);
+        pwmState.pinHigh = false;
+        if (ch.relay_state) {
+            digitalWrite(relayPin, LOW);
+            ch.relay_state = false;
+        }
+        ch.power_pct = 0;
+        return;
+    }
+
+    // 3. Not running or paused: all off
+    if (!ch.isRunning() || ch.paused) {
+        pwmState.dutyCurrent = 0;
+        if (pwmState.pinHigh) {
+            digitalWrite(dcOutPin, LOW);
+            pwmState.pinHigh = false;
+        }
+        if (ch.relay_state) {
+            digitalWrite(relayPin, LOW);
+            ch.relay_state = false;
+        }
+        ch.power_pct = 0;
+        return;
+    }
+
+    // 4. MQTT watchdog fired: hold at safe power, relay off
+    if (ch.watchdogFired) {
+        uint8_t safePct = ch.watchdog_safe_pct;
+        pwmState.dutyCurrent = safePct;
+        if (safePct == 0 && pwmState.pinHigh) {
+            digitalWrite(dcOutPin, LOW);
+            pwmState.pinHigh = false;
+        }
+        if (ch.relay_state) {
+            digitalWrite(relayPin, LOW);
+            ch.relay_state = false;
+        }
+        ch.power_pct = safePct;
+        log_d("[OUT] CH%d watchdog safe: %u%%", chIdx, safePct);
+        return;
+    }
+
+    // 5 + 6. Compute target power considering acceleration phase
+    uint8_t targetPct;
+    if (ch.acc_mode && ch.accelPhaseActive) {
+        // Check if acceleration phase end threshold crossed
+        if (ch.dAST > 0.0f && ch.temp >= ch.dAST) {
+            // Atomic transition: accel phase ends, jump to distill power
+            ch.accelPhaseActive    = false;
+            ch.accelPhaseJustEnded = true;   // pulse: CommandHandler.tick() publishes event
+            ch.rampActive          = false;  // instant switch, no ramp
+            targetPct              = ch.distill_power_pct;
+            log_i("[OUT] CH%d accel phase end: temp=%.1f ≥ dAST=%.1f → %u%%",
+                  chIdx, ch.temp, ch.dAST, targetPct);
+        } else {
+            // Still in acceleration phase
+            targetPct = ch.dOUT;
+        }
+    } else {
+        targetPct = ch.distill_power_pct;
+    }
+
+    // Apply soft-start ramp if active
+    if (ch.rampActive) {
+        unsigned long elapsed = millis() - ch.rampStartMs;
+        unsigned long rampMs  = (unsigned long)ch.ramp_duration_s * 1000UL;
+        if (elapsed >= rampMs || rampMs == 0) {
+            ch.rampActive = false;
+            ch.power_pct  = targetPct;
+        } else {
+            // Linear ramp from 0 → targetPct
+            ch.power_pct = (uint8_t)((uint32_t)targetPct * elapsed / rampMs);
+        }
+    } else {
+        ch.power_pct = targetPct;
+    }
+
+    // Drive DC OUT at computed duty
+    pwmState.dutyCurrent = ch.power_pct;
+    if (ch.power_pct == 0 && pwmState.pinHigh) {
+        digitalWrite(dcOutPin, LOW);
+        pwmState.pinHigh = false;
+    }
+    // (non-zero duties are handled by pwmLoop())
+
+    // Drive relay according to relay_mode
+    _driveRelay(ch, relayPin);
+
+    log_d("[OUT] CH%d POWER: pct=%u%% (target=%u%% ramp=%s accel=%s) relay=%s",
+          chIdx, ch.power_pct, targetPct,
+          ch.rampActive ? "Y" : "N",
+          ch.accelPhaseActive ? "Y" : "N",
+          ch.relay_state ? "ON" : "OFF");
+}
+
+// ── _driveRelay ───────────────────────────────────────────────────────────────
+// Compute and drive relay output per ch.relay_mode.
+// Updates ch.relay_state to reflect the actual pin state.
+void OutputController::_driveRelay(ChannelState& ch, int relayPin) {
+    bool newState = false;
+
+    switch (ch.relay_mode) {
+        case RelayMode::OFF:
+            newState = false;
+            break;
+
+        case RelayMode::ACC_SYNC:
+            // ON during acceleration phase, OFF once dAST is crossed.
+            // One clean transition per run — set it and forget it.
+            newState = ch.accelPhaseActive;
+            break;
+
+        case RelayMode::REMOTE:
+            // ch.relay_state IS the commanded state — set by {"CHx relay": bool}.
+            // Just write it through without modification.
+            newState = ch.relay_state;
+            break;
+
+        case RelayMode::REFLUX_TIMER: {
+            // Cycle: ON for relay_on_ms, OFF for the rest of relay_cycle_ms.
+            // Use += to advance cycle start, avoiding cumulative loop() jitter.
+            unsigned long elapsed = millis() - ch.refluxCycleStartMs;
+            if (elapsed >= ch.relay_cycle_ms) {
+                // Advance cycle start by one full period (prevents drift)
+                ch.refluxCycleStartMs += ch.relay_cycle_ms;
+                elapsed -= ch.relay_cycle_ms;
+                // Guard: if elapsed is still >= cycle_ms (e.g. MCU was stalled),
+                // just reset to now to avoid rapid catch-up cycling.
+                if (elapsed >= ch.relay_cycle_ms) {
+                    ch.refluxCycleStartMs = millis();
+                    elapsed = 0;
+                }
+            }
+            newState = (elapsed < ch.relay_on_ms);
+            break;
+        }
+    }
+
+    // Only write the pin if state changed (reduce relay wear)
+    if (newState != ch.relay_state) {
+        digitalWrite(relayPin, newState ? HIGH : LOW);
+        ch.relay_state = newState;
+        log_d("[OUT] relay pin %d → %s (mode=%s)",
+              relayPin, newState ? "ON" : "OFF", relayModeStr(ch.relay_mode));
+    }
+}
+
 // ── _updatePid ────────────────────────────────────────────────────────────────
-// PID control path — renamed from _updateChannel.
 void OutputController::_updatePid(int chIdx, ChannelState& ch,
                                    PID& pid,
                                    double& input, double& sp, double& output,
                                    PwmState& pwmState,
                                    int heatingPin, int coolingPin) {
-    // Probe disconnected: force ALL outputs OFF immediately.
-    // PROBE_SENTINEL_VALUE (9170000) would make sp > temp = false → cooling relay ON.
-    // That is dangerous — we must detect and suppress output entirely.
     if (ch.temp >= (PROBE_SENTINEL_VALUE / 2.0f)) {
         _setHeatingOutput(chIdx, 0, heatingPin, pwmState, _isPwmChannel(chIdx));
         _setCoolingOutput(chIdx, false, coolingPin);
         ch.pwm  = 0;
         ch.mode = ControlMode::OFF;
-        log_w("[OUT] CH%d PROBE DISCONNECTED (temp=%.0f) — outputs forced OFF",
-              chIdx, ch.temp);
+        // Write relay state for telemetry
+        ch.relay_state = (chIdx == 1) ? _rl1CoolingState : _pwm2.pinHigh;
+        log_w("[OUT] CH%d PROBE DISCONNECTED — outputs forced OFF", chIdx);
         return;
     }
 
@@ -107,6 +292,7 @@ void OutputController::_updatePid(int chIdx, ChannelState& ch,
         _setCoolingOutput(chIdx, false, coolingPin);
         ch.pwm  = 0;
         ch.mode = ControlMode::OFF;
+        ch.relay_state = (chIdx == 1) ? _rl1CoolingState : _pwm2.pinHigh;
         return;
     }
 
@@ -115,6 +301,7 @@ void OutputController::_updatePid(int chIdx, ChannelState& ch,
         _setCoolingOutput(chIdx, false, coolingPin);
         ch.pwm  = 0;
         ch.mode = ControlMode::OFF;
+        ch.relay_state = (chIdx == 1) ? _rl1CoolingState : _pwm2.pinHigh;
         return;
     }
 
@@ -135,8 +322,8 @@ void OutputController::_updatePid(int chIdx, ChannelState& ch,
         _setCoolingOutput(chIdx, false, coolingPin);
         _setHeatingOutput(chIdx, effectivePct, heatingPin, pwmState, _isPwmChannel(chIdx));
 
-        log_d("[OUT] CH%d PID HEAT: sp=%.1f temp=%.1f pid=%d maxpwm=%d eff=%d",
-              chIdx, ch.sp, ch.temp, pidDemand, ch.maxpwm, effectivePct);
+        log_d("[OUT] CH%d PID HEAT: sp=%.1f temp=%.1f pid=%d eff=%d",
+              chIdx, ch.sp, ch.temp, pidDemand, effectivePct);
     } else {
         pid.SetControllerDirection(REVERSE);
         input  = (double)ch.temp;
@@ -154,30 +341,18 @@ void OutputController::_updatePid(int chIdx, ChannelState& ch,
         log_d("[OUT] CH%d PID COOL: sp=%.1f temp=%.1f relay=%s",
               chIdx, ch.sp, ch.temp, coolOn ? "ON" : "OFF");
     }
+
+    // Write relay state back to channel for telemetry
+    ch.relay_state = (chIdx == 1) ? _rl1CoolingState : _pwm2.pinHigh;
 }
 
 // ── _updateOnOff ──────────────────────────────────────────────────────────────
-// On/Off hysteresis control path.
-// Extracted from OEM decompile (FUN_400d37f4).
-//
-// Heating direction (sp > temp at start):
-//   Turn ON  when: temp <= (sp - hyst1)  AND fridge delay elapsed
-//   Turn OFF when: temp >= sp
-//
-// Cooling direction (sp < temp at start):
-//   Turn ON  when: temp >= (sp + hyst1)  AND fridge delay elapsed
-//   Turn OFF when: temp <= sp
-//
-// Fridge delay (ch.fridge_delay_s): minimum seconds the relay must remain OFF
-// after turning off, to protect compressors.
-// CONFIRMED: unit is SECONDS (not minutes) — default 0 (see RE_FINDINGS.md).
+// On/Off hysteresis control (OEM FUN_400d37f4).
 void OutputController::_updateOnOff(int chIdx, ChannelState& ch,
                                      OnOffState& oos,
                                      int heatingPin, int coolingPin) {
-    (void)coolingPin;   // On/Off uses single relay for both directions
+    (void)coolingPin;
 
-    // Probe disconnected: force relay OFF and record off-time.
-    // Same sentinel guard as _updatePid — prevents cooling relay activation on open probe.
     if (ch.temp >= (PROBE_SENTINEL_VALUE / 2.0f)) {
         if (oos.relayOn) {
             digitalWrite(heatingPin, LOW);
@@ -186,7 +361,8 @@ void OutputController::_updateOnOff(int chIdx, ChannelState& ch,
         }
         ch.pwm  = 0;
         ch.mode = ControlMode::OFF;
-        log_w("[OUT] CH%d PROBE DISCONNECTED (temp=%.0f) — relay forced OFF", chIdx, ch.temp);
+        ch.relay_state = oos.relayOn;
+        log_w("[OUT] CH%d PROBE DISCONNECTED — relay forced OFF", chIdx);
         return;
     }
 
@@ -195,88 +371,71 @@ void OutputController::_updateOnOff(int chIdx, ChannelState& ch,
             digitalWrite(heatingPin, LOW);
             oos.relayOn    = false;
             oos.relayOffMs = millis();
-            log_d("[OUT] CH%d ON/OFF: forced OFF (stopped/paused)", chIdx);
         }
         ch.pwm  = 0;
         ch.mode = ControlMode::OFF;
+        ch.relay_state = oos.relayOn;
         return;
     }
 
-    float hyst = (chIdx == 1) ? _cfg->ch1_hyst1 : _cfg->ch2_hyst1;
-    uint16_t fridgeDelaySec = (chIdx == 1) ? _cfg->ch1_fridge_delay
-                                            : _cfg->ch2_fridge_delay;
+    float    hyst          = (chIdx == 1) ? _cfg->ch1_hyst1 : _cfg->ch2_hyst1;
+    uint16_t fridgeDelaySec = (chIdx == 1) ? _cfg->ch1_fridge_delay : _cfg->ch2_fridge_delay;
 
     bool shouldHeat = (ch.sp > ch.temp);
     ch.mode = shouldHeat ? ControlMode::HEATING : ControlMode::COOLING;
 
-    // Fridge delay: milliseconds the relay must stay OFF
     unsigned long fridgeDelayMs = (unsigned long)fridgeDelaySec * 1000UL;
     bool fridgeOk = (fridgeDelayMs == 0) ||
                     ((millis() - oos.relayOffMs) >= fridgeDelayMs);
 
-    bool newRelayState = oos.relayOn;  // start from current state (hysteresis)
+    bool newRelayState = oos.relayOn;
 
     if (shouldHeat) {
-        // Heating: turn ON below (sp - hyst), turn OFF at or above sp
         if (!oos.relayOn) {
-            if (ch.temp <= (ch.sp - hyst) && fridgeOk && ch.maxpwm > 0) {
+            if (ch.temp <= (ch.sp - hyst) && fridgeOk && ch.maxpwm > 0)
                 newRelayState = true;
-            }
         } else {
-            if (ch.temp >= ch.sp || ch.maxpwm == 0) {
+            if (ch.temp >= ch.sp || ch.maxpwm == 0)
                 newRelayState = false;
-            }
         }
     } else {
-        // Cooling: turn ON above (sp + hyst), turn OFF at or below sp
         if (!oos.relayOn) {
-            if (ch.temp >= (ch.sp + hyst) && fridgeOk && ch.maxpwm > 0) {
+            if (ch.temp >= (ch.sp + hyst) && fridgeOk && ch.maxpwm > 0)
                 newRelayState = true;
-            }
         } else {
-            if (ch.temp <= ch.sp || ch.maxpwm == 0) {
+            if (ch.temp <= ch.sp || ch.maxpwm == 0)
                 newRelayState = false;
-            }
         }
     }
 
-    // Apply state change if needed
     if (newRelayState != oos.relayOn) {
         oos.relayOn = newRelayState;
-        if (!newRelayState) {
-            oos.relayOffMs = millis();
-        }
+        if (!newRelayState) oos.relayOffMs = millis();
         digitalWrite(heatingPin, newRelayState ? HIGH : LOW);
-        log_d("[OUT] CH%d ON/OFF %s: sp=%.1f temp=%.1f hyst=%.1f",
-              chIdx, newRelayState ? "ON" : "OFF", ch.sp, ch.temp, hyst);
+        log_d("[OUT] CH%d ON/OFF %s: sp=%.1f temp=%.1f",
+              chIdx, newRelayState ? "ON" : "OFF", ch.sp, ch.temp);
     }
 
     ch.pwm = oos.relayOn ? (uint8_t)min(100, (int)ch.maxpwm) : 0;
+    ch.relay_state = oos.relayOn;
 }
 
 // ── _isPwmChannel ─────────────────────────────────────────────────────────────
-// Returns true if this channel uses time-proportioning PWM (DC OUT),
-// false if it uses bang-bang relay control.
-// Current mapping: CH1=PWM (DC OUT 1), CH2=Relay (RL2)
 bool OutputController::_isPwmChannel(int chIdx) {
-    return (chIdx == 1);   // CH1 is DC OUT (PWM); CH2 is RL2 (relay)
+    return (chIdx == 1);   // CH1 = DC OUT 1 (PWM); CH2 = RL2 (relay)
 }
 
 // ── _setHeatingOutput ─────────────────────────────────────────────────────────
-// Set heating output: either time-proportioning PWM (DC OUT) or relay bang-bang.
 void OutputController::_setHeatingOutput(int chIdx, uint8_t effectivePct,
                                           int heatingPin, PwmState& pwmState,
                                           bool isPwm) {
     if (isPwm) {
-        // Time-proportioning: update duty for pwmLoop() to apply
         pwmState.dutyCurrent = effectivePct;
         if (effectivePct == 0) {
-            // Ensure pin goes LOW immediately (maxpwm=0 → instant off)
             digitalWrite(heatingPin, LOW);
             pwmState.pinHigh = false;
         }
     } else {
-        // Relay: simple ON/OFF — on when effectivePct > 0
         bool shouldBeOn = (effectivePct > 0);
         if (shouldBeOn != pwmState.pinHigh) {
             digitalWrite(heatingPin, shouldBeOn ? HIGH : LOW);
@@ -289,32 +448,24 @@ void OutputController::_setHeatingOutput(int chIdx, uint8_t effectivePct,
 
 // ── _setCoolingOutput ─────────────────────────────────────────────────────────
 void OutputController::_setCoolingOutput(int chIdx, bool active, int coolingPin) {
-    (void)chIdx;
+    if (chIdx == 1) _rl1CoolingState = active;  // track for relay_state telemetry
     digitalWrite(coolingPin, active ? HIGH : LOW);
 }
 
 // ── pwmLoop ───────────────────────────────────────────────────────────────────
-// Call as frequently as possible in main loop().
-// Drives the time-proportioning PWM for DC OUT channels (CH1 only in current setup).
-//
-// Time-proportioning: within each pwm_ms window,
-//   ON time  = dutyCurrent% × pwm_ms
-//   OFF time = (100 - dutyCurrent)% × pwm_ms
-//
-// Confirmed bench timing: 30% at 3500ms → ON ~1050ms, OFF ~2450ms ✓
+// Drives time-proportioning PWM for DC OUT channels.
+// Must be called every loop() iteration (not throttled).
 void OutputController::pwmLoop() {
     if (_cfg == nullptr) return;
-
     unsigned long pwmPeriodMs = _cfg->pwm_ms;
     unsigned long now = millis();
-
-    // CH1 time-proportioning PWM (DC OUT 1)
+    // DC OUT 1 (CH1 — PID heating or POWER_DIRECT)
     _drivePwm(GPIO_DCOUT1, _pwm1, pwmPeriodMs, now, 1);
-    // CH2 is relay-only in current config — pwmLoop has nothing to do for it
+    // DC OUT 2 (CH2 POWER_DIRECT only; otherwise relay-driven)
+    _drivePwm(GPIO_DCOUT2, _pwm2, pwmPeriodMs, now, 2);
 }
 
-// Helper: drive one time-proportioning PWM output
-// Defined inline here to avoid header bloat
+// ── _drivePwm ─────────────────────────────────────────────────────────────────
 void OutputController::_drivePwm(int pin, PwmState& state,
                                   unsigned long periodMs,
                                   unsigned long nowMs,
@@ -337,10 +488,8 @@ void OutputController::_drivePwm(int pin, PwmState& state,
         return;
     }
 
-    // Time within current PWM cycle
     unsigned long elapsed = nowMs - state.cycleStartMs;
     if (elapsed >= periodMs) {
-        // New cycle: start with pin HIGH (rising edge of ON phase)
         state.cycleStartMs = nowMs;
         elapsed = 0;
         state.pinHigh = true;

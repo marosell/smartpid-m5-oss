@@ -2,49 +2,61 @@
 // channel_state.h — Per-channel runtime state for SmartPID M5 OSS
 //
 // Each channel (CH1, CH2) is an independent state machine.
-// All MQTT SP/maxpwm commands are in-RAM only — they do NOT persist to NVS
-// (OEM behavior confirmed bench STEP 5: device reverts to stored default SP on
-// power cycle). Phase 4 adds explicit "save to NVS" commands.
+// MQTT parameter commands update RAM state.  Power params and run state
+// persist to NVS via Config::savePowerParams() / Config::saveRunState().
 
 #include <Arduino.h>
 
 // ── Runmode ────────────────────────────────────────────────────────────────────
 // Matches the OEM "runmode" field values published in dynamic telemetry.
+// POWER_DIRECT (4) is our extension: bypass PID entirely, drive DC OUT at an
+// explicit duty %, control relay independently.
 enum class Runmode : uint8_t {
-    IDLE     = 0,   // Boot state; no telemetry until start command
-    MONITOR  = 1,   // Temp reading only; outputs inactive
-    STANDARD = 2,   // PID control active
-    ADVANCED = 3,   // Ramp/soak profile execution (Phase 6)
+    IDLE         = 0,   // Boot state; no telemetry until start command
+    MONITOR      = 1,   // Temp reading only; outputs inactive
+    STANDARD     = 2,   // PID control active
+    ADVANCED     = 3,   // Ramp/soak profile execution (Phase 6)
+    POWER_DIRECT = 4,   // Direct power mode: fixed duty %, relay modes, acc phase
 };
 
 // ── ControlMode ───────────────────────────────────────────────────────────────
 // Matches the OEM "mode" field values published in dynamic telemetry.
-// HEATING: SP > current temp → output active to raise temp
-// COOLING: SP < current temp → relay active to lower temp (if cooling output configured)
-// OFF:     stopped or maxpwm == 0
 enum class ControlMode : uint8_t {
     OFF     = 0,
     HEATING = 1,
     COOLING = 2,
 };
 
+// ── RelayMode ─────────────────────────────────────────────────────────────────
+// Controls how the relay output behaves in POWER_DIRECT mode.
+enum class RelayMode : uint8_t {
+    OFF           = 0,  // Relay always off; no autonomous relay activity
+    ACC_SYNC      = 1,  // ON during accel phase, OFF when dAST threshold is crossed.
+                        // One clean transition per run; no chatter.  Used for
+                        // solenoid divert: route distillate back until heat-up done.
+    REMOTE        = 2,  // Relay driven directly by {"CHx relay": bool} command.
+                        // Proof decides cut timing; firmware just executes.
+    REFLUX_TIMER  = 3,  // Cycles ON/OFF at on_ms / cycle_ms ratio, independent of
+                        // temperature.  Used for reflux ratio control.
+};
+
+// ── String helpers ─────────────────────────────────────────────────────────────
 const char* runmodeStr(Runmode r);
 const char* controlModeStr(ControlMode m);
+const char* relayModeStr(RelayMode r);
 
 // ── ChannelState ──────────────────────────────────────────────────────────────
 struct ChannelState {
-    // ── Setpoint and limits ──────────────────────────────────────────────────
-    // sp and maxpwm are in-RAM; loaded from cfg defaults at boot but not written
-    // back on MQTT command (power-cycle reverts to stored default — OEM behavior).
+    // ── Setpoint and limits (STANDARD / ADVANCED) ───────────────────────────
     float    sp      = 131.0f;  // setpoint in device units (°F or °C)
     uint8_t  maxpwm  = 100;     // output ceiling 0–100 (%)
 
-    // ── Runtime state ────────────────────────────────────────────────────────
+    // ── Core runtime state ──────────────────────────────────────────────────
     Runmode     runmode  = Runmode::IDLE;
     ControlMode mode     = ControlMode::OFF;
     float       temp     = 0.0f;   // last measured temperature (or sentinel)
     uint8_t     pwm      = 0;      // last PID-computed output demand 0–100 (pre-ceiling)
-    uint32_t    countdown = 0;     // timer: seconds remaining (0 = disabled)
+    uint32_t    countdown = 0;     // OEM countdown: seconds remaining (0 = disabled)
     uint32_t    countup   = 0;     // elapsed seconds since start
 
     // ── Advanced mode (Phase 6) ──────────────────────────────────────────────
@@ -57,27 +69,109 @@ struct ChannelState {
     // ── Setpoint-reached tracking ─────────────────────────────────────────────
     bool spReachedFired = false;   // prevent duplicate "SP reached" events
 
+    // ══ POWER_DIRECT mode fields ═════════════════════════════════════════════
+
+    // ── DC OUT power ─────────────────────────────────────────────────────────
+    // power_pct: current actual duty % driven to DC OUT (reflects ramp, accel phase)
+    // distill_power_pct: target power after accel phase / at run-time
+    uint8_t  power_pct         = 0;    // current DC OUT duty (set by output_control)
+    uint8_t  distill_power_pct = 100;  // commanded target power %
+
+    // ── Relay state and mode ──────────────────────────────────────────────────
+    // relay_state: actual relay output state.
+    //   • In REMOTE mode this ALSO serves as the commanded state (set by {"CHx relay"}).
+    //   • In other modes it reflects what output_control computed.
+    RelayMode relay_mode  = RelayMode::OFF;
+    bool      relay_state = false;
+
+    // ── Acceleration phase ────────────────────────────────────────────────────
+    // acc_mode:         feature switch — explicitly toggled; dAST/dOUT saved even if off
+    // accelPhaseActive: true while device is running at dOUT% waiting for dAST threshold
+    // dAST:             temperature that ends acceleration phase (0 = phase never auto-ends)
+    // dOUT:             DC OUT duty % DURING acceleration phase
+    bool      acc_mode           = false;
+    bool      accelPhaseActive   = false;
+    float     dAST               = 0.0f;
+    uint8_t   dOUT               = 0;
+    bool      accelPhaseJustEnded = false;  // pulse: output_control sets, cmdHandler clears
+
+    // ── Latching finish temperature (dFSP / FF latch) ─────────────────────────
+    // When temp crosses dFSP: all outputs off and latched until {"reset": true}.
+    // 0.0f = feature disabled.
+    float     dFSP             = 0.0f;
+    bool      finishLatch      = false;
+    bool      finishLatchJustSet = false;   // pulse: output_control sets, cmdHandler clears
+
+    // ── MQTT watchdog ─────────────────────────────────────────────────────────
+    // If watchdog_s > 0 and no MQTT message received for watchdog_s seconds,
+    // DC OUT drops to watchdog_safe_pct (relay goes off).
+    // Recovers automatically when a new message arrives.
+    uint32_t  watchdog_s        = 0;     // timeout in seconds (0 = disabled)
+    uint8_t   watchdog_safe_pct = 0;     // power % when watchdog fires
+    uint32_t  lastMqttMsgMs     = 0;     // millis() of last MQTT message
+    bool      watchdogFired     = false; // currently in watchdog safe state
+
+    // ── Temperature-triggered timer (dtSP / dEO) ──────────────────────────────
+    // When temp crosses dtSP: arm a countdown of timer_duration_s seconds.
+    // On expiry: either "continue" (publish event) or "shutoff" (stop run).
+    // 0.0f dtSP or 0 timer_duration_s = feature disabled.
+    float     dtSP             = 0.0f;
+    uint32_t  timer_duration_s = 0;     // duration in seconds (0 = disabled)
+    uint8_t   timer_dir        = 0;     // 0=continue (event only), 1=shutoff
+    bool      timerTriggered   = false; // true once dtSP threshold was crossed
+    uint32_t  timerStartMs     = 0;     // millis() when timer was armed
+    bool      timerExpired     = false; // true once timer_duration_s elapsed
+
+    // ── Power ramp / soft start ────────────────────────────────────────────────
+    // On POWER_DIRECT start: if ramp_duration_s > 0, DC OUT ramps linearly from
+    // 0 to initial target over ramp_duration_s seconds.
+    // Ramp is cleared instantly when accel phase ends (transition to distill power).
+    uint32_t  ramp_duration_s  = 0;     // ramp time in seconds (0 = instant)
+    uint32_t  rampStartMs      = 0;     // millis() when ramp was started
+    bool      rampActive       = false; // currently ramping
+
+    // ── Reflux timer relay ────────────────────────────────────────────────────
+    // Only used when relay_mode == REFLUX_TIMER.
+    // Relay is ON for relay_on_ms out of every relay_cycle_ms ms.
+    uint32_t  relay_on_ms        = 1000;  // relay ON duration per cycle (ms)
+    uint32_t  relay_cycle_ms     = 5000;  // total cycle duration (ms)
+    uint32_t  refluxCycleStartMs = 0;     // millis() at cycle start
+
     // ── Helpers ──────────────────────────────────────────────────────────────
     bool isRunning() const {
-        return runmode == Runmode::STANDARD ||
-               runmode == Runmode::ADVANCED ||
-               runmode == Runmode::MONITOR;
+        return runmode == Runmode::STANDARD     ||
+               runmode == Runmode::ADVANCED     ||
+               runmode == Runmode::MONITOR      ||
+               runmode == Runmode::POWER_DIRECT;
     }
 
     // Called when stop command received or on boot init.
-    // countdown is explicitly cleared: a stale timer must not auto-expire
-    // on the next start and fire spurious "timer expired" events.
+    // Clears all transient state; preserves configuration fields
+    // (acc_mode, dAST, dOUT, dFSP, watchdog_*, dtSP, timer_*, ramp_*,
+    //  relay_mode, relay_on_ms, relay_cycle_ms) so the operator doesn't have
+    // to re-set them on every start.
     void stop() {
-        runmode        = Runmode::IDLE;
-        mode           = ControlMode::OFF;
-        pwm            = 0;
-        paused         = false;
-        countup        = 0;
-        countdown      = 0;
-        spReachedFired = false;
+        runmode              = Runmode::IDLE;
+        mode                 = ControlMode::OFF;
+        pwm                  = 0;
+        paused               = false;
+        countup              = 0;
+        countdown            = 0;
+        spReachedFired       = false;
+        // Power mode transient state
+        power_pct            = 0;
+        relay_state          = false;
+        accelPhaseActive     = false;
+        accelPhaseJustEnded  = false;
+        finishLatch          = false;
+        finishLatchJustSet   = false;
+        watchdogFired        = false;
+        timerTriggered       = false;
+        timerExpired         = false;
+        rampActive           = false;
     }
 
-    // Effective output demand after maxpwm ceiling: min(pwm, maxpwm)
+    // Effective PID output demand (standard mode only)
     uint8_t effectivePwm() const {
         return min((int)pwm, (int)maxpwm);
     }

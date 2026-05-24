@@ -111,6 +111,25 @@ void Config::load() {
     ch1_saved_paused  = prefs.getBool("ch1_paused",  false);
     ch2_saved_paused  = prefs.getBool("ch2_paused",  false);
 
+    // Power mode params (POWER_DIRECT)
+    pwr_acc_mode    = prefs.getBool("pwr_acc",       false);
+    pwr_dast        = prefs.getFloat("pwr_dast",     0.0f);
+    pwr_dout        = prefs.getUChar("pwr_dout",     0);
+    pwr_dfsp        = prefs.getFloat("pwr_dfsp",     0.0f);
+    pwr_wdog_s      = prefs.getUInt("pwr_wdog_s",    0);
+    pwr_wdog_safe   = prefs.getUChar("pwr_wdog_safe",0);
+    pwr_dtsp        = prefs.getFloat("pwr_dtsp",     0.0f);
+    pwr_timer_s     = prefs.getUInt("pwr_timer_s",   0);
+    pwr_deo         = prefs.getUChar("pwr_deo",      0);
+    pwr_ramp_s      = prefs.getUInt("pwr_ramp_s",    0);
+    pwr_distill_pct = prefs.getUChar("pwr_dist_pct", 100);
+    pwr_relay1_mode = prefs.getUChar("pwr_rl1_mode", 0);
+    pwr_relay2_mode = prefs.getUChar("pwr_rl2_mode", 0);
+    pwr_r1_on_ms    = prefs.getUInt("pwr_r1_on",     1000);
+    pwr_r1_cycle_ms = prefs.getUInt("pwr_r1_cyc",    5000);
+    pwr_r2_on_ms    = prefs.getUInt("pwr_r2_on",     1000);
+    pwr_r2_cycle_ms = prefs.getUInt("pwr_r2_cyc",    5000);
+
     prefs.end();
 }
 
@@ -177,6 +196,25 @@ void Config::save() {
     prefs.putBool("ch1_paused",    ch1_saved_paused);
     prefs.putBool("ch2_paused",    ch2_saved_paused);
 
+    // Power mode params
+    prefs.putBool("pwr_acc",       pwr_acc_mode);
+    prefs.putFloat("pwr_dast",     pwr_dast);
+    prefs.putUChar("pwr_dout",     pwr_dout);
+    prefs.putFloat("pwr_dfsp",     pwr_dfsp);
+    prefs.putUInt("pwr_wdog_s",    pwr_wdog_s);
+    prefs.putUChar("pwr_wdog_safe",pwr_wdog_safe);
+    prefs.putFloat("pwr_dtsp",     pwr_dtsp);
+    prefs.putUInt("pwr_timer_s",   pwr_timer_s);
+    prefs.putUChar("pwr_deo",      pwr_deo);
+    prefs.putUInt("pwr_ramp_s",    pwr_ramp_s);
+    prefs.putUChar("pwr_dist_pct", pwr_distill_pct);
+    prefs.putUChar("pwr_rl1_mode", pwr_relay1_mode);
+    prefs.putUChar("pwr_rl2_mode", pwr_relay2_mode);
+    prefs.putUInt("pwr_r1_on",     pwr_r1_on_ms);
+    prefs.putUInt("pwr_r1_cyc",    pwr_r1_cycle_ms);
+    prefs.putUInt("pwr_r2_on",     pwr_r2_on_ms);
+    prefs.putUInt("pwr_r2_cyc",    pwr_r2_cycle_ms);
+
     prefs.end();
 }
 
@@ -208,6 +246,32 @@ void Config::saveMqtt() {
     prefs.putUShort("mqtt_port", mqtt_port);
     prefs.putString("mqtt_user", mqtt_user);
     prefs.putString("mqtt_pass", mqtt_pass);
+    prefs.end();
+}
+
+// ── cfg.savePowerParams() ─────────────────────────────────────────────────────
+// Persist all power mode params.  Called after any {"CHx power/dAST/dOUT/…} command
+// so params survive a power cycle between Proof sending them and {"start":"power"}.
+void Config::savePowerParams() {
+    Preferences prefs;
+    prefs.begin(SMARTPID_NVS_NS, /*readOnly=*/false);
+    prefs.putBool("pwr_acc",       pwr_acc_mode);
+    prefs.putFloat("pwr_dast",     pwr_dast);
+    prefs.putUChar("pwr_dout",     pwr_dout);
+    prefs.putFloat("pwr_dfsp",     pwr_dfsp);
+    prefs.putUInt("pwr_wdog_s",    pwr_wdog_s);
+    prefs.putUChar("pwr_wdog_safe",pwr_wdog_safe);
+    prefs.putFloat("pwr_dtsp",     pwr_dtsp);
+    prefs.putUInt("pwr_timer_s",   pwr_timer_s);
+    prefs.putUChar("pwr_deo",      pwr_deo);
+    prefs.putUInt("pwr_ramp_s",    pwr_ramp_s);
+    prefs.putUChar("pwr_dist_pct", pwr_distill_pct);
+    prefs.putUChar("pwr_rl1_mode", pwr_relay1_mode);
+    prefs.putUChar("pwr_rl2_mode", pwr_relay2_mode);
+    prefs.putUInt("pwr_r1_on",     pwr_r1_on_ms);
+    prefs.putUInt("pwr_r1_cyc",    pwr_r1_cycle_ms);
+    prefs.putUInt("pwr_r2_on",     pwr_r2_on_ms);
+    prefs.putUInt("pwr_r2_cyc",    pwr_r2_cycle_ms);
     prefs.end();
 }
 

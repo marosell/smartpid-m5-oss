@@ -329,10 +329,31 @@ void loop() {
         gAutoResumeAtMs = 0;
         Runmode r1 = (Runmode)cfg.ch1_saved_runmode;
         Runmode r2 = (Runmode)cfg.ch2_saved_runmode;
+
         ch1.runmode = r1;
         ch2.runmode = r2;
         ch1.paused  = cfg.ch1_saved_paused;
         ch2.paused  = cfg.ch2_saved_paused;
+
+        // POWER_DIRECT auto-resume: load saved power params into channel state.
+        // Proof will re-send current params on reconnect, but we need sensible
+        // defaults immediately so the device runs safely until Proof arrives.
+        if (r1 == Runmode::POWER_DIRECT) {
+            // Use cmdHandler helper to apply config power params into ch1
+            cmdHandler._applyPowerParams(1);
+            ch1.finishLatch = false;  // don't resume into a latched state
+            log_i("[RESUME] CH1 POWER_DIRECT: dist=%u%% acc=%s watchdog=%us",
+                  ch1.distill_power_pct, ch1.acc_mode ? "on" : "off",
+                  (unsigned)ch1.watchdog_s);
+        }
+        if (r2 == Runmode::POWER_DIRECT) {
+            cmdHandler._applyPowerParams(2);
+            ch2.finishLatch = false;
+            log_i("[RESUME] CH2 POWER_DIRECT: dist=%u%% acc=%s watchdog=%us",
+                  ch2.distill_power_pct, ch2.acc_mode ? "on" : "off",
+                  (unsigned)ch2.watchdog_s);
+        }
+
         telemetry.publishEvent("resume");
         log_i("[RESUME] Applied: CH1=%s%s  CH2=%s%s",
               runmodeStr(r1), cfg.ch1_saved_paused ? " (paused)" : "",

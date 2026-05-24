@@ -2,20 +2,26 @@
 // command_handler.h — MQTT command parser and dispatcher
 //
 // Parses JSON from smartpidM5/pro/<id>/commands and dispatches to channel state.
-// All commands and behaviors per smartpid-bench-results.md and
-// smartpid-mqtt-reference.md.
+// All OEM commands documented in smartpid-bench-results.md / smartpid-mqtt-reference.md.
 //
-// Command semantics summary:
-//   start: "standard"/"monitor"/"advanced"  — start; ignored if already running
-//   stop: true                              — stop; false ignored
-//   pause: true                             — pause output, hold PID integrator
-//   resume: true                            — resume from paused
-//   CH1 SP / CH2 SP: float                 — in-RAM setpoint; no restart needed
-//   CH1 maxpwm / CH2 maxpwm: int 0–100     — output ceiling; immediate effect
-//   CH1 countdown / CH2 countdown: int      — timer seconds
-//   CH1 profile / CH2 profile: int 1–10    — profile slot for advanced mode
-//   status: true                            — re-publish retained status
-//   CH1 pwm / CH2 pwm: (any)               — SILENTLY IGNORED (read-only field)
+// New POWER_DIRECT commands (our extension):
+//   {"start": "power"}                      Start direct-power mode (both channels)
+//   {"CHx power": N}                        DC OUT duty % target (0–100)
+//   {"CHx acc_mode": bool}                  Enable/disable acceleration phase
+//   {"CHx relay_mode": "off"/"acc_sync"/"remote"/"reflux_timer"}
+//   {"CHx relay": bool}                     Relay command (REMOTE mode only)
+//   {"CHx dAST": N}                         Accel phase end threshold temp
+//   {"CHx dOUT": N}                         DC OUT % during accel phase (0–100)
+//   {"CHx dFSP": N}                         Finish latch temperature threshold
+//   {"reset": true}                         Clear finish latch on all channels
+//   {"CHx watchdog_s": N}                   MQTT watchdog timeout seconds (0=off)
+//   {"CHx watchdog_safe_pct": N}            Safe power % when watchdog fires (0–100)
+//   {"CHx dtSP": N}                         Temperature that arms the run timer
+//   {"CHx timer_s": N}                      Run timer duration in seconds
+//   {"CHx dEO": "continue"/"shutoff"}       Action on timer expiry
+//   {"CHx ramp_s": N}                       Soft-start ramp duration in seconds
+//   {"CHx on_ms": N}                        Relay ON time per reflux cycle (ms)
+//   {"CHx cycle_ms": N}                     Relay total cycle time (ms)
 
 #include <Arduino.h>
 #include "config.h"
@@ -29,12 +35,16 @@ public:
                ChannelState& ch1, ChannelState& ch2);
 
     // Parse and dispatch a JSON command payload.
-    // Called from the MQTT message callback.
     void handle(const uint8_t* payload, unsigned int len);
 
-    // Called from loop() to advance per-channel timers and check for
-    // setpoint-reached / timer-expired events.
+    // Called from loop() every second: advances timers, checks watchdog,
+    // fires events for threshold crossings, publishes "accel end" / "FF" pulses.
     void tick();
+
+    // Apply saved config power params into a channel state.
+    // Public so main.cpp can call it during auto-resume.
+    // chIdx is 1-based (1 = ch1, 2 = ch2).
+    void _applyPowerParams(int chIdx);
 
 private:
     Config*             _cfg  = nullptr;
@@ -42,10 +52,11 @@ private:
     TelemetryPublisher* _tele = nullptr;
     ChannelState*       _ch[2] = {nullptr, nullptr};  // [0]=CH1, [1]=CH2
 
-    // Returns pointer to channel by 1-based index (1 or 2), or nullptr.
-    ChannelState* _channel(int idx);
+    unsigned long _lastTickMs = 0;
 
-    // Command dispatch helpers
+    ChannelState* _channel(int idx);   // 1-based, returns nullptr on bad index
+
+    // ── OEM commands ──────────────────────────────────────────────────────────
     void _cmdStart(const char* mode, int ch1Profile, int ch2Profile);
     void _cmdStop();
     void _cmdPause();
@@ -54,8 +65,24 @@ private:
     void _cmdSetMaxpwm(int chIdx, int maxpwm);
     void _cmdSetCountdown(int chIdx, uint32_t seconds);
 
-    // Timer tick (called every second) — advances countup, decrements countdown
-    unsigned long _lastTickMs = 0;
+    // ── POWER_DIRECT commands ─────────────────────────────────────────────────
+    void _cmdStartPower();
+    void _cmdReset();                              // clear finish latch all channels
+    void _cmdSetPower(int chIdx, int pct);         // {"CHx power": N}
+    void _cmdSetAccMode(int chIdx, bool enabled);  // {"CHx acc_mode": bool}
+    void _cmdSetRelayMode(int chIdx, const char* modeStr);  // {"CHx relay_mode": ...}
+    void _cmdSetRelay(int chIdx, bool state);      // {"CHx relay": bool}
+    void _cmdSetDAST(int chIdx, float temp);       // {"CHx dAST": N}
+    void _cmdSetDOut(int chIdx, int pct);          // {"CHx dOUT": N}
+    void _cmdSetDFSP(int chIdx, float temp);       // {"CHx dFSP": N}
+    void _cmdSetWatchdog(int chIdx, int seconds);  // {"CHx watchdog_s": N}
+    void _cmdSetWatchdogSafe(int chIdx, int pct);  // {"CHx watchdog_safe_pct": N}
+    void _cmdSetDtSP(int chIdx, float temp);       // {"CHx dtSP": N}
+    void _cmdSetTimerDuration(int chIdx, int s);   // {"CHx timer_s": N}
+    void _cmdSetTimerDir(int chIdx, const char* dir);  // {"CHx dEO": "continue"/"shutoff"}
+    void _cmdSetRamp(int chIdx, int seconds);      // {"CHx ramp_s": N}
+    void _cmdSetRelayOnMs(int chIdx, int ms);      // {"CHx on_ms": N}
+    void _cmdSetRelayCycleMs(int chIdx, int ms);   // {"CHx cycle_ms": N}
 };
 
 extern CommandHandler cmdHandler;

@@ -33,9 +33,7 @@ void TelemetryPublisher::loop(const ChannelState& ch1, const ChannelState& ch2) 
     if (!timeToTick && !_forceTick) return;
 
     // KEY BEHAVIORAL NOTE: Idle state publishes NO telemetry.
-    // The OEM device sits silently after MQTT connect until it receives a
-    // start command. We match that: only publish when at least one channel
-    // is in MONITOR, STANDARD, or ADVANCED mode.
+    // Only publish when at least one channel is in a non-IDLE mode.
     bool ch1Active = (ch1.runmode != Runmode::IDLE);
     bool ch2Active = (ch2.runmode != Runmode::IDLE);
 
@@ -47,25 +45,39 @@ void TelemetryPublisher::loop(const ChannelState& ch1, const ChannelState& ch2) 
 }
 
 // ── _publishChannel ───────────────────────────────────────────────────────────
-// Payload format per smartpid-mqtt-reference.md:
-//   Monitor:  { time, temp, unit, runmode }
-//   Standard: { time, countdown, countup, SP, temp, unit, mode, pwm, maxpwm, runmode }
+// Payload formats:
+//   Monitor:      { time, temp, unit, runmode }
+//   Standard/Adv: { time, temp, unit, runmode, countdown, countup, SP, mode,
+//                   pwm, maxpwm, relay }
+//   Power:        { time, temp, unit, runmode:"power", relay, power }
+//                   power = current DC OUT duty % (reflects ramp, accel phase)
 void TelemetryPublisher::_publishChannel(const char* chName, const ChannelState& ch) {
     JsonDocument doc;
 
     doc["time"] = bootSeconds();
     doc["temp"] = ch.temp;
     doc["unit"] = _cfg->temp_unit;
-    doc["runmode"] = runmodeStr(ch.runmode);
 
-    // Standard + Advanced modes add the full set of fields
-    if (ch.runmode == Runmode::STANDARD || ch.runmode == Runmode::ADVANCED) {
-        doc["countdown"] = ch.countdown;
-        doc["countup"]   = ch.countup;
-        doc["SP"]        = ch.sp;
-        doc["mode"]      = controlModeStr(ch.mode);
-        doc["pwm"]       = ch.pwm;       // PID demand (pre-ceiling)
-        doc["maxpwm"]    = ch.maxpwm;    // commanded ceiling — what Proof reads as power level
+    if (ch.runmode == Runmode::POWER_DIRECT) {
+        // Power mode: unique payload with power field, no PID fields
+        doc["runmode"] = "power";
+        doc["relay"]   = ch.relay_state;
+        doc["power"]   = ch.power_pct;  // current actual duty (post-ramp, post-accel)
+
+    } else {
+        doc["runmode"] = runmodeStr(ch.runmode);
+
+        // Standard + Advanced modes add the full PID field set + relay state
+        if (ch.runmode == Runmode::STANDARD || ch.runmode == Runmode::ADVANCED) {
+            doc["countdown"] = ch.countdown;
+            doc["countup"]   = ch.countup;
+            doc["SP"]        = ch.sp;
+            doc["mode"]      = controlModeStr(ch.mode);
+            doc["pwm"]       = ch.pwm;       // PID demand (pre-ceiling)
+            doc["maxpwm"]    = ch.maxpwm;    // commanded ceiling
+            doc["relay"]     = ch.relay_state;  // actual relay pin state
+        }
+        // Monitor mode: only time/temp/unit/runmode (already set above)
     }
 
     String payload;

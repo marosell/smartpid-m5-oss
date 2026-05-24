@@ -29,11 +29,22 @@ bool MQTTManager::_connect() {
     // Client ID: "smartpid-" + last 6 chars of topic_id (device-unique)
     String clientId = String("smartpid-") + String(_cfg->topic_id).substring(8);
 
+    // LWT (Last Will and Testament): broker publishes this if our connection
+    // drops without a graceful DISCONNECT (power loss, network failure, crash).
+    // The broker delivers it to any subscriber watching events/standard.
+    String willTopic   = fullTopic("events/standard");
+    String willPayload = "{\"event\":\"power lost\"}";
+
     bool ok;
     if (strlen(_cfg->mqtt_user) > 0) {
-        ok = _client.connect(clientId.c_str(), _cfg->mqtt_user, _cfg->mqtt_pass);
+        ok = _client.connect(clientId.c_str(),
+                             _cfg->mqtt_user, _cfg->mqtt_pass,
+                             willTopic.c_str(), /*qos=*/0, /*retain=*/false,
+                             willPayload.c_str());
     } else {
-        ok = _client.connect(clientId.c_str());
+        ok = _client.connect(clientId.c_str(),
+                             willTopic.c_str(), /*qos=*/0, /*retain=*/false,
+                             willPayload.c_str());
     }
 
     if (ok) {

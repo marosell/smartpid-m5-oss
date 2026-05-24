@@ -147,15 +147,40 @@ struct Config {
     uint8_t  log_mode;        // 0=disabled, 1=WiFi, 2–4=OEM modes (UI exposes 0/1)
     uint16_t log_sample_s;    // logging sample interval in seconds (default 15)
 
+    // ── Power mode params (POWER_DIRECT) ──────────────────────────────────────
+    // Stored in NVS for power-cycle survivability.  Proof writes these at run
+    // start via individual MQTT commands; device saves on receipt.
+    // These are device-level (not per-channel) — Proof typically sets the same
+    // values for both channels, and re-sends on reconnect/start.
+    bool     pwr_acc_mode;      // acceleration phase feature on/off (default false)
+    float    pwr_dast;          // accel start threshold temp (default 0.0 = disabled)
+    uint8_t  pwr_dout;          // accel phase DC OUT % (default 0)
+    float    pwr_dfsp;          // finish latch threshold (default 0.0 = disabled)
+    uint32_t pwr_wdog_s;        // MQTT watchdog timeout seconds (default 0 = disabled)
+    uint8_t  pwr_wdog_safe;     // watchdog safe-state power % (default 0)
+    float    pwr_dtsp;          // dtSP timer trigger temp (default 0.0 = disabled)
+    uint32_t pwr_timer_s;       // dtSP timer duration seconds (default 0)
+    uint8_t  pwr_deo;           // 0=continue, 1=shutoff on timer expiry (default 0)
+    uint32_t pwr_ramp_s;        // soft-start ramp duration seconds (default 0 = instant)
+    uint8_t  pwr_distill_pct;   // distillation target power % (default 100)
+    uint8_t  pwr_relay1_mode;   // RelayMode for CH1 relay (RL1) (default 0 = OFF)
+    uint8_t  pwr_relay2_mode;   // RelayMode for CH2 relay (RL2) (default 0 = OFF)
+    uint32_t pwr_r1_on_ms;      // RL1 reflux ON time ms (default 1000)
+    uint32_t pwr_r1_cycle_ms;   // RL1 reflux total cycle ms (default 5000)
+    uint32_t pwr_r2_on_ms;      // RL2 reflux ON time ms (default 1000)
+    uint32_t pwr_r2_cycle_ms;   // RL2 reflux total cycle ms (default 5000)
+
     // ── Methods ───────────────────────────────────────────────────────────────
     void load();               // Load from NVS; applies defaults for missing keys
     void save();               // Persist current values to NVS
     void setSerial(const String& hex14);  // Set serial + compute topic_id; persists
     void saveMqtt();           // Persist only MQTT fields (used by WiFiManager callback)
     // Persist only the 4 run-state fields — fast, safe to call on every start/stop.
-    // ch1mode/ch2mode are Runmode cast to uint8_t (0=IDLE…3=ADVANCED).
+    // ch1mode/ch2mode are Runmode cast to uint8_t (0=IDLE…4=POWER_DIRECT).
     void saveRunState(uint8_t ch1mode, uint8_t ch2mode,
                       bool ch1paused, bool ch2paused);
+    // Persist all power mode params — called after any power param command.
+    void savePowerParams();
 };
 
 // Singleton — accessible throughout the firmware
