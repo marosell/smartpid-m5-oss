@@ -8,12 +8,20 @@ asking questions.
 
 ## Project Purpose
 
-Open-source reimplementation of the SmartPID M5 PRO firmware targeting the **M5Stack Gray**
-hardware. Goal: behaviorally identical to OEM firmware v2.8.0 (embedded app version 0.2.3).
+Open-source clean port of the SmartPID M5 PRO firmware targeting the **M5Stack Gray** hardware.
+Goal: behaviorally identical to OEM firmware v2.8.0 (embedded app version 0.2.3).
 
-**Design constraint:** All existing OEM functions must match documented OEM behavior as closely
-as possible. Safety-critical behavior (output limits, auto-resume, power-cycle recovery) must be
-identical. This is a reimplementation, not a redesign.
+**Approach (as of 2026-05-24 strategic pivot):** Start from the Ghidra-decompiled OEM source at
+`research/smartpid_decompiled.c` as ground truth. Clean up naming and structure; do not invent
+logic. See PRIME DIRECTIVE below.
+
+**A from-scratch reimplementation was attempted and abandoned.** It is archived at git tag
+`archive/from-scratch-reimplementation` and branch `archive/reimplementation` for reference.
+Do not restore it as the active approach.
+
+**Design constraint:** All hardware logic, control math, and protocol behavior must match the
+OEM implementation as closely as the language boundary allows. Safety-critical behavior (output
+limits, auto-resume, power-cycle recovery) must be identical. This is a port, not a redesign.
 
 **New features:** Deferred until the base firmware passes Phase 3 hardware bench validation.
 

@@ -22,3 +22,8 @@ mqtt_creds.*
 
 # firmware-releases/ binaries ARE tracked intentionally (post-flash-verified archives)
 # Do NOT add *.bin to this file
+__pycache__/
+
+# Generated files
+research/logs/
+research/scripts/__pycache__/
