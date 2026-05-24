@@ -21,6 +21,22 @@
 //   CH2 heating (PID) → RL2      → digital relay (ON when PID > threshold)
 //   CH2 cooling       → RL2      → digital relay
 //
+// ── DC OUT voltage (I/O audit 2026-05-23) ────────────────────────────────────
+// DC OUT terminals measure 4.82V (bench confirmed, voltmeter on CH1 output at
+// 100% duty). This is NOT 3.3V ESP32 GPIO — it is an internal supply derived
+// from the carrier board AC power section (rectified/regulated AC rail).
+//
+// SSR compatibility: All standard SSRs accept 3–32V DC control input.
+// 4.82V is within spec for every common SSR module.
+// Do NOT connect loads expecting 3.3V logic directly to DC OUT — devices
+// rated for 3.3V only (some microcontroller input pins, some signal isolators)
+// may be damaged. Use a voltage divider or level shifter if needed.
+//
+// GPIO drive current limitation: The relay/transistor driver on the carrier board
+// is driven by ESP32 GPIO, which is limited to 40mA source/sink per pin.
+// The driver buffers the carrier supply to the DC OUT terminal, so the GPIO
+// itself does not source the 4.82V — only the signal path passes through it.
+//
 // ── PID formulation ──────────────────────────────────────────────────────────
 // PARALLEL form (confirmed from OEM decompiled strings "PID %d Kp/Ki/Kd" and
 // Arduino-PID-Library default mode P_ON_E, direct).
@@ -41,7 +57,23 @@
 // ── GPIO pin assignments ──────────────────────────────────────────────────────
 // Physical terminal mapping (RL1/RL2/DCOUT1/DCOUT2) TBD by bench test Phase 3.
 // Swap these definitions once terminal mapping is confirmed.
-#define GPIO_CH0_OUT  12   // Relay or DC OUT — confirm terminal during bench test
+//
+// ⚠ GPIO 12 STRAPPING PIN WARNING (I/O audit 2026-05-23):
+// GPIO 12 (MTDI) is an ESP32 boot-strapping pin. If it reads HIGH during reset,
+// the ESP32 configures its internal flash for 1.8V operation — which will cause
+// a hard fault on a 3.3V flash device and prevent booting.
+//
+// This pin is assigned to a relay output (GPIO_CH0_OUT / RL1). The carrier board
+// relay driver circuit MUST hold GPIO 12 LOW during power-on reset and watchdog
+// resets. For most relay driver circuits (open-drain transistor, pull-down to GND)
+// this is the natural resting state and is safe. BENCH-VERIFY by monitoring
+// GPIO 12 on a scope/LA during a cold power-on reset — confirm it never goes HIGH
+// before the ESP32 releases the strapping latch (approx 100ms post-reset).
+//
+// If GPIO 12 is confirmed unsafe (e.g., relay driver has a pull-up), swap RL1 to
+// a different GPIO and reassign GPIO_CH0_OUT. Do NOT attempt to work around this
+// in firmware — it must be handled at the hardware level.
+#define GPIO_CH0_OUT  12   // Relay or DC OUT — STRAPPING PIN, see warning above
 #define GPIO_CH1_OUT  13   // Relay or DC OUT — confirm terminal during bench test
 #define GPIO_CH2_OUT  26   // DC OUT (PWM) — confirm terminal during bench test
 #define GPIO_CH3_OUT  16   // DC OUT (PWM) — confirm terminal during bench test

@@ -55,6 +55,15 @@
 //
 // Update DS18B20_CH1_GPIO / DS18B20_CH2_GPIO after bench inspection and
 // continuity test of probe-terminal-to-GPIO connections.
+//
+// PULL-UP REQUIREMENT (I/O audit 2026-05-23):
+// DS18B20 1-Wire protocol requires a 4.7 kΩ pull-up resistor to VCC on the
+// data line. This must be present on the carrier board PCB (probe terminal block
+// to GPIO trace). BENCH-VERIFY: probe the data line with a multimeter —
+// it should rest at ~3.3V with no device connected. If it floats or reads 0V,
+// add an external 4.7 kΩ pull-up from the data pin to 3.3V.
+// Without a pull-up, DS18B20 will not respond and readTemp() will always
+// return PROBE_SENTINEL_VALUE regardless of probe connection.
 #define DS18B20_CH1_GPIO  25   // BENCH-VERIFY: CH1 probe terminal → GPIO25?
 #define DS18B20_CH2_GPIO  17   // BENCH-VERIFY: CH2 probe terminal → GPIO17?
 
