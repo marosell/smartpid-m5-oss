@@ -273,6 +273,66 @@ perl -i -pe '
 
     # FUN_400e7f88 — WiFi network scan / select UI
     s/\bFUN_400e7f88\b/wifi_scan_select/g;
+
+    # ── ADS1119 ADC driver (I2C addr 0x40) ───────────────────────────────
+    # FUN_400fa1f0(struct*) — init ADS1119 struct: raw=0, addr=0x40, handle=default
+    s/\bFUN_400fa1f0\b/ads1119_init/g;
+
+    # FUN_400fa224(handle, reg) — send single-byte command (RREG / START / etc.)
+    s/\bFUN_400fa224\b/ads1119_cmd/g;
+
+    # FUN_400fa24c(handle, config) — WREG + send config byte to register 0
+    s/\bFUN_400fa24c\b/ads1119_wreg/g;
+
+    # FUN_400fa2ec(handle) → int16_t — RDATA: send 0x10, read 2 bytes, return signed
+    s/\bFUN_400fa2ec\b/ads1119_rdata/g;
+
+    # FUN_400fa324(handle) — read RDATA and store in *handle->raw
+    s/\bFUN_400fa324\b/ads1119_read_update/g;
+
+    # FUN_400fa334(handle) → int — read RDATA and return delta from stored value
+    s/\bFUN_400fa334\b/ads1119_read_delta/g;
+
+    # FUN_400fa27c(handle) — reset ADS1119 (WREG 0xe1 + START cmd)
+    s/\bFUN_400fa27c\b/ads1119_reset/g;
+
+    # FUN_400fa294(handle, channel) — start conversion: WREG config + START
+    s/\bFUN_400fa294\b/ads1119_start_conv/g;
+
+    # FUN_400fa2b4(handle, cha, chb) — select differential MUX channel pair
+    s/\bFUN_400fa2b4\b/ads1119_mux_select/g;
+
+    # FUN_400f9acc() → int — read one ADS1119 compensation sample
+    s/\bFUN_400f9acc\b/ads1119_read_comp/g;
+
+    # FUN_400f9ae0(channel, phase) — accumulate ADS1119 sample into buffer
+    s/\bFUN_400f9ae0\b/ads1119_accumulate/g;
+
+    # ── IO expander (PCA9534 at I2C 0x41 — probe excitation switching) ────
+    s/\bFUN_400fa378\b/ioexp_write_reg/g;
+    s/\bFUN_400fa3c0\b/ioexp_read_reg/g;
+    s/\bFUN_400fa3a8\b/ioexp_set_excitation/g;
+    s/\bFUN_400fa3fc\b/ioexp_set_bit/g;
+    s/\bFUN_400fa438\b/ioexp_set_relay_bit/g;
+
+    # ── Temperature calculations ──────────────────────────────────────────
+    # FUN_400df34c(count, comp_count, rref) → float°C  PT100 3-wire
+    s/\bFUN_400df34c\b/calc_pt100_3wire/g;
+
+    # FUN_400df3e4(raw) → float°C  DS18B20 raw count (low nibble=frac, upper=int°C)
+    s/\bFUN_400df3e4\b/calc_ds18b20_temp/g;
+
+    # FUN_400df42c(emf_mv) → float°C  K-type voltage → temperature
+    s/\bFUN_400df42c\b/calc_ktype_temp/g;
+
+    # FUN_400df558(emf_mv) → float°C  K-type EMF lookup table linearization
+    s/\bFUN_400df558\b/calc_ktype_emf_lookup/g;
+
+    # FUN_400df228(count, ntc_beta_idx, flag, table) → float°C  NTC thermistor
+    s/\bFUN_400df228\b/calc_ntc_temp/g;
+
+    # FUN_400df1d4(probe_type, channel, flag) → float°C  dispatch to correct calc
+    s/\bFUN_400df1d4\b/calc_temp_dispatch/g;
 ' "$INPUT"
 
 echo "[05]   functions done."
