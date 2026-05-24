@@ -1,0 +1,40 @@
+# Ghidra setup reference — memory segments for smartpid_m5pro V2.8.0
+# Load smartpid_app0.bin as 'Raw Binary', Language: Xtensa:LE:32:default
+# Then add these memory blocks via Window > Memory Map > Add Block
+# Entry point: 0x40084880
+
+# Segment 0: drom_rodata
+#   File:    seg0_drom_rodata_0x3f400020.bin
+#   Address: 0x3f400020
+#   Size:    448,928 bytes  (438.4 KB)
+#   Perms:   r--
+
+# Segment 1: dram_data1
+#   File:    seg1_dram_data1_0x3ffbdb60.bin
+#   Address: 0x3ffbdb60
+#   Size:    9,800 bytes  (9.6 KB)
+#   Perms:   rw-
+
+# Segment 2: irom_code
+#   File:    seg2_irom_code_0x400d0018.bin
+#   Address: 0x400d0018
+#   Size:    1,467,848 bytes  (1433.4 KB)
+#   Perms:   r-x
+
+# Segment 3: dram_data2
+#   File:    seg3_dram_data2_0x3ffc01a8.bin
+#   Address: 0x3ffc01a8
+#   Size:    7,736 bytes  (7.6 KB)
+#   Perms:   rw-
+
+# Segment 4: iram_code1
+#   File:    seg4_iram_code1_0x40080000.bin
+#   Address: 0x40080000
+#   Size:    1,024 bytes  (1.0 KB)
+#   Perms:   r-x
+
+# Segment 5: iram_code2
+#   File:    seg5_iram_code2_0x40080400.bin
+#   Address: 0x40080400
+#   Size:    94,216 bytes  (92.0 KB)
+#   Perms:   r-x

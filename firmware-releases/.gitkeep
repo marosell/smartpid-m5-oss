@@ -1,0 +1,3 @@
+# After a successful flash + bench test, copy the verified binary here:
+#   cp .pio/build/m5stack-grey/firmware.bin firmware-releases/smartpid-m5-oss-$(git rev-parse --short HEAD).bin
+# Then git add + commit it so the binary is permanently associated with that commit.
