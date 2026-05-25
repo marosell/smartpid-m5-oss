@@ -281,6 +281,7 @@ private:
     void _drawRunningGraph(int chIdx);
     void _drawRunningOverview();
     void _drawPowerStatus();
+    void _redrawPowerStatusValues();
     void _drawContextMenu();
     void _drawSetTimerDialog();
     void _drawSetMaxPowerDialog();

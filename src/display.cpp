@@ -187,7 +187,7 @@ void DisplayManager::loop(ChannelState& ch1, ChannelState& ch2) {
     if (isRunning && _needsDataRedraw) {
         _needsDataRedraw = false;
         if (_screen == UIScreen::POWER_STATUS) {
-            _drawScreen();
+            _redrawPowerStatusValues();
             return;
         }
         if (_screen == UIScreen::RUNNING_CH_DETAIL) _redrawChDetailValues();
@@ -195,7 +195,7 @@ void DisplayManager::loop(ChannelState& ch1, ChannelState& ch2) {
     if (isRunning && _needsTimerRedraw) {
         _needsTimerRedraw = false;
         if (_screen == UIScreen::POWER_STATUS) {
-            _drawScreen();
+            _redrawPowerStatusValues();
             return;
         }
         _redrawHeaderTimer();
@@ -1085,6 +1085,7 @@ void DisplayManager::_handleRunningOverview(UIEvent ev) {
 static void drawPowerStatusBox(int x, int y, int w, int h,
                                const char* label, const char* value,
                                uint16_t valueColor) {
+    M5.Display.fillRect(x + 1, y + 1, w - 2, h - 2, COL_BG);
     M5.Display.drawRect(x, y, w, h, COL_DIVIDER);
     M5.Display.setTextDatum(lgfx::top_left);
     M5.Display.setTextSize(1);
@@ -1101,6 +1102,20 @@ void DisplayManager::_drawPowerStatus() {
 
     _drawHeader("Power");
     _drawFooter("main", "detail", "menu");
+
+    _redrawPowerStatusValues();
+
+    M5.Display.drawFastHLine(8, 150, 304, COL_DIVIDER);
+    M5.Display.setTextDatum(lgfx::top_left);
+    M5.Display.setTextSize(1);
+    M5.Display.setTextColor(COL_TEXT, COL_BG);
+    M5.Display.drawString("Bench outputs:", 10, 158);
+    M5.Display.drawString("DC1/DC2 = SSR drive", 10, 176);
+    M5.Display.drawString("RL1/RL2 = relay contacts", 10, 194);
+}
+
+void DisplayManager::_redrawPowerStatusValues() {
+    if (!_ch1 || !_ch2 || !_cfg) return;
 
     char v[16];
     char label[20];
@@ -1128,6 +1143,7 @@ void DisplayManager::_drawPowerStatus() {
                        _ch2->relay_state ? "ON" : "OFF",
                        _ch2->relay_state ? COL_OK : COL_TEXT);
 
+    M5.Display.fillRect(245, 29, 66, 106, COL_BG);
     M5.Display.drawRect(244, 28, 68, 108, COL_DIVIDER);
     M5.Display.setTextDatum(lgfx::top_center);
     M5.Display.setTextSize(1);
@@ -1143,14 +1159,6 @@ void DisplayManager::_drawPowerStatus() {
 
     M5.Display.setTextColor(COL_TEXT, COL_BG);
     M5.Display.drawString(runmodeStr(_ch1->runmode), 252, 104);
-
-    M5.Display.drawFastHLine(8, 150, 304, COL_DIVIDER);
-    M5.Display.setTextDatum(lgfx::top_left);
-    M5.Display.setTextSize(1);
-    M5.Display.setTextColor(COL_TEXT, COL_BG);
-    M5.Display.drawString("Bench outputs:", 10, 158);
-    M5.Display.drawString("DC1/DC2 = SSR drive", 10, 176);
-    M5.Display.drawString("RL1/RL2 = relay contacts", 10, 194);
 }
 
 void DisplayManager::_handlePowerStatus(UIEvent ev) {
