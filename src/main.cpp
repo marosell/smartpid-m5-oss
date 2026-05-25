@@ -263,8 +263,16 @@ void setup() {
     // Read initial temperature (populates ch.temp before first telemetry tick)
     ch1.temp = probeReader.readTemp(1);
     ch2.temp = probeReader.readTemp(2);
-    ch1.runmode = Runmode::MONITOR;
-    ch2.runmode = Runmode::MONITOR;
+    ch1.runmode = Runmode::POWER_DIRECT;
+    ch2.runmode = Runmode::POWER_DIRECT;
+    ch1.paused = false;
+    ch2.paused = false;
+    ch1.distill_power_pct = 0;
+    ch2.distill_power_pct = 0;
+    ch1.power_pct = 0;
+    ch2.power_pct = 0;
+    ch1.relay_state = false;
+    ch2.relay_state = false;
 
     telemetry.begin(cfg, mqttMgr);
     cmdHandler.begin(cfg, mqttMgr, telemetry, ch1, ch2);
@@ -624,6 +632,7 @@ static void printBenchStatus(const char* reason) {
     doc["wifi"] = (WiFi.status() == WL_CONNECTED);
     doc["ip"] = WiFi.localIP().toString();
     doc["mqtt"] = mqttMgr.connected();
+    doc["remote"] = mqttRemoteEnabled();
     doc["raw_output_override"] = gRawOutputOverride;
 
     JsonObject c1 = doc["ch1"].to<JsonObject>();

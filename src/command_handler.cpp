@@ -6,6 +6,15 @@
 #include <ArduinoJson.h>
 
 CommandHandler cmdHandler;
+static bool gMqttRemoteEnabled = false;
+
+bool mqttRemoteEnabled() {
+    return gMqttRemoteEnabled;
+}
+
+void setMqttRemoteEnabled(bool enabled) {
+    gMqttRemoteEnabled = enabled;
+}
 
 // ── begin ─────────────────────────────────────────────────────────────────────
 void CommandHandler::begin(Config& cfg, MQTTManager& mqtt,
@@ -47,15 +56,15 @@ void CommandHandler::handle(const uint8_t* payload, unsigned int len) {
         _mqtt->publishStatus();
     }
 
-    // ── {"start": "standard"/"monitor"/"advanced"/"power"} ───────────────────
+    // ── {"start": "power"/"remote"} ──────────────────────────────────────────
     if (doc["start"].is<const char*>()) {
         const char* modeStr = doc["start"].as<const char*>();
         if (strcmp(modeStr, "power") == 0) {
             _cmdStartPower();
+        } else if (strcmp(modeStr, "remote") == 0) {
+            _cmdStartRemote();
         } else {
-            int p1 = doc["CH1 profile"] | 0;
-            int p2 = doc["CH2 profile"] | 0;
-            _cmdStart(modeStr, p1, p2);
+            log_w("[CMD] start '%s' ignored — custom firmware supports power/remote", modeStr);
         }
     }
 
@@ -115,20 +124,38 @@ void CommandHandler::handle(const uint8_t* payload, unsigned int len) {
 
     // ── Per-channel POWER_DIRECT commands ────────────────────────────────────
     // DC OUT target power
-    if (!doc["CH1 power"].isNull()) _cmdSetPower(1, doc["CH1 power"].as<int>());
-    if (!doc["CH2 power"].isNull()) _cmdSetPower(2, doc["CH2 power"].as<int>());
+    if (!doc["CH1 power"].isNull()) {
+        if (mqttRemoteEnabled()) _cmdSetPower(1, doc["CH1 power"].as<int>());
+        else log_w("[CMD] CH1 power ignored — Remote is OFF");
+    }
+    if (!doc["CH2 power"].isNull()) {
+        if (mqttRemoteEnabled()) _cmdSetPower(2, doc["CH2 power"].as<int>());
+        else log_w("[CMD] CH2 power ignored — Remote is OFF");
+    }
 
     // Acceleration phase toggle
     if (doc["CH1 acc_mode"].is<bool>()) _cmdSetAccMode(1, doc["CH1 acc_mode"].as<bool>());
     if (doc["CH2 acc_mode"].is<bool>()) _cmdSetAccMode(2, doc["CH2 acc_mode"].as<bool>());
 
     // Relay mode
-    if (!doc["CH1 relay_mode"].isNull()) _cmdSetRelayMode(1, doc["CH1 relay_mode"].as<const char*>());
-    if (!doc["CH2 relay_mode"].isNull()) _cmdSetRelayMode(2, doc["CH2 relay_mode"].as<const char*>());
+    if (!doc["CH1 relay_mode"].isNull()) {
+        if (mqttRemoteEnabled()) _cmdSetRelayMode(1, doc["CH1 relay_mode"].as<const char*>());
+        else log_w("[CMD] CH1 relay_mode ignored — Remote is OFF");
+    }
+    if (!doc["CH2 relay_mode"].isNull()) {
+        if (mqttRemoteEnabled()) _cmdSetRelayMode(2, doc["CH2 relay_mode"].as<const char*>());
+        else log_w("[CMD] CH2 relay_mode ignored — Remote is OFF");
+    }
 
     // Relay state (REMOTE mode command)
-    if (doc["CH1 relay"].is<bool>()) _cmdSetRelay(1, doc["CH1 relay"].as<bool>());
-    if (doc["CH2 relay"].is<bool>()) _cmdSetRelay(2, doc["CH2 relay"].as<bool>());
+    if (doc["CH1 relay"].is<bool>()) {
+        if (mqttRemoteEnabled()) _cmdSetRelay(1, doc["CH1 relay"].as<bool>());
+        else log_w("[CMD] CH1 relay ignored — Remote is OFF");
+    }
+    if (doc["CH2 relay"].is<bool>()) {
+        if (mqttRemoteEnabled()) _cmdSetRelay(2, doc["CH2 relay"].as<bool>());
+        else log_w("[CMD] CH2 relay ignored — Remote is OFF");
+    }
 
     // Acceleration phase params
     if (!doc["CH1 dAST"].isNull()) _cmdSetDAST(1, doc["CH1 dAST"].as<float>());
@@ -229,14 +256,8 @@ void CommandHandler::_cmdStart(const char* modeStr, int ch1Profile, int ch2Profi
 // Start POWER_DIRECT mode on both channels.
 // Loads saved power params from config into channel state.
 void CommandHandler::_cmdStartPower() {
-    bool busy = (_ch[0]->isRunning() && _ch[0]->runmode != Runmode::MONITOR) ||
-                (_ch[1]->isRunning() && _ch[1]->runmode != Runmode::MONITOR);
-    if (busy) {
-        log_d("[CMD] start power ignored — already running");
-        return;
-    }
-
     log_i("[CMD] start: power");
+    setMqttRemoteEnabled(false);
 
     for (int i = 0; i < 2; i++) {
         ChannelState* ch = _ch[i];
@@ -250,12 +271,27 @@ void CommandHandler::_cmdStartPower() {
         ch->timerExpired     = false;
         ch->accelPhaseJustEnded = false;
         _applyPowerParams(i + 1);  // 1-based
+        ch->distill_power_pct = 0;
+        ch->power_pct = 0;
+        ch->relay_state = false;
     }
 
     _tele->publishEvent("start power");
     _cfg->saveRunState((uint8_t)Runmode::POWER_DIRECT,
                        (uint8_t)Runmode::POWER_DIRECT,
                        false, false);
+}
+
+void CommandHandler::_cmdStartRemote() {
+    _cmdStartPower();
+    setMqttRemoteEnabled(true);
+    if (_ch[0]) _ch[0]->relay_mode = RelayMode::REMOTE;
+    if (_ch[1]) _ch[1]->relay_mode = RelayMode::REMOTE;
+    if (_cfg) {
+        _cfg->pwr_relay1_mode = (uint8_t)RelayMode::REMOTE;
+        _cfg->pwr_relay2_mode = (uint8_t)RelayMode::REMOTE;
+        _cfg->savePowerParams();
+    }
 }
 
 // ── _applyPowerParams ─────────────────────────────────────────────────────────

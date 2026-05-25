@@ -17,6 +17,7 @@
 //   Font sizes via setTextDatum: 1=TC, 4=MC, 7=BC; setTextSize values 1,2,3,4,7
 
 #include "display.h"
+#include "command_handler.h"
 #include "output_control.h"   // for output label strings
 #include <WiFi.h>
 #include <time.h>
@@ -31,15 +32,15 @@ DisplayManager display;
 
 // ── Main menu items (from spec §6 + OEM screenshots) ──────────────────────
 static const char* const kMainMenuItems[] = {
-    "Start", "Power", "Monitor", "Setup", "WiFi/Logging", "Profile", "Info"
+    "Power", "Remote", "Setup", "WiFi/Logging", "Info"
 };
-static const int kMainMenuCount = 7;
+static const int kMainMenuCount = 5;
 
 // ── Context menu items (from spec §7.4 + screenshot IMG_2615) ─────────────
 static const char* const kCtxMenuItems[] = {
-    "Pause", "Stop", "Count up/down", "Set Timer", "Set Max Power Out", "Back"
+    "Main Menu", "Power Parameters", "Set Timer", "Toggle Remote", "Back"
 };
-static const int kCtxMenuCount = 6;
+static const int kCtxMenuCount = 5;
 
 // ── Setup sub-menu items ───────────────────────────────────────────────────
 static const char* const kSetupMenuItems[] = {
@@ -107,8 +108,8 @@ void DisplayManager::begin(Config& cfg, MQTTManager& mqtt) {
     M5.Display.setRotation(1);
     M5.Display.fillScreen(COL_BG);
 
-    // Start at main menu
-    _screen = UIScreen::MAIN_MENU;
+    // Custom firmware boots directly to the live Power screen.
+    _screen = UIScreen::POWER_STATUS;
     _needsFullRedraw = true;
 }
 
@@ -138,7 +139,8 @@ void DisplayManager::loop(ChannelState& ch1, ChannelState& ch2) {
     // Hold-repeat with acceleration for all value entry/adjustment dialogs (BtnA=−, BtnC=+)
     if (_screen == UIScreen::VALUE_ENTRY_DIALOG  ||
         _screen == UIScreen::SET_MAXPOWER_DIALOG ||
-        _screen == UIScreen::SET_TIMER_DIALOG) {
+        _screen == UIScreen::SET_TIMER_DIALOG ||
+        _screen == UIScreen::POWER_OUTPUT_EDIT) {
         unsigned long nowR = millis();
         // 0=none, 1=BtnA(−), 2=BtnC(+)
         uint8_t btn = M5.BtnA.isPressed() ? 1u : (M5.BtnC.isPressed() ? 2u : 0u);
@@ -226,6 +228,7 @@ UIScreen DisplayManager::_logicalParent() const {
         case UIScreen::RUNNING_GRAPH_CH2:
         case UIScreen::RUNNING_DUAL_OVERVIEW:
         case UIScreen::POWER_STATUS:
+        case UIScreen::POWER_OUTPUT_EDIT:
             return UIScreen::MAIN_MENU;
 
         // Context + running dialogs → running detail
@@ -330,6 +333,7 @@ void DisplayManager::_dispatch(UIEvent ev) {
         case UIScreen::RUNNING_GRAPH_CH2:      _handleRunningGraph(ev);    break;
         case UIScreen::RUNNING_DUAL_OVERVIEW:  _handleRunningOverview(ev); break;
         case UIScreen::POWER_STATUS:           _handlePowerStatus(ev);     break;
+        case UIScreen::POWER_OUTPUT_EDIT:      _handlePowerOutputEdit(ev); break;
         case UIScreen::CONTEXT_MENU:           _handleContextMenu(ev);     break;
         case UIScreen::SET_TIMER_DIALOG:       _handleSetTimer(ev);        break;
         case UIScreen::SET_MAXPOWER_DIALOG:    _handleSetMaxPower(ev);     break;
@@ -383,6 +387,7 @@ void DisplayManager::_drawScreen() {
         case UIScreen::RUNNING_GRAPH_CH2:      _drawRunningGraph(1);       break;
         case UIScreen::RUNNING_DUAL_OVERVIEW:  _drawRunningOverview();     break;
         case UIScreen::POWER_STATUS:           _drawPowerStatus();         break;
+        case UIScreen::POWER_OUTPUT_EDIT:      _drawPowerOutputEdit();     break;
         case UIScreen::CONTEXT_MENU:           _drawContextMenu();         break;
         case UIScreen::SET_TIMER_DIALOG:       _drawSetTimerDialog();      break;
         case UIScreen::SET_MAXPOWER_DIALOG:    _drawSetMaxPowerDialog();   break;
@@ -652,34 +657,34 @@ void DisplayManager::_handleMainMenu(UIEvent ev) {
             break;
         case UIEvent::BTN_B:
             switch (_menuSel) {
-                case 0: // Start (STANDARD thermal mode)
-                    if (_ch1) { _ch1->runmode = Runmode::STANDARD; _ch1->paused = false; }
-                    if (_ch2) { _ch2->runmode = Runmode::STANDARD; _ch2->paused = false; }
-                    _runScreen = 0;
-                    _goTo(UIScreen::RUNNING_CH_DETAIL);
-                    break;
-                case 1: // Power (POWER_DIRECT mode)
+                case 0: // Power
                     if (_ch1) { _ch1->runmode = Runmode::POWER_DIRECT; _ch1->paused = false; }
                     if (_ch2) { _ch2->runmode = Runmode::POWER_DIRECT; _ch2->paused = false; }
-                    _runScreen = 0;
+                    setMqttRemoteEnabled(false);
                     _goTo(UIScreen::POWER_STATUS);
                     break;
-                case 2: // Monitor
-                    if (_ch1) { _ch1->runmode = Runmode::MONITOR; _ch1->paused = false; }
-                    if (_ch2) { _ch2->runmode = Runmode::MONITOR; _ch2->paused = false; }
-                    _runScreen = 0;
-                    _goTo(UIScreen::RUNNING_CH_DETAIL);
+                case 1: // Remote
+                    if (_ch1) {
+                        _ch1->runmode = Runmode::POWER_DIRECT;
+                        _ch1->paused = false;
+                        _ch1->relay_mode = RelayMode::REMOTE;
+                    }
+                    if (_ch2) {
+                        _ch2->runmode = Runmode::POWER_DIRECT;
+                        _ch2->paused = false;
+                        _ch2->relay_mode = RelayMode::REMOTE;
+                    }
+                    setMqttRemoteEnabled(true);
+                    _applyPowerOutputState();
+                    _goTo(UIScreen::POWER_STATUS);
                     break;
-                case 3: // Setup
+                case 2: // Setup
                     _navPush(); _goTo(UIScreen::SETUP_MENU);
                     break;
-                case 4: // WiFi/Logging
+                case 3: // WiFi/Logging
                     _navPush(); _goTo(UIScreen::WIFI_LOGGING);
                     break;
-                case 5: // Profile
-                    _navPush(); _goTo(UIScreen::PROFILE_MENU);
-                    break;
-                case 6: // Info
+                case 4: // Info
                     _navPush(); _goTo(UIScreen::INFO_MENU);
                     break;
             }
@@ -1084,9 +1089,10 @@ void DisplayManager::_handleRunningOverview(UIEvent ev) {
 
 static void drawPowerStatusBox(int x, int y, int w, int h,
                                const char* label, const char* value,
-                               uint16_t valueColor) {
+                               uint16_t valueColor, bool selected = false) {
     M5.Display.fillRect(x + 1, y + 1, w - 2, h - 2, COL_BG);
-    M5.Display.drawRect(x, y, w, h, COL_DIVIDER);
+    M5.Display.drawRect(x, y, w, h, selected ? COL_SP : COL_DIVIDER);
+    if (selected) M5.Display.drawRect(x + 1, y + 1, w - 2, h - 2, COL_SP);
     M5.Display.setTextDatum(lgfx::top_left);
     M5.Display.setTextSize(1);
     M5.Display.setTextColor(COL_TEXT, COL_BG);
@@ -1101,7 +1107,7 @@ void DisplayManager::_drawPowerStatus() {
     if (!_ch1 || !_ch2 || !_cfg) return;
 
     _drawHeader("Power");
-    _drawFooter("main", "detail", "menu");
+    _drawFooter("Up", "Sel/Menu", "Down");
 
     _redrawPowerStatusValues();
 
@@ -1130,18 +1136,20 @@ void DisplayManager::_redrawPowerStatusValues() {
     drawPowerStatusBox(8, 86, 74, 50, label, v, COL_TEMP);
 
     snprintf(v, sizeof(v), "%u%%", (unsigned)_ch1->power_pct);
-    drawPowerStatusBox(92, 28, 66, 50, "DC1", v, _ch1->power_pct ? COL_WARN : COL_TEXT);
+    drawPowerStatusBox(92, 28, 66, 50, "DC1", v,
+                       _ch1->power_pct ? COL_WARN : COL_TEXT, _powerSel == 0);
 
     snprintf(v, sizeof(v), "%u%%", (unsigned)_ch2->power_pct);
-    drawPowerStatusBox(92, 86, 66, 50, "DC2", v, _ch2->power_pct ? COL_WARN : COL_TEXT);
+    drawPowerStatusBox(92, 86, 66, 50, "DC2", v,
+                       _ch2->power_pct ? COL_WARN : COL_TEXT, _powerSel == 1);
 
     drawPowerStatusBox(168, 28, 66, 50, "RL1",
                        _ch1->relay_state ? "ON" : "OFF",
-                       _ch1->relay_state ? COL_OK : COL_TEXT);
+                       _ch1->relay_state ? COL_OK : COL_TEXT, _powerSel == 2);
 
     drawPowerStatusBox(168, 86, 66, 50, "RL2",
                        _ch2->relay_state ? "ON" : "OFF",
-                       _ch2->relay_state ? COL_OK : COL_TEXT);
+                       _ch2->relay_state ? COL_OK : COL_TEXT, _powerSel == 3);
 
     M5.Display.fillRect(245, 29, 66, 106, COL_BG);
     M5.Display.drawRect(244, 28, 68, 108, COL_DIVIDER);
@@ -1159,16 +1167,112 @@ void DisplayManager::_redrawPowerStatusValues() {
 
     M5.Display.setTextColor(COL_TEXT, COL_BG);
     M5.Display.drawString(runmodeStr(_ch1->runmode), 252, 104);
+
+    drawPowerStatusBox(244, 146, 68, 50, "Remote",
+                       mqttRemoteEnabled() ? "ON" : "OFF",
+                       mqttRemoteEnabled() ? COL_OK : COL_TEXT,
+                       _powerSel == 4);
 }
 
 void DisplayManager::_handlePowerStatus(UIEvent ev) {
     switch (ev) {
-        case UIEvent::BTN_A:  _goTo(UIScreen::MAIN_MENU);          break;
-        case UIEvent::BTN_B:  _goTo(UIScreen::RUNNING_CH_DETAIL);  break;
-        case UIEvent::BTN_C:  _goTo(UIScreen::CONTEXT_MENU);       break;
+        case UIEvent::BTN_A:
+            _powerSel = (_powerSel + 4) % 5;
+            _redrawPowerStatusValues();
+            break;
+        case UIEvent::BTN_C:
+            _powerSel = (_powerSel + 1) % 5;
+            _redrawPowerStatusValues();
+            break;
+        case UIEvent::BTN_B:
+            if (_powerSel == 0 || _powerSel == 1) {
+                _goTo(UIScreen::POWER_OUTPUT_EDIT);
+            } else if (_powerSel == 2 && _ch1) {
+                _ch1->runmode = Runmode::POWER_DIRECT;
+                _ch1->paused = false;
+                _ch1->relay_mode = RelayMode::REMOTE;
+                _ch1->relay_state = !_ch1->relay_state;
+                _applyPowerOutputState();
+                _redrawPowerStatusValues();
+            } else if (_powerSel == 3 && _ch2) {
+                _ch2->runmode = Runmode::POWER_DIRECT;
+                _ch2->paused = false;
+                _ch2->relay_mode = RelayMode::REMOTE;
+                _ch2->relay_state = !_ch2->relay_state;
+                _applyPowerOutputState();
+                _redrawPowerStatusValues();
+            } else if (_powerSel == 4) {
+                setMqttRemoteEnabled(!mqttRemoteEnabled());
+                if (mqttRemoteEnabled()) {
+                    if (_ch1) _ch1->relay_mode = RelayMode::REMOTE;
+                    if (_ch2) _ch2->relay_mode = RelayMode::REMOTE;
+                }
+                _applyPowerOutputState();
+                _redrawPowerStatusValues();
+            }
+            break;
+        case UIEvent::BTN_BACK:
+            _goTo(UIScreen::MAIN_MENU);
+            break;
         case UIEvent::TICK_1S: _needsTimerRedraw = true;           break;
         default: break;
     }
+}
+
+void DisplayManager::_drawPowerOutputEdit() {
+    ChannelState* ch = (_powerSel == 0) ? _ch1 : _ch2;
+    if (!ch) return;
+
+    _drawHeader(_powerSel == 0 ? "DC1 Power" : "DC2 Power");
+    _drawFooter("-1", "OK", "+1");
+
+    _drawRedBorderBox(30, 78, DISP_W - 60, 78);
+    char buf[16];
+    snprintf(buf, sizeof(buf), "%u%%", (unsigned)ch->distill_power_pct);
+    M5.Display.setTextDatum(lgfx::middle_center);
+    M5.Display.setTextSize(4);
+    M5.Display.setTextColor(COL_WARN, COL_BG);
+    M5.Display.drawString(buf, CENTER_X, 117);
+
+    M5.Display.setTextSize(1);
+    M5.Display.setTextColor(COL_TEXT, COL_BG);
+    M5.Display.drawString("Live output command", CENTER_X, 170);
+}
+
+void DisplayManager::_handlePowerOutputEdit(UIEvent ev) {
+    ChannelState* ch = (_powerSel == 0) ? _ch1 : _ch2;
+    if (!ch) return;
+
+    switch (ev) {
+        case UIEvent::BTN_A:
+        case UIEvent::BTN_C: {
+            int pct = (int)ch->distill_power_pct + (ev == UIEvent::BTN_A ? -1 : 1);
+            pct = constrain(pct, 0, 100);
+            ch->runmode = Runmode::POWER_DIRECT;
+            ch->paused = false;
+            ch->finishLatch = false;
+            ch->watchdogFired = false;
+            ch->accelPhaseActive = false;
+            ch->distill_power_pct = (uint8_t)pct;
+            ch->power_pct = (uint8_t)pct;
+            _applyPowerOutputState();
+            _needsFullRedraw = true;
+            break;
+        }
+        case UIEvent::BTN_B:
+        case UIEvent::BTN_BACK:
+            _goTo(UIScreen::POWER_STATUS);
+            break;
+        default:
+            break;
+    }
+}
+
+void DisplayManager::_applyPowerOutputState() {
+    if (!_ch1 || !_ch2) return;
+    outputCtrl.update(*_ch1, *_ch2);
+    outputCtrl.pwmLoop();
+    notifyDataUpdate();
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -1218,30 +1322,34 @@ void DisplayManager::_handleContextMenu(UIEvent ev) {
             break;
         case UIEvent::BTN_B:
             switch (_ctxSel) {
-                case 0: // Pause
-                    if (_ch1) _ch1->paused = !_ch1->paused;
-                    if (_ch2) _ch2->paused = !_ch2->paused;
-                    _goTo(UIScreen::RUNNING_CH_DETAIL);
-                    break;
-                case 1: // Stop
-                    if (_ch1) _ch1->stop();
-                    if (_ch2) _ch2->stop();
+                case 0: // Main Menu
                     _goTo(UIScreen::MAIN_MENU);
                     break;
-                case 2: // Count up/down — DECOMPILE-VERIFY: toggle countup direction
-                    _goTo(_prevScreen);
+                case 1: // Power Parameters
+                    _navPush();
+                    _goTo(UIScreen::SETUP_PROCESS_P);
                     break;
-                case 3: // Set Timer
+                case 2: // Set Timer
                     _goTo(UIScreen::SET_TIMER_DIALOG);
                     break;
-                case 4: // Set Max Power Out
-                    _editValue = _ch1 ? (float)_ch1->maxpwm : 100.0f;
-                    _editMin = 0.0f; _editMax = 100.0f; _editStep = 1.0f;
-                    strlcpy(_editLabel, "Max Power Out", sizeof(_editLabel));
-                    strlcpy(_editUnit,  "%",             sizeof(_editUnit));
-                    _goTo(UIScreen::SET_MAXPOWER_DIALOG);
+                case 3: // Toggle Remote
+                    setMqttRemoteEnabled(!mqttRemoteEnabled());
+                    if (mqttRemoteEnabled()) {
+                        if (_ch1) {
+                            _ch1->runmode = Runmode::POWER_DIRECT;
+                            _ch1->paused = false;
+                            _ch1->relay_mode = RelayMode::REMOTE;
+                        }
+                        if (_ch2) {
+                            _ch2->runmode = Runmode::POWER_DIRECT;
+                            _ch2->paused = false;
+                            _ch2->relay_mode = RelayMode::REMOTE;
+                        }
+                    }
+                    _applyPowerOutputState();
+                    _goTo(UIScreen::POWER_STATUS);
                     break;
-                case 5: // Back
+                case 4: // Back
                     _goTo(_prevScreen);
                     break;
             }

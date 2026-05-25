@@ -6,6 +6,7 @@
 //
 // New POWER_DIRECT commands (our extension):
 //   {"start": "power"}                      Start direct-power mode (both channels)
+//   {"start": "remote"}                     Start power mode with both relays remote
 //   {"CHx power": N}                        DC OUT duty % target (0–100)
 //   {"CHx acc_mode": bool}                  Enable/disable acceleration phase
 //   {"CHx relay_mode": "off"/"acc_sync"/"remote"/"reflux_timer"}
@@ -28,6 +29,9 @@
 #include "mqtt_client.h"
 #include "channel_state.h"
 #include "telemetry.h"
+
+bool mqttRemoteEnabled();
+void setMqttRemoteEnabled(bool enabled);
 
 class CommandHandler {
 public:
@@ -68,6 +72,7 @@ private:
 
     // ── POWER_DIRECT commands ─────────────────────────────────────────────────
     void _cmdStartPower();
+    void _cmdStartRemote();
     void _cmdReset();                              // clear finish latch all channels
     void _cmdSetPower(int chIdx, int pct);         // {"CHx power": N}
     void _cmdSetAccMode(int chIdx, bool enabled);  // {"CHx acc_mode": bool}
