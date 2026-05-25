@@ -167,7 +167,9 @@ void CommandHandler::handle(const uint8_t* payload, unsigned int len) {
 
 // ── _cmdStart ─────────────────────────────────────────────────────────────────
 void CommandHandler::_cmdStart(const char* modeStr, int ch1Profile, int ch2Profile) {
-    if (_ch[0]->isRunning() || _ch[1]->isRunning()) {
+    bool busy = (_ch[0]->isRunning() && _ch[0]->runmode != Runmode::MONITOR) ||
+                (_ch[1]->isRunning() && _ch[1]->runmode != Runmode::MONITOR);
+    if (busy) {
         log_d("[CMD] start ignored — already running (send stop first)");
         return;
     }
@@ -214,7 +216,9 @@ void CommandHandler::_cmdStart(const char* modeStr, int ch1Profile, int ch2Profi
 // Start POWER_DIRECT mode on both channels.
 // Loads saved power params from config into channel state.
 void CommandHandler::_cmdStartPower() {
-    if (_ch[0]->isRunning() || _ch[1]->isRunning()) {
+    bool busy = (_ch[0]->isRunning() && _ch[0]->runmode != Runmode::MONITOR) ||
+                (_ch[1]->isRunning() && _ch[1]->runmode != Runmode::MONITOR);
+    if (busy) {
         log_d("[CMD] start power ignored — already running");
         return;
     }
@@ -300,6 +304,8 @@ void CommandHandler::_cmdStop() {
     profiles.stop(1, *_ch[1]);
     _ch[0]->stop();
     _ch[1]->stop();
+    _ch[0]->runmode = Runmode::MONITOR;
+    _ch[1]->runmode = Runmode::MONITOR;
     _tele->publishEvent("stop");
     _cfg->saveRunState(0, 0, false, false);
 }

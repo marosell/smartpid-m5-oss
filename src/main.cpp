@@ -255,6 +255,8 @@ void setup() {
     // Read initial temperature (populates ch.temp before first telemetry tick)
     ch1.temp = probeReader.readTemp(1);
     ch2.temp = probeReader.readTemp(2);
+    ch1.runmode = Runmode::MONITOR;
+    ch2.runmode = Runmode::MONITOR;
 
     telemetry.begin(cfg, mqttMgr);
     cmdHandler.begin(cfg, mqttMgr, telemetry, ch1, ch2);
@@ -650,6 +652,8 @@ static void serialSetRl1(bool on) {
 static void serialAllOff() {
     ch1.stop();
     ch2.stop();
+    ch1.runmode = Runmode::MONITOR;
+    ch2.runmode = Runmode::MONITOR;
     applyOutputsNow();
 }
 
