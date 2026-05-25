@@ -181,14 +181,23 @@ void DisplayManager::loop(ChannelState& ch1, ChannelState& ch2) {
     bool isRunning = (_screen == UIScreen::RUNNING_CH_DETAIL ||
                       _screen == UIScreen::RUNNING_GRAPH_CH1 ||
                       _screen == UIScreen::RUNNING_GRAPH_CH2 ||
-                      _screen == UIScreen::RUNNING_DUAL_OVERVIEW);
+                      _screen == UIScreen::RUNNING_DUAL_OVERVIEW ||
+                      _screen == UIScreen::POWER_STATUS);
 
     if (isRunning && _needsDataRedraw) {
         _needsDataRedraw = false;
+        if (_screen == UIScreen::POWER_STATUS) {
+            _drawScreen();
+            return;
+        }
         if (_screen == UIScreen::RUNNING_CH_DETAIL) _redrawChDetailValues();
     }
     if (isRunning && _needsTimerRedraw) {
         _needsTimerRedraw = false;
+        if (_screen == UIScreen::POWER_STATUS) {
+            _drawScreen();
+            return;
+        }
         _redrawHeaderTimer();
     }
     if (_needsIconRedraw) {
@@ -216,6 +225,7 @@ UIScreen DisplayManager::_logicalParent() const {
         case UIScreen::RUNNING_GRAPH_CH1:
         case UIScreen::RUNNING_GRAPH_CH2:
         case UIScreen::RUNNING_DUAL_OVERVIEW:
+        case UIScreen::POWER_STATUS:
             return UIScreen::MAIN_MENU;
 
         // Context + running dialogs → running detail
@@ -319,6 +329,7 @@ void DisplayManager::_dispatch(UIEvent ev) {
         case UIScreen::RUNNING_GRAPH_CH1:
         case UIScreen::RUNNING_GRAPH_CH2:      _handleRunningGraph(ev);    break;
         case UIScreen::RUNNING_DUAL_OVERVIEW:  _handleRunningOverview(ev); break;
+        case UIScreen::POWER_STATUS:           _handlePowerStatus(ev);     break;
         case UIScreen::CONTEXT_MENU:           _handleContextMenu(ev);     break;
         case UIScreen::SET_TIMER_DIALOG:       _handleSetTimer(ev);        break;
         case UIScreen::SET_MAXPOWER_DIALOG:    _handleSetMaxPower(ev);     break;
@@ -371,6 +382,7 @@ void DisplayManager::_drawScreen() {
         case UIScreen::RUNNING_GRAPH_CH1:      _drawRunningGraph(0);       break;
         case UIScreen::RUNNING_GRAPH_CH2:      _drawRunningGraph(1);       break;
         case UIScreen::RUNNING_DUAL_OVERVIEW:  _drawRunningOverview();     break;
+        case UIScreen::POWER_STATUS:           _drawPowerStatus();         break;
         case UIScreen::CONTEXT_MENU:           _drawContextMenu();         break;
         case UIScreen::SET_TIMER_DIALOG:       _drawSetTimerDialog();      break;
         case UIScreen::SET_MAXPOWER_DIALOG:    _drawSetMaxPowerDialog();   break;
@@ -650,7 +662,7 @@ void DisplayManager::_handleMainMenu(UIEvent ev) {
                     if (_ch1) { _ch1->runmode = Runmode::POWER_DIRECT; _ch1->paused = false; }
                     if (_ch2) { _ch2->runmode = Runmode::POWER_DIRECT; _ch2->paused = false; }
                     _runScreen = 0;
-                    _goTo(UIScreen::RUNNING_CH_DETAIL);
+                    _goTo(UIScreen::POWER_STATUS);
                     break;
                 case 2: // Monitor
                     if (_ch1) { _ch1->runmode = Runmode::MONITOR; _ch1->paused = false; }
@@ -1061,6 +1073,91 @@ void DisplayManager::_handleRunningOverview(UIEvent ev) {
         case UIEvent::BTN_B:  _goTo(UIScreen::RUNNING_CH_DETAIL); break;
         case UIEvent::BTN_C:  _goTo(UIScreen::CONTEXT_MENU);      break;
         case UIEvent::BTN_A:  _goTo(UIScreen::RUNNING_GRAPH_CH2); break;
+        case UIEvent::TICK_1S: _needsTimerRedraw = true;           break;
+        default: break;
+    }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// POWER STATUS — practical bench/operator screen
+// ════════════════════════════════════════════════════════════════════════════
+
+static void drawPowerStatusBox(int x, int y, int w, int h,
+                               const char* label, const char* value,
+                               uint16_t valueColor) {
+    M5.Display.drawRect(x, y, w, h, COL_DIVIDER);
+    M5.Display.setTextDatum(lgfx::top_left);
+    M5.Display.setTextSize(1);
+    M5.Display.setTextColor(COL_TEXT, COL_BG);
+    M5.Display.drawString(label, x + 6, y + 5);
+    M5.Display.setTextDatum(lgfx::middle_center);
+    M5.Display.setTextSize(2);
+    M5.Display.setTextColor(valueColor, COL_BG);
+    M5.Display.drawString(value, x + w / 2, y + h / 2 + 8);
+}
+
+void DisplayManager::_drawPowerStatus() {
+    if (!_ch1 || !_ch2 || !_cfg) return;
+
+    _drawHeader("Power");
+    _drawFooter("main", "detail", "menu");
+
+    char v[16];
+    char label[20];
+    const bool f = (strcmp(_cfg->temp_unit, "F") == 0);
+
+    snprintf(label, sizeof(label), "T1 %s", f ? "F" : "C");
+    snprintf(v, sizeof(v), "%.1f", _ch1->temp);
+    drawPowerStatusBox(8, 28, 74, 50, label, v, COL_TEMP);
+
+    snprintf(label, sizeof(label), "T2 %s", f ? "F" : "C");
+    snprintf(v, sizeof(v), "%.1f", _ch2->temp);
+    drawPowerStatusBox(8, 86, 74, 50, label, v, COL_TEMP);
+
+    snprintf(v, sizeof(v), "%u%%", (unsigned)_ch1->power_pct);
+    drawPowerStatusBox(92, 28, 66, 50, "DC1", v, _ch1->power_pct ? COL_WARN : COL_TEXT);
+
+    snprintf(v, sizeof(v), "%u%%", (unsigned)_ch2->power_pct);
+    drawPowerStatusBox(92, 86, 66, 50, "DC2", v, _ch2->power_pct ? COL_WARN : COL_TEXT);
+
+    drawPowerStatusBox(168, 28, 66, 50, "RL1",
+                       _ch1->relay_state ? "ON" : "OFF",
+                       _ch1->relay_state ? COL_OK : COL_TEXT);
+
+    drawPowerStatusBox(168, 86, 66, 50, "RL2",
+                       _ch2->relay_state ? "ON" : "OFF",
+                       _ch2->relay_state ? COL_OK : COL_TEXT);
+
+    M5.Display.drawRect(244, 28, 68, 108, COL_DIVIDER);
+    M5.Display.setTextDatum(lgfx::top_center);
+    M5.Display.setTextSize(1);
+    M5.Display.setTextColor(COL_TEXT, COL_BG);
+    M5.Display.drawString("Status", 278, 34);
+
+    M5.Display.setTextDatum(lgfx::top_left);
+    M5.Display.setTextSize(1);
+    M5.Display.setTextColor(WiFi.status() == WL_CONNECTED ? COL_OK : COL_WARN, COL_BG);
+    M5.Display.drawString(WiFi.status() == WL_CONNECTED ? "WiFi OK" : "WiFi --", 252, 58);
+    M5.Display.setTextColor((_mqtt && _mqtt->connected()) ? COL_OK : COL_WARN, COL_BG);
+    M5.Display.drawString((_mqtt && _mqtt->connected()) ? "MQTT OK" : "MQTT --", 252, 78);
+
+    M5.Display.setTextColor(COL_TEXT, COL_BG);
+    M5.Display.drawString(runmodeStr(_ch1->runmode), 252, 104);
+
+    M5.Display.drawFastHLine(8, 150, 304, COL_DIVIDER);
+    M5.Display.setTextDatum(lgfx::top_left);
+    M5.Display.setTextSize(1);
+    M5.Display.setTextColor(COL_TEXT, COL_BG);
+    M5.Display.drawString("Bench outputs:", 10, 158);
+    M5.Display.drawString("DC1/DC2 = SSR drive", 10, 176);
+    M5.Display.drawString("RL1/RL2 = relay contacts", 10, 194);
+}
+
+void DisplayManager::_handlePowerStatus(UIEvent ev) {
+    switch (ev) {
+        case UIEvent::BTN_A:  _goTo(UIScreen::MAIN_MENU);          break;
+        case UIEvent::BTN_B:  _goTo(UIScreen::RUNNING_CH_DETAIL);  break;
+        case UIEvent::BTN_C:  _goTo(UIScreen::CONTEXT_MENU);       break;
         case UIEvent::TICK_1S: _needsTimerRedraw = true;           break;
         default: break;
     }

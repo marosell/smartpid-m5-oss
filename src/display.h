@@ -87,6 +87,7 @@ enum class UIScreen : uint8_t {
     RUNNING_GRAPH_CH1,      // Screen 2a: CH1 time+temp+PWM chart
     RUNNING_GRAPH_CH2,      // Screen 2b: CH2 time+temp+PWM chart
     RUNNING_DUAL_OVERVIEW,  // Screen 3: 2×2 overview grid
+    POWER_STATUS,           // Bench/operator power status: temps, DC outs, relays
 
     // Overlay dialogs (drawn on top of running screens)
     CONTEXT_MENU,           // Pause / Stop / Count up/down / Set Timer / Max Power
@@ -259,6 +260,7 @@ private:
     void _handleRunningChDetail(UIEvent ev);
     void _handleRunningGraph(UIEvent ev);
     void _handleRunningOverview(UIEvent ev);
+    void _handlePowerStatus(UIEvent ev);
     void _handleContextMenu(UIEvent ev);
     void _handleSetTimer(UIEvent ev);
     void _handleSetMaxPower(UIEvent ev);
@@ -278,6 +280,7 @@ private:
     void _drawRunningChDetail();
     void _drawRunningGraph(int chIdx);
     void _drawRunningOverview();
+    void _drawPowerStatus();
     void _drawContextMenu();
     void _drawSetTimerDialog();
     void _drawSetMaxPowerDialog();
