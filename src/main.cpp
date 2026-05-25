@@ -64,6 +64,7 @@ static void forceProbeSample();
 static void applyOutputsNow();
 static void serialSetDc1(int pct);
 static void serialSetRl1(bool on);
+static void serialSetRl2(bool on);
 static void serialAllOff();
 
 // ── Per-channel state (Phase 2) ───────────────────────────────────────────────
@@ -554,6 +555,16 @@ static void handleSerialCommand(String line) {
         printBenchStatus("rl1 off");
         return;
     }
+    if (lower == "rl2 on") {
+        serialSetRl2(true);
+        printBenchStatus("rl2 on");
+        return;
+    }
+    if (lower == "rl2 off") {
+        serialSetRl2(false);
+        printBenchStatus("rl2 off");
+        return;
+    }
     if (line[0] == '{') {
         cmdHandler.handle((const uint8_t*)line.c_str(), line.length());
         applyOutputsNow();
@@ -571,7 +582,8 @@ static void printSerialHelp() {
     Serial.println("  power start           send OEM JSON {\"start\":\"power\"}");
     Serial.println("  power <0-100>         serial-only DC1 duty command");
     Serial.println("  dc1 <0-100>           same as power <0-100>");
-    Serial.println("  rl1 on|off            serial-only RL1 command");
+    Serial.println("  rl1 on|off            serial-only RL1 command, DC outputs held at 0");
+    Serial.println("  rl2 on|off            serial-only RL2 command, DC outputs held at 0");
     Serial.println("  alloff                stop both channels and force outputs off");
     Serial.println("  {json...}             pass OEM-format JSON to MQTT command handler");
 }
@@ -644,8 +656,25 @@ static void serialSetRl1(bool on) {
         ch1.paused = false;
         cmdHandler._applyPowerParams(1);
     }
+    ch1.distill_power_pct = 0;
+    ch1.power_pct = 0;
+    ch1.accelPhaseActive = false;
     ch1.relay_mode = RelayMode::REMOTE;
     ch1.relay_state = on;
+    applyOutputsNow();
+}
+
+static void serialSetRl2(bool on) {
+    if (ch2.runmode != Runmode::POWER_DIRECT) {
+        ch2.runmode = Runmode::POWER_DIRECT;
+        ch2.paused = false;
+        cmdHandler._applyPowerParams(2);
+    }
+    ch2.distill_power_pct = 0;
+    ch2.power_pct = 0;
+    ch2.accelPhaseActive = false;
+    ch2.relay_mode = RelayMode::REMOTE;
+    ch2.relay_state = on;
     applyOutputsNow();
 }
 
