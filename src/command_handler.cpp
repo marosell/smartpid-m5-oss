@@ -63,9 +63,11 @@ void CommandHandler::handle(const uint8_t* payload, unsigned int len) {
         _cmdStop();
     }
 
-    // ── {"pause": true} ───────────────────────────────────────────────────────
-    if (doc["pause"].is<bool>() && doc["pause"].as<bool>()) {
-        _cmdPause();
+    // ── {"pause": true/false} ────────────────────────────────────────────────
+    // OEM PRO schema uses pause=false as resume; resume=true is also accepted.
+    if (doc["pause"].is<bool>()) {
+        if (doc["pause"].as<bool>()) _cmdPause();
+        else _cmdResume();
     }
 
     // ── {"resume": true} ──────────────────────────────────────────────────────
