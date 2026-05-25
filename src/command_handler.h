@@ -55,6 +55,7 @@ private:
     unsigned long _lastTickMs = 0;
 
     ChannelState* _channel(int idx);   // 1-based, returns nullptr on bad index
+    void _applyRuntimeOutputs();
 
     // ── OEM commands ──────────────────────────────────────────────────────────
     void _cmdStart(const char* mode, int ch1Profile, int ch2Profile);

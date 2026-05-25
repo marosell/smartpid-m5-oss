@@ -1,6 +1,7 @@
 // command_handler.cpp — MQTT command parser and dispatcher
 
 #include "command_handler.h"
+#include "output_control.h"
 #include "profiles.h"
 #include <ArduinoJson.h>
 
@@ -163,8 +164,18 @@ void CommandHandler::handle(const uint8_t* payload, unsigned int len) {
     if (!doc["CH1 cycle_ms"].isNull()) _cmdSetRelayCycleMs(1, doc["CH1 cycle_ms"].as<int>());
     if (!doc["CH2 cycle_ms"].isNull()) _cmdSetRelayCycleMs(2, doc["CH2 cycle_ms"].as<int>());
 
+    // After any command, drive outputs once so POWER_DIRECT relay/power changes
+    // take effect without waiting for the next sample interval.
+    _applyRuntimeOutputs();
+
     // After any command, force a telemetry tick so caller sees new state immediately
     _tele->forceTick();
+}
+
+void CommandHandler::_applyRuntimeOutputs() {
+    if (!_ch[0] || !_ch[1]) return;
+    outputCtrl.update(*_ch[0], *_ch[1]);
+    outputCtrl.pwmLoop();
 }
 
 // ── _cmdStart ─────────────────────────────────────────────────────────────────

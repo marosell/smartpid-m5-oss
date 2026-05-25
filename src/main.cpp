@@ -63,6 +63,7 @@ static void printBenchStatus(const char* reason);
 static void forceProbeSample();
 static void applyOutputsNow();
 static void serialSetDc1(int pct);
+static void serialSetDc2(int pct);
 static void serialSetRl1(bool on);
 static void serialSetRl2(bool on);
 static void serialAllOff();
@@ -553,10 +554,17 @@ static void handleSerialCommand(String line) {
         printBenchStatus("power");
         return;
     }
-    if (lower.startsWith("dc1 ")) {
-        int pct = lower.substring(4).toInt();
+    if (lower.startsWith("dc1 ") || lower.startsWith("power1 ")) {
+        int pct = lower.substring(lower.indexOf(' ') + 1).toInt();
         serialSetDc1(pct);
         printBenchStatus("dc1");
+        return;
+    }
+    if (lower.startsWith("dc2 ") || lower.startsWith("power2 ")) {
+        int pct = lower.substring(4).toInt();
+        if (lower.startsWith("power2 ")) pct = lower.substring(7).toInt();
+        serialSetDc2(pct);
+        printBenchStatus("dc2");
         return;
     }
     if (lower == "rl1 on" || lower == "relay on") {
@@ -595,7 +603,8 @@ static void printSerialHelp() {
     Serial.println("  monitor               send OEM JSON {\"start\":\"monitor\"}");
     Serial.println("  power start           send OEM JSON {\"start\":\"power\"}");
     Serial.println("  power <0-100>         serial-only DC1 duty command");
-    Serial.println("  dc1 <0-100>           same as power <0-100>");
+    Serial.println("  dc1|power1 <0-100>    serial-only DC1 duty command");
+    Serial.println("  dc2|power2 <0-100>    serial-only DC2 duty command");
     Serial.println("  rl1 on|off            serial-only RL1 command, DC outputs held at 0");
     Serial.println("  rl2 on|off            serial-only RL2 command, DC outputs held at 0");
     Serial.println("  out <0-3> <0|1>       raw slot test; selected slot only");
@@ -667,6 +676,21 @@ static void serialSetDc1(int pct) {
     ch1.accelPhaseActive = false;
     ch1.distill_power_pct = (uint8_t)pct;
     ch1.power_pct = (uint8_t)pct;
+    applyOutputsNow();
+}
+
+static void serialSetDc2(int pct) {
+    pct = constrain(pct, 0, 100);
+    if (ch2.runmode != Runmode::POWER_DIRECT) {
+        ch2.runmode = Runmode::POWER_DIRECT;
+        ch2.paused = false;
+        cmdHandler._applyPowerParams(2);
+    }
+    ch2.finishLatch = false;
+    ch2.watchdogFired = false;
+    ch2.accelPhaseActive = false;
+    ch2.distill_power_pct = (uint8_t)pct;
+    ch2.power_pct = (uint8_t)pct;
     applyOutputsNow();
 }
 
