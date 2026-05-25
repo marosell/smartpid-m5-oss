@@ -127,6 +127,10 @@ public:
     // Returns raw count or INT16_MIN on error.
     int16_t readRaw3WireComp();
 
+    // Read using an OEM/decompiled config byte directly.
+    // Returns 0xffff on I2C/conversion failure.
+    uint16_t readRawConfig(uint8_t config);
+
     // Convert raw ADC count to PT100 resistance in ohms.
     // Ratiometric: R_probe = (raw / FULL_SCALE) * R_ref
     float rawToOhms(int16_t raw);

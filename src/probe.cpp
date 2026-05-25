@@ -24,6 +24,64 @@
 
 ProbeReader probeReader;
 
+struct Pt100Route {
+    uint8_t mask;
+    uint8_t valueCfg;
+    float scale;
+};
+
+static const Pt100Route kPt100Routes[2] = {
+    {0x03, 0xa0, 1.50f},
+    {0x0c, 0xd0, 3.03f},
+};
+
+static void setProbeMask(uint8_t mask) {
+    for (uint8_t bit = 0; bit < 4; ++bit) {
+        ioExpander.setOutputBit(bit, (mask & (1u << bit)) != 0);
+    }
+}
+
+static void restoreProbeExcitation() {
+    ioExpander.configureProbeExcitation(cfg.ch1_probe_type, IO_EXP_BIT_CH1_MAIN, IO_EXP_BIT_CH1_COMP);
+    ioExpander.configureProbeExcitation(cfg.ch2_probe_type, IO_EXP_BIT_CH2_MAIN, IO_EXP_BIT_CH2_COMP);
+}
+
+static float pt100TempFromRaw(uint16_t raw, float scale) {
+    if (raw > 0xff00u) return NAN;
+
+    uint32_t scaled = (uint32_t)((float)raw * scale + 0.5f);
+    if (scaled >= 0xffffu) scaled = 0xfffeu;
+
+    const float ratio = (float)scaled / 65535.0f;
+    if (ratio <= 0.0f || ratio >= 1.0f) return NAN;
+
+    const float rPt100 = (ADS1119_REF_OHMS * ratio) / (1.0f - ratio);
+    const float tempC = (rPt100 - 100.0f) / 0.385f;
+    if (tempC < -200.0f || tempC > 850.0f) return NAN;
+    return tempC;
+}
+
+static float readPt100OemRoute(int channel) {
+    if (channel < 1 || channel > 2) return NAN;
+
+    const Pt100Route& route = kPt100Routes[channel - 1];
+    setProbeMask(route.mask);
+    delay(20);
+
+    uint16_t raw = ads1119.readRawConfig(route.valueCfg);
+    float tempC = pt100TempFromRaw(raw, route.scale);
+    restoreProbeExcitation();
+
+    if (isnan(tempC)) {
+        log_d("[PROBE] CH%d PT100 OEM route: cfg=0x%02X raw=%u scale=%.2f -> NaN",
+              channel, route.valueCfg, raw, route.scale);
+    } else {
+        log_d("[PROBE] CH%d PT100 OEM route: cfg=0x%02X raw=%u scale=%.2f -> %.2fC",
+              channel, route.valueCfg, raw, route.scale, tempC);
+    }
+    return tempC;
+}
+
 // ── begin ─────────────────────────────────────────────────────────────────────
 void ProbeReader::begin() {
     // NTC: configure ESP32 ADC
@@ -91,7 +149,7 @@ float ProbeReader::readTemp(int channel) {
 
     // PT100_2W: 2-wire RTD via ADS1119 differential (AIN0-AIN1 or AIN2-AIN3).
     if (pt == ProbeType::PT100_2W) {
-        float tempC = ads1119.readTempC(channel);
+        float tempC = readPt100OemRoute(channel);
         if (isnan(tempC)) return PROBE_SENTINEL_VALUE;
         float cal    = (channel == 1) ? cfg.ch1_probe_cal : cfg.ch2_probe_cal;
         return _toDeviceUnit(tempC) + cal;
@@ -99,7 +157,7 @@ float ProbeReader::readTemp(int channel) {
 
     // PT100_3W: 3-wire RTD with lead compensation via AIN1-AIN2 differential.
     if (pt == ProbeType::PT100_3W) {
-        float tempC = ads1119.readTempC_3wire(channel);
+        float tempC = readPt100OemRoute(channel);
         if (isnan(tempC)) return PROBE_SENTINEL_VALUE;
         float cal    = (channel == 1) ? cfg.ch1_probe_cal : cfg.ch2_probe_cal;
         return _toDeviceUnit(tempC) + cal;

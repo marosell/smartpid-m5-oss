@@ -177,6 +177,26 @@ int16_t ADS1119::readRaw3WireComp() {
     return raw;
 }
 
+// ── readRawConfig ─────────────────────────────────────────────────────────────
+// Direct OEM config-byte conversion path used by the carrier's PT100 circuit.
+uint16_t ADS1119::readRawConfig(uint8_t config) {
+    if (!_startConversion(config)) {
+        log_d("[ADS1119] cfg=0x%02X: startConversion failed", config);
+        return 0xffffu;
+    }
+    delay(80);
+
+    uint8_t buf[2];
+    if (!i2c_read(ADS1119_CMD_RDATA, buf, 2)) {
+        log_d("[ADS1119] cfg=0x%02X: RDATA read failed", config);
+        return 0xffffu;
+    }
+
+    uint16_t raw = (uint16_t)((buf[0] << 8) | buf[1]);
+    log_d("[ADS1119] cfg=0x%02X raw: %u (0x%04X)", config, raw, raw);
+    return raw;
+}
+
 // ── rawToOhms ─────────────────────────────────────────────────────────────────
 // Ratiometric conversion: R_probe = (raw / FULL_SCALE) * R_ref
 // FULL_SCALE = 32768 (2^15) for signed 16-bit with ×1 gain.
