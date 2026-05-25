@@ -56,6 +56,15 @@ static void setupWiFi();
 static void onMQTTMessage(const String& topic, const uint8_t* payload, unsigned int len);
 static void updateDisplay();
 static void parseAndSaveProfile(int slotN, const uint8_t* payload, unsigned int len);
+static void handleSerialInput();
+static void handleSerialCommand(String line);
+static void printSerialHelp();
+static void printBenchStatus(const char* reason);
+static void forceProbeSample();
+static void applyOutputsNow();
+static void serialSetDc1(int pct);
+static void serialSetRl1(bool on);
+static void serialAllOff();
 
 // ── Per-channel state (Phase 2) ───────────────────────────────────────────────
 static ChannelState ch1, ch2;
@@ -123,6 +132,7 @@ static void otaBootWatchdogClear() {
 // ── Global state ──────────────────────────────────────────────────────────────
 static bool          gMqttWasConnected  = false;
 static String        gStatusLine        = "booting...";
+static String        gSerialLine;
 
 // Deferred auto-resume state.
 // On boot with saved runmode: we do NOT immediately apply channel states.
@@ -295,6 +305,7 @@ void setup() {
 // ── loop() ────────────────────────────────────────────────────────────────────
 void loop() {
     M5.update();
+    handleSerialInput();
     mqttMgr.loop();
 
     // Phase 4: OTA
@@ -467,6 +478,179 @@ static void saveWiFiCreds(const char* ssid, const char* pass) {
     prefs.putString("wifi_pass", pass);
     prefs.end();
     log_i("WiFi credentials saved to NVS");
+}
+
+// ── Serial bench console ─────────────────────────────────────────────────────
+// USB-only diagnostics and manual I/O controls. These commands deliberately do
+// not change the MQTT command schema, which remains OEM-compatible.
+static void handleSerialInput() {
+    while (Serial.available() > 0) {
+        char c = (char)Serial.read();
+        if (c == '\r') continue;
+        if (c == '\n') {
+            String line = gSerialLine;
+            gSerialLine = "";
+            line.trim();
+            if (line.length() > 0) handleSerialCommand(line);
+            continue;
+        }
+        if (gSerialLine.length() < 512) gSerialLine += c;
+        else gSerialLine = "";
+    }
+}
+
+static void handleSerialCommand(String line) {
+    String lower = line;
+    lower.toLowerCase();
+
+    if (lower == "help" || lower == "?") {
+        printSerialHelp();
+        return;
+    }
+    if (lower == "sensors" || lower == "sensor" || lower == "temps" || lower == "status") {
+        forceProbeSample();
+        printBenchStatus("sensors");
+        return;
+    }
+    if (lower == "monitor") {
+        const char* json = "{\"start\":\"monitor\"}";
+        cmdHandler.handle((const uint8_t*)json, strlen(json));
+        printBenchStatus("monitor");
+        return;
+    }
+    if (lower == "power start") {
+        const char* json = "{\"start\":\"power\"}";
+        cmdHandler.handle((const uint8_t*)json, strlen(json));
+        applyOutputsNow();
+        printBenchStatus("power start");
+        return;
+    }
+    if (lower == "alloff" || lower == "all off" || lower == "off") {
+        serialAllOff();
+        printBenchStatus("alloff");
+        return;
+    }
+    if (lower.startsWith("power ")) {
+        int pct = lower.substring(6).toInt();
+        serialSetDc1(pct);
+        printBenchStatus("power");
+        return;
+    }
+    if (lower.startsWith("dc1 ")) {
+        int pct = lower.substring(4).toInt();
+        serialSetDc1(pct);
+        printBenchStatus("dc1");
+        return;
+    }
+    if (lower == "rl1 on" || lower == "relay on") {
+        serialSetRl1(true);
+        printBenchStatus("rl1 on");
+        return;
+    }
+    if (lower == "rl1 off" || lower == "relay off") {
+        serialSetRl1(false);
+        printBenchStatus("rl1 off");
+        return;
+    }
+    if (line[0] == '{') {
+        cmdHandler.handle((const uint8_t*)line.c_str(), line.length());
+        applyOutputsNow();
+        printBenchStatus("json");
+        return;
+    }
+
+    Serial.printf("{\"type\":\"error\",\"message\":\"unknown command\",\"command\":\"%s\"}\n", line.c_str());
+}
+
+static void printSerialHelp() {
+    Serial.println("Serial bench commands:");
+    Serial.println("  sensors/status        read probes now and print JSON");
+    Serial.println("  monitor               send OEM JSON {\"start\":\"monitor\"}");
+    Serial.println("  power start           send OEM JSON {\"start\":\"power\"}");
+    Serial.println("  power <0-100>         serial-only DC1 duty command");
+    Serial.println("  dc1 <0-100>           same as power <0-100>");
+    Serial.println("  rl1 on|off            serial-only RL1 command");
+    Serial.println("  alloff                stop both channels and force outputs off");
+    Serial.println("  {json...}             pass OEM-format JSON to MQTT command handler");
+}
+
+static void printBenchStatus(const char* reason) {
+    JsonDocument doc;
+    doc["type"] = "bench_status";
+    doc["reason"] = reason;
+    doc["time"] = millis();
+    doc["unit"] = cfg.temp_unit;
+    doc["wifi"] = (WiFi.status() == WL_CONNECTED);
+    doc["ip"] = WiFi.localIP().toString();
+    doc["mqtt"] = mqttMgr.connected();
+
+    JsonObject c1 = doc["ch1"].to<JsonObject>();
+    c1["temp"] = ch1.temp;
+    c1["valid"] = !isnan(ch1.temp) && ch1.temp < (PROBE_SENTINEL_VALUE / 2.0f);
+    c1["probe"] = (uint8_t)cfg.ch1_probe_type;
+    c1["sp"] = ch1.sp;
+    c1["runmode"] = runmodeStr(ch1.runmode);
+    c1["dc1_power"] = ch1.power_pct;
+    c1["relay_mode"] = relayModeStr(ch1.relay_mode);
+    c1["rl1"] = ch1.relay_state;
+
+    JsonObject c2 = doc["ch2"].to<JsonObject>();
+    c2["temp"] = ch2.temp;
+    c2["valid"] = !isnan(ch2.temp) && ch2.temp < (PROBE_SENTINEL_VALUE / 2.0f);
+    c2["probe"] = (uint8_t)cfg.ch2_probe_type;
+    c2["sp"] = ch2.sp;
+    c2["runmode"] = runmodeStr(ch2.runmode);
+    c2["dc2_power"] = ch2.power_pct;
+    c2["relay_mode"] = relayModeStr(ch2.relay_mode);
+    c2["rl2"] = ch2.relay_state;
+
+    serializeJson(doc, Serial);
+    Serial.println();
+}
+
+static void forceProbeSample() {
+    ch1.temp = probeReader.readTemp(1);
+    ch2.temp = probeReader.readTemp(2);
+    display.notifyDataUpdate();
+}
+
+static void applyOutputsNow() {
+    outputCtrl.update(ch1, ch2);
+    outputCtrl.pwmLoop();
+    telemetry.forceTick();
+    display.notifyDataUpdate();
+}
+
+static void serialSetDc1(int pct) {
+    pct = constrain(pct, 0, 100);
+    if (ch1.runmode != Runmode::POWER_DIRECT) {
+        ch1.runmode = Runmode::POWER_DIRECT;
+        ch1.paused = false;
+        cmdHandler._applyPowerParams(1);
+    }
+    ch1.finishLatch = false;
+    ch1.watchdogFired = false;
+    ch1.accelPhaseActive = false;
+    ch1.distill_power_pct = (uint8_t)pct;
+    ch1.power_pct = (uint8_t)pct;
+    applyOutputsNow();
+}
+
+static void serialSetRl1(bool on) {
+    if (ch1.runmode != Runmode::POWER_DIRECT) {
+        ch1.runmode = Runmode::POWER_DIRECT;
+        ch1.paused = false;
+        cmdHandler._applyPowerParams(1);
+    }
+    ch1.relay_mode = RelayMode::REMOTE;
+    ch1.relay_state = on;
+    applyOutputsNow();
+}
+
+static void serialAllOff() {
+    ch1.stop();
+    ch2.stop();
+    applyOutputsNow();
 }
 
 // ── onMQTTMessage() ───────────────────────────────────────────────────────────
