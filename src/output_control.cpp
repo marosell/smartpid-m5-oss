@@ -261,8 +261,9 @@ void OutputController::_driveRelay(ChannelState& ch, int relayPin) {
         }
     }
 
-    // Only write the pin if state changed (reduce relay wear)
-    if (newState != ch.relay_state) {
+    // In REMOTE mode ch.relay_state is both the requested state and the
+    // telemetry state, so write it through even when the value already matches.
+    if (ch.relay_mode == RelayMode::REMOTE || newState != ch.relay_state) {
         digitalWrite(relayPin, newState ? HIGH : LOW);
         ch.relay_state = newState;
         log_d("[OUT] relay pin %d → %s (mode=%s)",
