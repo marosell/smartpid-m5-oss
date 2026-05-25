@@ -2,15 +2,15 @@
 // output_control.h — Two-channel output driver: PID, On/Off, and POWER_DIRECT
 //
 // ── GPIO assignments ──────────────────────────────────────────────────────────
-// Physical terminal mapping confirmed by bench test (Phase 3):
-//   GPIO 12 → RL1  (relay)              — CH1 cooling / solenoid divert
-//   GPIO 13 → RL2  (relay)              — CH2 heating+cooling
-//   GPIO 26 → DC OUT 1 (time-prop PWM)  — CH1 heating (primary boiler control)
-//   GPIO 16 → DC OUT 2 (time-prop PWM)  — CH2 / spare
+// Physical terminal mapping confirmed by bench test (2026-05-25):
+//   GPIO 12 → DC OUT 1 (time-prop PWM)  — CH1 heating (primary boiler control)
+//   GPIO 13 → DC OUT 2 (time-prop PWM)  — CH2 / spare
+//   GPIO 26 → RL1  (relay)              — CH1 cooling / solenoid divert
+//   GPIO 16 → RL2  (relay)              — CH2 heating+cooling
 //
 // ⚠ GPIO 12 STRAPPING PIN WARNING:
 // GPIO 12 (MTDI) held HIGH during reset configures flash for 1.8V → hard fault.
-// The relay driver MUST hold GPIO 12 LOW during reset.  Verify on scope at bench.
+// This is DC OUT 1 on this board. Keep it LOW during reset/boot.
 //
 // ── DC OUT voltage ────────────────────────────────────────────────────────────
 // DC OUT terminals measure 4.82V (carrier board AC-derived supply, NOT 3.3V).
@@ -29,15 +29,15 @@
 #include "config.h"
 
 // ── GPIO pin constants ────────────────────────────────────────────────────────
-#define GPIO_CH0_OUT  12   // RL1  — STRAPPING PIN, see warning
-#define GPIO_CH1_OUT  13   // RL2
-#define GPIO_CH2_OUT  26   // DC OUT 1 (PWM CH1)
-#define GPIO_CH3_OUT  16   // DC OUT 2 (PWM CH2)
+#define GPIO_CH0_OUT  12   // DC OUT 1 — STRAPPING PIN, see warning
+#define GPIO_CH1_OUT  13   // DC OUT 2
+#define GPIO_CH2_OUT  26   // RL1
+#define GPIO_CH3_OUT  16   // RL2
 
-#define GPIO_DCOUT1   GPIO_CH2_OUT   // CH1 heating (PID/POWER_DIRECT)
-#define GPIO_RL1      GPIO_CH0_OUT   // CH1 cooling / relay (POWER_DIRECT relay)
-#define GPIO_RL2      GPIO_CH1_OUT   // CH2 heating+cooling relay
-#define GPIO_DCOUT2   GPIO_CH3_OUT   // CH2 heating alt / POWER_DIRECT DC OUT
+#define GPIO_DCOUT1   GPIO_CH0_OUT   // CH1 heating (PID/POWER_DIRECT)
+#define GPIO_DCOUT2   GPIO_CH1_OUT   // CH2 heating alt / POWER_DIRECT DC OUT
+#define GPIO_RL1      GPIO_CH2_OUT   // CH1 cooling / relay (POWER_DIRECT relay)
+#define GPIO_RL2      GPIO_CH3_OUT   // CH2 heating+cooling relay
 
 #define PWM_PERIOD_DEFAULT_MS  3500
 

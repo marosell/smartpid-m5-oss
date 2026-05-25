@@ -1,17 +1,25 @@
 # Wiring Reference
 
-## GPIO Output Assignments (confirmed from Ghidra hardware init FUN_400d375c)
+## GPIO Output Assignments
+
+GPIO output slots are from Ghidra hardware init `FUN_400d375c`; physical
+terminals were confirmed by raw serial bench testing on 2026-05-25.
 
 | GPIO | Channel index | Physical terminal | Type |
 |---|---|---|---|
-| GPIO 12 | Channel 0 | TBD — confirm via bench test | Digital relay |
-| GPIO 13 | Channel 1 | TBD — confirm via bench test | Digital relay |
-| GPIO 26 | Channel 2 | TBD — confirm via bench test | PWM / DC OUT |
-| GPIO 16 | Channel 3 | TBD — confirm via bench test | PWM / DC OUT |
+| GPIO 12 | Channel 0 | DC OUT 1 | PWM / DC OUT |
+| GPIO 13 | Channel 1 | DC OUT 2 | PWM / DC OUT |
+| GPIO 26 | Channel 2 | RL1 | Digital relay |
+| GPIO 16 | Channel 3 | RL2 | Digital relay |
 
-The 4 GPIO pins are confirmed. The exact mapping of each GPIO to the labeled
-terminals on the carrier board (DC OUT 1, DC OUT 2, RL1, RL2) requires
-physical bench testing with a voltmeter during Phase 3.
+Bench commands used:
+
+| Command | Confirmed result |
+|---|---|
+| `out 0 1` | DC OUT 1 measured ~4.6V |
+| `out 1 1` | DC OUT 2 measured ~4.6V |
+| `out 2 1` | RL1 energized |
+| `out 3 1` | RL2 inferred from remaining relay slot |
 
 **DC OUT path:** Channel pin is overridden to 0xff at runtime after HW Setup loads,
 routing output through LEDC hardware timer (FUN_400defac). PWM period: 3500ms.

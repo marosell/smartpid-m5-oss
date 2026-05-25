@@ -66,6 +66,11 @@ static void serialSetDc1(int pct);
 static void serialSetRl1(bool on);
 static void serialSetRl2(bool on);
 static void serialAllOff();
+static bool serialHandleRawOut(const String& lower);
+static void serialRawAllOff(bool leaveOverride);
+static void serialRawSetSlot(int slot, bool on, bool exclusive);
+static void serialRawMask(uint8_t mask);
+static int serialRawPinForSlot(int slot);
 
 // ── Per-channel state (Phase 2) ───────────────────────────────────────────────
 static ChannelState ch1, ch2;
@@ -134,6 +139,7 @@ static void otaBootWatchdogClear() {
 static bool          gMqttWasConnected  = false;
 static String        gStatusLine        = "booting...";
 static String        gSerialLine;
+static bool          gRawOutputOverride = false;
 
 // Deferred auto-resume state.
 // On boot with saved runmode: we do NOT immediately apply channel states.
@@ -323,12 +329,16 @@ void loop() {
         ch1.temp = probeReader.readTemp(1);
         ch2.temp = probeReader.readTemp(2);
         // PID + output update (Phase 3)
-        outputCtrl.update(ch1, ch2);
+        if (!gRawOutputOverride) {
+            outputCtrl.update(ch1, ch2);
+        }
         // Notify display: new temp/SP/PWM data available
         display.notifyDataUpdate();
     }
     // Time-proportioning PWM must run every loop() iteration
-    outputCtrl.pwmLoop();
+    if (!gRawOutputOverride) {
+        outputCtrl.pwmLoop();
+    }
 
     cmdHandler.tick();
     telemetry.loop(ch1, ch2);
@@ -533,6 +543,10 @@ static void handleSerialCommand(String line) {
         printBenchStatus("alloff");
         return;
     }
+    if (serialHandleRawOut(lower)) {
+        printBenchStatus("out");
+        return;
+    }
     if (lower.startsWith("power ")) {
         int pct = lower.substring(6).toInt();
         serialSetDc1(pct);
@@ -584,6 +598,10 @@ static void printSerialHelp() {
     Serial.println("  dc1 <0-100>           same as power <0-100>");
     Serial.println("  rl1 on|off            serial-only RL1 command, DC outputs held at 0");
     Serial.println("  rl2 on|off            serial-only RL2 command, DC outputs held at 0");
+    Serial.println("  out <0-3> <0|1>       raw slot test; selected slot only");
+    Serial.println("  out set <0-3> <0|1>   raw slot test; leave other slots unchanged");
+    Serial.println("  out mask <0-15>       raw slot bitmask; bit0=slot0");
+    Serial.println("  out all 0|1           raw all off/on; all off exits override");
     Serial.println("  alloff                stop both channels and force outputs off");
     Serial.println("  {json...}             pass OEM-format JSON to MQTT command handler");
 }
@@ -597,6 +615,7 @@ static void printBenchStatus(const char* reason) {
     doc["wifi"] = (WiFi.status() == WL_CONNECTED);
     doc["ip"] = WiFi.localIP().toString();
     doc["mqtt"] = mqttMgr.connected();
+    doc["raw_output_override"] = gRawOutputOverride;
 
     JsonObject c1 = doc["ch1"].to<JsonObject>();
     c1["temp"] = ch1.temp;
@@ -629,6 +648,7 @@ static void forceProbeSample() {
 }
 
 static void applyOutputsNow() {
+    gRawOutputOverride = false;
     outputCtrl.update(ch1, ch2);
     outputCtrl.pwmLoop();
     telemetry.forceTick();
@@ -683,7 +703,97 @@ static void serialAllOff() {
     ch2.stop();
     ch1.runmode = Runmode::MONITOR;
     ch2.runmode = Runmode::MONITOR;
+    serialRawAllOff(false);
     applyOutputsNow();
+}
+
+static bool serialHandleRawOut(const String& lower) {
+    int slot = -1;
+    int on = -1;
+    int mask = -1;
+
+    if (sscanf(lower.c_str(), "out all %d", &on) == 1 && (on == 0 || on == 1)) {
+        if (on) {
+            serialRawMask(0x0f);
+        } else {
+            serialRawAllOff(false);
+        }
+        return true;
+    }
+
+    if (sscanf(lower.c_str(), "out mask %i", &mask) == 1 && mask >= 0 && mask <= 15) {
+        serialRawMask((uint8_t)mask);
+        return true;
+    }
+
+    if (sscanf(lower.c_str(), "out set %d %d", &slot, &on) == 2 &&
+        slot >= 0 && slot < 4 && (on == 0 || on == 1)) {
+        serialRawSetSlot(slot, on != 0, false);
+        return true;
+    }
+
+    if (sscanf(lower.c_str(), "out %d %d", &slot, &on) == 2 &&
+        slot >= 0 && slot < 4 && (on == 0 || on == 1)) {
+        serialRawSetSlot(slot, on != 0, true);
+        return true;
+    }
+
+    return false;
+}
+
+static void serialRawAllOff(bool leaveOverride) {
+    const int pins[] = {GPIO_CH0_OUT, GPIO_CH1_OUT, GPIO_CH2_OUT, GPIO_CH3_OUT};
+    for (int pin : pins) {
+        pinMode(pin, OUTPUT);
+        digitalWrite(pin, LOW);
+    }
+    gRawOutputOverride = leaveOverride;
+    ch1.power_pct = 0;
+    ch2.power_pct = 0;
+    ch1.relay_state = false;
+    ch2.relay_state = false;
+}
+
+static void serialRawSetSlot(int slot, bool on, bool exclusive) {
+    if (exclusive) {
+        serialRawAllOff(true);
+    }
+    int pin = serialRawPinForSlot(slot);
+    if (pin < 0) return;
+
+    ch1.stop();
+    ch2.stop();
+    ch1.runmode = Runmode::MONITOR;
+    ch2.runmode = Runmode::MONITOR;
+
+    gRawOutputOverride = true;
+    pinMode(pin, OUTPUT);
+    digitalWrite(pin, on ? HIGH : LOW);
+}
+
+static void serialRawMask(uint8_t mask) {
+    ch1.stop();
+    ch2.stop();
+    ch1.runmode = Runmode::MONITOR;
+    ch2.runmode = Runmode::MONITOR;
+
+    gRawOutputOverride = true;
+    for (int slot = 0; slot < 4; ++slot) {
+        int pin = serialRawPinForSlot(slot);
+        if (pin < 0) continue;
+        pinMode(pin, OUTPUT);
+        digitalWrite(pin, (mask & (1u << slot)) ? HIGH : LOW);
+    }
+}
+
+static int serialRawPinForSlot(int slot) {
+    switch (slot) {
+        case 0: return GPIO_CH0_OUT;
+        case 1: return GPIO_CH1_OUT;
+        case 2: return GPIO_CH2_OUT;
+        case 3: return GPIO_CH3_OUT;
+        default: return -1;
+    }
 }
 
 // ── onMQTTMessage() ───────────────────────────────────────────────────────────
