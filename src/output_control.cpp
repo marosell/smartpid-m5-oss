@@ -22,6 +22,20 @@ OutputController::~OutputController() {
     delete _pid2;
 }
 
+static uint32_t powerTimerRemainingSeconds(const ChannelState& ch) {
+    if (ch.timerExpired) return 0;
+    if (!ch.timerTriggered) return ch.timer_duration_s;
+    uint32_t elapsed = (uint32_t)((millis() - ch.timerStartMs) / 1000UL);
+    return elapsed >= ch.timer_duration_s ? 0 : (ch.timer_duration_s - elapsed);
+}
+
+static void freezePowerTimer(ChannelState& ch) {
+    if (ch.timer_duration_s == 0 || ch.timerFrozen) return;
+    ch.timerFrozenRemaining_s = powerTimerRemainingSeconds(ch);
+    ch.timerFrozen = true;
+    if (ch.timerFrozenRemaining_s == 0) ch.timerExpired = true;
+}
+
 // ── begin ─────────────────────────────────────────────────────────────────────
 void OutputController::begin(Config& cfg) {
     _cfg = &cfg;
@@ -97,38 +111,44 @@ void OutputController::update(ChannelState& ch1, ChannelState& ch2) {
 void OutputController::_updatePowerDirect(int chIdx, ChannelState& ch,
                                            int dcOutPin, int relayPin,
                                            PwmState& pwmState) {
-    // 1. Probe sentinel: force all off, do NOT set finish latch
-    if (ch.temp >= (PROBE_SENTINEL_VALUE / 2.0f)) {
+    const bool dcEnabled = (chIdx == 1) ? _cfg->pwr_dc1_enabled : _cfg->pwr_dc2_enabled;
+
+    // 1. Probe invalid/sentinel: force all off, do NOT set finish latch
+    if (!tempInProcessRange(ch.temp, _cfg->temp_unit)) {
         pwmState.dutyCurrent = 0;
         if (pwmState.pinHigh) {
             digitalWrite(dcOutPin, LOW);
             pwmState.pinHigh = false;
         }
-        if (ch.relay_state) {
-            digitalWrite(relayPin, LOW);
-            ch.relay_state = false;
-        }
+        digitalWrite(relayPin, LOW);
+        ch.relay_state = false;
         ch.power_pct = 0;
         log_w("[OUT] CH%d PROBE DISCONNECTED (temp=%.0f) — outputs forced OFF",
               chIdx, ch.temp);
         return;
     }
 
-    // 2. Finish latch: detect dFSP crossing and latch all outputs off
-    if (ch.dFSP > 0.0f && !ch.finishLatch && ch.temp >= ch.dFSP) {
-        ch.finishLatch      = true;
-        ch.finishLatchJustSet = true;   // pulse: CommandHandler.tick() will publish event
-        log_i("[OUT] CH%d dFSP crossed (%.1f ≥ %.1f) — finish latch set",
-              chIdx, ch.temp, ch.dFSP);
+    // 2. Finish temperature: mark End; optionally latch all outputs off.
+    if (ch.dFSP > 0.0f && !ch.finishEnd && ch.temp >= ch.dFSP) {
+        ch.finishEnd = true;
+        ch.finishEndJustSet = true;
+        freezePowerTimer(ch);
+        if (ch.timer_dir == 1) {
+            ch.finishLatch = true;
+            ch.finishLatchJustSet = true;
+            log_i("[OUT] CH%d finish temp crossed (%.1f >= %.1f) — latched off",
+                  chIdx, ch.temp, ch.dFSP);
+        } else {
+            log_i("[OUT] CH%d finish temp crossed (%.1f >= %.1f) — continue",
+                  chIdx, ch.temp, ch.dFSP);
+        }
     }
     if (ch.finishLatch) {
         pwmState.dutyCurrent = 0;
         digitalWrite(dcOutPin, LOW);
         pwmState.pinHigh = false;
-        if (ch.relay_state) {
-            digitalWrite(relayPin, LOW);
-            ch.relay_state = false;
-        }
+        digitalWrite(relayPin, LOW);
+        ch.relay_state = false;
         ch.power_pct = 0;
         return;
     }
@@ -140,26 +160,22 @@ void OutputController::_updatePowerDirect(int chIdx, ChannelState& ch,
             digitalWrite(dcOutPin, LOW);
             pwmState.pinHigh = false;
         }
-        if (ch.relay_state) {
-            digitalWrite(relayPin, LOW);
-            ch.relay_state = false;
-        }
+        digitalWrite(relayPin, LOW);
+        ch.relay_state = false;
         ch.power_pct = 0;
         return;
     }
 
     // 4. MQTT watchdog fired: hold at safe power, relay off
     if (ch.watchdogFired) {
-        uint8_t safePct = ch.watchdog_safe_pct;
+        uint8_t safePct = dcEnabled ? ch.watchdog_safe_pct : 0;
         pwmState.dutyCurrent = safePct;
         if (safePct == 0 && pwmState.pinHigh) {
             digitalWrite(dcOutPin, LOW);
             pwmState.pinHigh = false;
         }
-        if (ch.relay_state) {
-            digitalWrite(relayPin, LOW);
-            ch.relay_state = false;
-        }
+        digitalWrite(relayPin, LOW);
+        ch.relay_state = false;
         ch.power_pct = safePct;
         log_d("[OUT] CH%d watchdog safe: %u%%", chIdx, safePct);
         return;
@@ -184,6 +200,7 @@ void OutputController::_updatePowerDirect(int chIdx, ChannelState& ch,
     } else {
         targetPct = ch.distill_power_pct;
     }
+    if (!dcEnabled) targetPct = 0;
 
     // Apply soft-start ramp if active
     if (ch.rampActive) {
@@ -208,8 +225,17 @@ void OutputController::_updatePowerDirect(int chIdx, ChannelState& ch,
     }
     // (non-zero duties are handled by pwmLoop())
 
-    // Drive relay according to relay_mode
-    _driveRelay(ch, relayPin);
+    // Drive relay according to relay mode; a saved Off mode is a hard disable.
+    const bool relayEnabled = (chIdx == 1)
+        ? (_cfg->pwr_relay1_mode != (uint8_t)RelayMode::OFF)
+        : (_cfg->pwr_relay2_mode != (uint8_t)RelayMode::OFF);
+    if (!relayEnabled) {
+        digitalWrite(relayPin, LOW);
+        ch.relay_state = false;
+        ch.relay_command = false;
+    } else {
+        _driveRelay(ch, relayPin);
+    }
 
     log_d("[OUT] CH%d POWER: pct=%u%% (target=%u%% ramp=%s accel=%s) relay=%s",
           chIdx, ch.power_pct, targetPct,
@@ -232,13 +258,12 @@ void OutputController::_driveRelay(ChannelState& ch, int relayPin) {
         case RelayMode::ACC_SYNC:
             // ON during acceleration phase, OFF once dAST is crossed.
             // One clean transition per run — set it and forget it.
-            newState = ch.accelPhaseActive;
+            newState = ch.acc_elements_enabled && ch.accelPhaseActive;
             break;
 
         case RelayMode::REMOTE:
-            // ch.relay_state IS the commanded state — set by {"CHx relay": bool}.
-            // Just write it through without modification.
-            newState = ch.relay_state;
+            // Direct relay request; relay_state remains actual GPIO state.
+            newState = ch.relay_command;
             break;
 
         case RelayMode::REFLUX_TIMER: {
@@ -261,9 +286,7 @@ void OutputController::_driveRelay(ChannelState& ch, int relayPin) {
         }
     }
 
-    // In REMOTE mode ch.relay_state is both the requested state and the
-    // telemetry state, so write it through even when the value already matches.
-    if (ch.relay_mode == RelayMode::REMOTE || newState != ch.relay_state) {
+    if (newState != ch.relay_state) {
         digitalWrite(relayPin, newState ? HIGH : LOW);
         ch.relay_state = newState;
         log_d("[OUT] relay pin %d → %s (mode=%s)",
@@ -277,7 +300,7 @@ void OutputController::_updatePid(int chIdx, ChannelState& ch,
                                    double& input, double& sp, double& output,
                                    PwmState& pwmState,
                                    int heatingPin, int coolingPin) {
-    if (ch.temp >= (PROBE_SENTINEL_VALUE / 2.0f)) {
+    if (!tempInProcessRange(ch.temp, _cfg->temp_unit)) {
         _setHeatingOutput(chIdx, 0, heatingPin, pwmState, _isPwmChannel(chIdx));
         _setCoolingOutput(chIdx, false, coolingPin);
         ch.pwm  = 0;
@@ -354,7 +377,7 @@ void OutputController::_updateOnOff(int chIdx, ChannelState& ch,
                                      int heatingPin, int coolingPin) {
     (void)coolingPin;
 
-    if (ch.temp >= (PROBE_SENTINEL_VALUE / 2.0f)) {
+    if (!tempInProcessRange(ch.temp, _cfg->temp_unit)) {
         if (oos.relayOn) {
             digitalWrite(heatingPin, LOW);
             oos.relayOn    = false;

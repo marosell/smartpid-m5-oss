@@ -1,170 +1,192 @@
 # SmartPID M5 OSS — Workplan
 
-**Current status:** All firmware phases complete, building clean. Tagged `v0.1.0`.
-Pre-first-flash hardware checks remain (see below).
+**Current status, 2026-05-26:** Custom ProofPro firmware builds, OTA updates,
+boots on the test unit, connects to WiFi/MQTT, renders the custom Power UI, and
+has bench-confirmed output and probe paths.
+
+The firmware is no longer trying to expose the OEM standard/advanced/monitor
+workflow. The active product workflow is:
+
+- local/manual Power screen control
+- optional Remote enable for MQTT control
+- two DC element outputs
+- two relay outputs
+- temperature publishing and program state reporting
+- simple heat program states: manual, acceleration, running, ended
 
 ---
 
-## ⚠️ STANDING RULE — DECOMPILE FIRST, ALWAYS
+## Standing rule — decompile first
 
-For every unimplemented function, calculation, UI element, or data structure: search the
-decompiled OEM firmware **first** and copy it as closely as possible. Do not invent a version
-when the OEM version exists.
+For every unimplemented function, calculation, UI element, or data structure:
+search the decompiled OEM firmware first and copy it as closely as practical
+when the OEM behavior is still relevant.
 
-Decompile: `research/smartpid_decompiled.c` (350K lines).
-Use `grep -n` with targeted keywords + read ±40 lines of context.
-Key function signatures, string labels, and search strategies: `CLAUDE.md` and `research/RE_FINDINGS.md`.
+The custom ProofPro workflow intentionally diverges from the OEM app in several
+places, especially the Power screen, remote gating, and program controls. For
+those custom pieces, document the divergence in `docs/`.
 
----
-
-## Status by phase
-
-| Phase | Description | Status |
-|---|---|---|
-| 1 | WiFi + MQTT scaffold, NVS config, topic ID, status publish | ✅ Done |
-| 2 | Command parser + telemetry publisher + channel state machine | ✅ Done |
-| 3 | Two-channel PID + output control (DC OUT time-prop PWM + relay) | ✅ Done |
-| 4 | ArduinoOTA LAN firmware update endpoint | ✅ Done |
-| 5 | Display UI — all screens, menus, running views, dialogs | ✅ Done |
-| 6 | Ramp/soak profiles — storage + sequencer, wired into main loop | ✅ Done |
-| 7 | Captive portal — custom WebServer/DNSServer (WiFiManager dropped, incompatible) | ✅ Done |
-| 8+ | POWER_DIRECT mode — all 10 build steps | ✅ Done |
-| 8+ | Power Setup + Process Params (P) display menus | ✅ Done |
-
-Post-phase improvements also done: DS18B20 driver, auto-resume, OTA progress screen,
-QA/QC sweep (14 defects fixed), WiFi/Logging menu, display dispatch completeness.
+Do not touch `research/` or `firmware-oem/` during normal implementation.
 
 ---
 
-## Files (current)
+## Confirmed today
 
-### Core firmware (`src/`)
-
-| File | What it does |
+| Area | Status |
 |---|---|
-| `main.cpp` | Entry point: setup/loop, all subsystem inits, 1s tick |
-| `config.h` / `config.cpp` | NVS load/save, 60+ config fields, `savePowerParams()` fast write |
-| `channel_state.h` / `channel_state.cpp` | Per-channel state machine; `Runmode`, `RelayMode`, `relayModeStr()` |
-| `mqtt_client.h` / `mqtt_client.cpp` | MQTT connect, subscribe, reconnect, publish helpers |
-| `command_handler.h` / `command_handler.cpp` | ArduinoJson command parser + OEM + POWER_DIRECT dispatch |
-| `telemetry.h` / `telemetry.cpp` | Dynamic topic publisher, event publisher |
-| `output_control.h` / `output_control.cpp` | GPIO dispatch: PID + On/Off + POWER_DIRECT paths; time-prop PWM |
-| `probe.h` / `probe.cpp` | NTC (cfg.ntc_beta=3977), DS18B20 (async), PT100/K-Type fallback |
-| `profiles.h` / `profiles.cpp` | Ramp/soak profile storage (OEM NVS format) + execution sequencer |
-| `display.h` / `display.cpp` | Full DisplayManager: all UIScreen states, button events, partial redraws |
-| `captive_portal.h` / `captive_portal.cpp` | AP + DNS + WebServer for first-boot WiFi config |
-| `ota.h` / `ota.cpp` | ArduinoOTA endpoint + DisplayManager callbacks |
-| `util/topic_id.h` / `topic_id.cpp` | Serial → MQTT ID scrambler (`scramble_serial()`) |
-
-### Documentation (`docs/`)
-
-| File | What it covers |
-|---|---|
-| `UI_SPEC.md` | Complete display spec from 65 OEM screenshots |
-| `COMMISSIONING.md` | First-boot NVS credential provisioning via esptool |
-| `PRECONDITIONS.md` | P1–P7 precondition status (all resolved) |
-| `WIRING.md` | GPIO pin map (DC OUT + relay terminal assignments) |
-| `BENCH_TEST_LOG.md` | Hardware validation checklist (to be filled after first flash) |
-| `WORKPLAN.md` | This file |
-| `IMPLEMENTATION_SCOPE.md` | Original planning document (historical; has correction block at top) |
-| `serial-boot-log-2026-05-23.md` | First serial log from USB read-only session |
-
-### Research / OEM artifacts (`research/`)
-
-| File | What it is |
-|---|---|
-| `smartpid_decompiled.c` | Ghidra decompile output — primary OEM implementation reference |
-| `RE_FINDINGS.md` | Architecture findings: GPIO map, MQTT functions, profile format |
-| `smartpid_m5pro.gpr` / `.rep/` | Ghidra project |
-| `segments/` | Raw binary segments extracted from OEM firmware |
+| Build target | `m5stack-core-esp32-16M` builds clean |
+| OTA | OTA to `10.0.1.60` succeeds |
+| Display | M5Stack Basic/Gray class display is stable with M5Unified/M5GFX path |
+| Screen flicker | Power screen redraw flicker resolved with partial redraw strategy |
+| Audible whine | Backlight/display interference greatly reduced; no flicker-linked whine after display path changes |
+| WiFi | Captive portal and saved Client mode verified on `Chaos` |
+| MQTT | Connects to `10.0.1.203:1883`; ProofPro topic prefix in use |
+| DC OUT 1 | Bench-confirmed GPIO 12 / slot 0 / DC OUT 1 |
+| DC OUT 2 | Bench-confirmed GPIO 13 / slot 1 / DC OUT 2 |
+| RL1 | Bench-confirmed GPIO 26 / slot 2 / RL1 |
+| RL2 | Bench-confirmed GPIO 16 / slot 3 / RL2 |
+| DS18B20 | Bench-confirmed reasonable readings; sample every 2s |
+| K-Type | Bench-confirmed one probe reads correctly after route work |
+| PT100 3-wire | Bench-confirmed close to OEM with per-probe calibration |
+| PT100 2-wire | Bench-confirmed T2 2-wire route; specific terminal pairing matters |
+| Sensor publish cadence | sample every 2s, MQTT publish every 6s |
+| Sensor error gating | values below 0C or above 120C display/publish as error |
 
 ---
 
-## What's left before production use
+## Current firmware behavior
 
-### 1. Pre-flash safety (do before USB flash)
+### Boot and UI
 
-- [x] eFuse check — PASSED (no encryption, no secure boot) → `firmware-oem/efuse_summary.txt`
-- [ ] **GPIO 12 voltage** — voltmeter on RL1 terminal at idle, must read 0V
+- Device boots directly to the Power screen.
+- Main menu should expose only the custom workflow: Power, Settings, WiFi/MQTT,
+  Info.
+- Power screen shows T1/T2, DC1/DC2, RL1/RL2, Remote, Reset, status, and timer.
+- Bottom buttons: Up, Sel/Menu, Down.
+- Disabled DC/relay tiles are darkened and skipped during selection.
+- Remote can be toggled from the Power screen. Remote must be enabled for MQTT
+  output/program commands to take effect.
 
-### 2. First flash + basic boot
+### Outputs
 
-- [ ] `pio run -t upload` (USB)
-- [ ] Serial monitor: device boots, joins WiFi, connects MQTT
-- [ ] Captive portal: power on with no NVS credentials → AP appears, form works
-- [ ] OTA: `pio run -t upload --upload-port 10.0.1.60` succeeds
+| Output | GPIO | Slot | Physical terminal | Notes |
+|---|---:|---:|---|---|
+| DC1 | 12 | 0 | DC OUT 1 | PWM / power percent |
+| DC2 | 13 | 1 | DC OUT 2 | PWM / power percent |
+| RL1 | 26 | 2 | RL1 | digital relay |
+| RL2 | 16 | 3 | RL2 | digital relay |
 
-### 3. Bench tests (fill in `BENCH_TEST_LOG.md`)
+DC outputs can be configured as `element` or `off`. Relays can be configured as
+`off`, `acc_element`, `remote_other`, or `cycle`.
 
-| # | Test | What to verify |
-|---|---|---|
-| A | DC OUT at 0/50/100% | Voltmeter: 0V / ~1750ms cycling / ~4.82V |
-| B | `{"CH2 maxpwm": 10}` | ~10% duty cycle |
-| C | SP=842°F + maxpwm=30 | ON ~1050ms / OFF ~2450ms; changes take effect ≤1 PWM cycle |
-| D | `{"CH1 SP": 60}` (below ambient) | Relay click, mode="cooling" |
-| E | Broker kill while running | Device continues; "power restored" event on reconnect |
-| F | Power cycle | SP reverts to NVS default; auto-resume if enabled |
-| G | POWER_DIRECT: `{"start":"power"}` | CH1/CH2 runmode=POWER_DIRECT, telemetry changes |
-| H | Accel phase: temp crosses dAST | Power drops from dOUT to distill_pct |
-| I | dFSP latch: temp crosses dFSP | Finish latch fires, relay/output behavior correct |
-| J | Watchdog: no MQTT for watchdog_s | Power drops to watchdog_safe_pct |
-| K | DS18B20 GPIO confirmation | GPIO 25/17 are **guesses** — verify on carrier board PCB |
+### Program logic
 
-### 4. Known hardware unknowns (non-blocking for initial testing)
+- Status labels on the Power screen are `MAN`, `ACCEL`, `RUN`, and `END`.
+- `MAN/RUN` toggles manual vs program run.
+- `RST` resets the program state but should not start a program by itself.
+- Acceleration is a temporary override of element output power.
+- During acceleration, DC tiles blink between the user/MQTT-selected percent and
+  the acceleration percent.
+- When acceleration ends, DC outputs return to their selected percent.
+- Timer is entered as hours/minutes and displays as `HH:MM:SS` while running.
+- Timer starts when Timer Start Temp is reached.
+- If Finish Temp reaches END before the timer expires, the timer should freeze
+  with remaining time visible.
+- END should latch until reset/start, depending on Finish Action.
 
-| Item | Status |
-|---|---|
-| PT100 (2W/3W) probe driver | Blocked: I2C device at 0x77 identity unknown |
-| K-Type probe driver | Blocked: SPI chip identity TBD |
-| DS18B20 GPIO pins | GPIO 25 (CH1) / GPIO 17 (CH2) — bench-verify on PCB |
+### MQTT
 
----
+Topic prefix:
 
-## POWER_DIRECT quick reference
-
-### Command set (our extension, not OEM)
-
-```json
-{"start": "power"}                        // start POWER_DIRECT on both channels
-{"CHx power": N}                          // DC OUT duty % (0–100)
-{"CHx acc_mode": true/false}              // accel phase enable
-{"CHx relay_mode": "off/acc_sync/remote/reflux_timer"}
-{"CHx relay": true/false}                 // relay command (REMOTE mode only)
-{"CHx dAST": N}                           // accel-end threshold temp
-{"CHx dOUT": N}                           // DC OUT % during accel
-{"CHx dFSP": N}                           // finish latch temp
-{"CHx watchdog_s": N}                     // MQTT watchdog (0=off)
-{"CHx watchdog_safe_pct": N}              // safe % when watchdog fires
-{"CHx dtSP": N}                           // temp that arms run timer
-{"CHx timer_s": N}                        // run timer duration
-{"CHx dEO": "continue"/"shutoff"}         // action on timer expiry
-{"CHx ramp_s": N}                         // soft-start ramp duration
-{"CHx on_ms": N}                          // reflux relay ON time per cycle
-{"CHx cycle_ms": N}                       // reflux relay total cycle time
-{"reset": true}                           // clear finish latch all channels
+```text
+smartpidM5/proofpro/{topic_id}/
 ```
 
-### Config fields for POWER_DIRECT
+Key topics:
 
-All stored under NVS namespace `smartpid`, saved via `cfg.savePowerParams()`:
-`pwr_distill_pct`, `pwr_acc_mode`, `pwr_dast`, `pwr_dout`, `pwr_dfsp`,
-`pwr_wdog_s`, `pwr_wdog_safe`, `pwr_dtsp`, `pwr_timer_s`, `pwr_deo`, `pwr_ramp_s`,
-`pwr_relay1_mode`, `pwr_relay2_mode`, `pwr_r1_on_ms`, `pwr_r1_cycle_ms`,
-`pwr_r2_on_ms`, `pwr_r2_cycle_ms`
+```text
+smartpidM5/proofpro/{topic_id}/status
+smartpidM5/proofpro/{topic_id}/dynamic/CH1
+smartpidM5/proofpro/{topic_id}/dynamic/CH2
+smartpidM5/proofpro/{topic_id}/power/CH1
+smartpidM5/proofpro/{topic_id}/power/CH2
+smartpidM5/proofpro/{topic_id}/events/standard
+smartpidM5/proofpro/{topic_id}/commands
+smartpidM5/proofpro/{topic_id}/profiles/update/#
+```
+
+`/status` is retained. Dynamic, power, and event topics are not retained.
 
 ---
 
-## Post-first-flash workflow
+## Tomorrow's first tests
 
-After any confirmed-working flash:
+1. **Watchdog test**
+   - Configure watchdog and watchdog-safe percent.
+   - Enable Remote and start a run.
+   - Stop MQTT command traffic long enough to exceed the watchdog interval.
+   - Verify DC outputs drop to watchdog-safe percent.
+   - Verify relays go to the documented safe state.
+   - Verify a `watchdog safe` event publishes.
+   - Send a valid command again.
+   - Verify watchdog clears and a `watchdog cleared` event publishes.
+
+2. **PT100 2-wire CH1 confirmation**
+   - Repeat the successful T2 2-wire terminal-pair test on T1.
+   - Document which red lead position is valid for each channel.
+   - Update `docs/WIRING.md` if the terminal pairing needs user-facing wording.
+
+3. **PT100 3-wire regression**
+   - Reconnect both red leads and white lead per OEM diagram.
+   - Compare custom firmware against OEM at room temperature and one hot-water
+     point.
+   - Confirm current calibration offsets still make sense.
+
+4. **Program state regression**
+   - `RST` does not start the program.
+   - `MAN/RUN` starts/stops the program.
+   - DC values shown on screen match actual output state.
+   - Relay tiles reflect physical relay state, not only commanded intent.
+   - END from timer and END from temperature both latch correctly.
+
+5. **MQTT remote gating**
+   - Remote off: MQTT output commands ignored.
+   - Remote on: MQTT output commands accepted.
+   - Remote survives power cycle according to the configured policy.
+
+---
+
+## Open items
+
+| Item | Why it remains |
+|---|---|
+| Watchdog behavior | Implemented enough to test, but not yet bench-verified after latest program changes |
+| PT100 2-wire CH1 route | T2 confirmed; CH1 still needs the same wiring test |
+| NTC | Code path present, but no current NTC probe available for bench validation |
+| Relay cycle mode | Settings/UI present; needs a focused bench pass |
+| MQTT schema doc | Needs a final machine-readable version once the app wizard consumes it |
+| Production release tag | Wait until watchdog and PT100 regression tests pass |
+
+---
+
+## Build and upload commands
 
 ```bash
-# Archive the verified binary
-cp .pio/build/m5stack-grey/firmware.bin \
-   firmware-releases/smartpid-m5-oss-$(git rev-parse --short HEAD).bin
-git add firmware-releases/
-git commit -m "Release: archive verified firmware $(git rev-parse --short HEAD)"
+pio run -e m5stack-core-esp32-16M
+pio run -e m5stack-core-esp32-16M -t upload --upload-port 10.0.1.60
+pio device monitor --port /dev/cu.usbserial-58690003391 --baud 115200
+```
 
-# All subsequent flashes via OTA
-pio run -t upload --upload-port 10.0.1.60
+Useful serial diagnostics:
+
+```text
+sensors
+pt100 raw
+pt100 scan
+pt100 3w
+cal
+cal1 <offset_f>
+cal2 <offset_f>
+out <slot> <0|1>
+out all 0
 ```

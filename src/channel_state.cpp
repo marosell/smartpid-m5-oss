@@ -25,9 +25,9 @@ const char* controlModeStr(ControlMode m) {
 const char* relayModeStr(RelayMode r) {
     switch (r) {
         case RelayMode::OFF:          return "off";
-        case RelayMode::ACC_SYNC:     return "acc_sync";
-        case RelayMode::REMOTE:       return "remote";
-        case RelayMode::REFLUX_TIMER: return "reflux_timer";
+        case RelayMode::ACC_SYNC:     return "acc_element";
+        case RelayMode::REMOTE:       return "remote_other";
+        case RelayMode::REFLUX_TIMER: return "cycle";
     }
     return "off";
 }

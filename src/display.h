@@ -183,7 +183,7 @@ private:
     int8_t   _menuScroll  = 0;    // first visible item index
     int8_t   _runScreen   = 0;    // 0=ch-detail, 1=graph-ch1, 2=graph-ch2, 3=overview
     int8_t   _ctxSel      = 0;    // context menu selection
-    int8_t   _powerSel    = 0;    // 0=DC1, 1=DC2, 2=RL1, 3=RL2, 4=Remote
+    int8_t   _powerSel    = 0;    // 0=DC1, 1=DC2, 2=RL1, 3=RL2, 4=Remote, 5=Reset, 6=Status, 7=Timer
 
     // Value entry state
     float    _editValue   = 0.0f;
@@ -286,12 +286,16 @@ private:
     void _drawPowerStatus();
     void _redrawPowerStatusValues();
     void _drawPowerOutputEdit();
+    void _redrawPowerOutputEditValue();
     void _applyPowerOutputState();
     void _drawContextMenu();
     void _drawSetTimerDialog();
+    void _redrawSetTimerValue();
     void _drawSetMaxPowerDialog();
+    void _redrawSetMaxPowerValue();
     void _drawListSelectDialog();
     void _drawValueEntryDialog();
+    void _redrawValueEntryValue();
     void _drawInfoSingle();
     void _drawErrorScreen();
     void _drawOtaProgress();

@@ -98,8 +98,10 @@
 #define ADS1119_CM_CONT       0x01   // continuous
 
 // ── Reference resistor (from decompile constant 0x96) ─────────────────────────
-// OEM uses a 150 Ω precision reference in the PT100 current-excitation circuit.
-#define ADS1119_REF_OHMS      150.0f
+// OEM decompile uses a nominal 150 Ω reference. Bench readings on the SmartPID
+// carrier match the PT100 curve when the full measurement path is treated as a
+// 149.25 Ω effective reference.
+#define ADS1119_REF_OHMS      149.25f
 
 // ── PT100 Callendar-Van Dusen coefficients (IEC 60751) ────────────────────────
 #define PT100_R0   100.0f

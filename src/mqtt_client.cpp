@@ -33,7 +33,7 @@ bool MQTTManager::_connect() {
     // drops without a graceful DISCONNECT (power loss, network failure, crash).
     // The broker delivers it to any subscriber watching events/standard.
     String willTopic   = fullTopic("events/standard");
-    String willPayload = "{\"event\":\"power lost\"}";
+    String willPayload = "{\"event\":\"power lost\",\"type\":\"power_lost\"}";
 
     bool ok;
     if (strlen(_cfg->mqtt_user) > 0) {
@@ -61,12 +61,12 @@ bool MQTTManager::_connect() {
 
 // ── _subscribe ────────────────────────────────────────────────────────────────
 void MQTTManager::_subscribe() {
-    // Commands topic: smartpidM5/pro/<id>/commands
+    // Commands topic: smartpidM5/proofpro/<id>/commands
     String cmds = fullTopic("commands");
     _client.subscribe(cmds.c_str());
     log_i("[MQTT] Subscribed: %s", cmds.c_str());
 
-    // Profile updates: smartpidM5/pro/<id>/profiles/update/#
+    // Profile updates: smartpidM5/proofpro/<id>/profiles/update/#
     String prof = fullTopic("profiles/update/#");
     _client.subscribe(prof.c_str());
     log_i("[MQTT] Subscribed: %s", prof.c_str());

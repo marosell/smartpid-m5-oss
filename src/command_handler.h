@@ -6,10 +6,10 @@
 //
 // New POWER_DIRECT commands (our extension):
 //   {"start": "power"}                      Start direct-power mode (both channels)
-//   {"start": "remote"}                     Start power mode with both relays remote
+//   {"start": "remote"}                     Start power mode with both relays remote_other
 //   {"CHx power": N}                        DC OUT duty % target (0–100)
 //   {"CHx acc_mode": bool}                  Enable/disable acceleration phase
-//   {"CHx relay_mode": "off"/"acc_sync"/"remote"/"reflux_timer"}
+//   {"CHx relay_mode": "off"/"acc_element"/"remote_other"/"cycle"}
 //   {"CHx relay": bool}                     Relay command (REMOTE mode only)
 //   {"CHx dAST": N}                         Accel phase end threshold temp
 //   {"CHx dOUT": N}                         DC OUT % during accel phase (0–100)
@@ -19,7 +19,8 @@
 //   {"CHx watchdog_safe_pct": N}            Safe power % when watchdog fires (0–100)
 //   {"CHx dtSP": N}                         Temperature that arms the run timer
 //   {"CHx timer_s": N}                      Run timer duration in seconds
-//   {"CHx dEO": "continue"/"shutoff"}       Action on timer expiry
+//   {"CHx dEO": "continue"/"latch_off"}     Action on finish condition
+//   {"acc_elements": bool}                  Allow/suppress acc_element relays
 //   {"CHx ramp_s": N}                       Soft-start ramp duration in seconds
 //   {"CHx on_ms": N}                        Relay ON time per reflux cycle (ms)
 //   {"CHx cycle_ms": N}                     Relay total cycle time (ms)
@@ -32,6 +33,7 @@
 
 bool mqttRemoteEnabled();
 void setMqttRemoteEnabled(bool enabled);
+bool accElementsEnabled();
 
 class CommandHandler {
 public:
@@ -49,6 +51,7 @@ public:
     // Public so main.cpp can call it during auto-resume.
     // chIdx is 1-based (1 = ch1, 2 = ch2).
     void _applyPowerParams(int chIdx);
+    void startPowerRun();
 
 private:
     Config*             _cfg  = nullptr;
@@ -86,6 +89,7 @@ private:
     void _cmdSetDtSP(int chIdx, float temp);       // {"CHx dtSP": N}
     void _cmdSetTimerDuration(int chIdx, int s);   // {"CHx timer_s": N}
     void _cmdSetTimerDir(int chIdx, const char* dir);  // {"CHx dEO": "continue"/"shutoff"}
+    void _cmdSetFinishTime(int chIdx, int seconds);
     void _cmdSetRamp(int chIdx, int seconds);      // {"CHx ramp_s": N}
     void _cmdSetRelayOnMs(int chIdx, int ms);      // {"CHx on_ms": N}
     void _cmdSetRelayCycleMs(int chIdx, int ms);   // {"CHx cycle_ms": N}

@@ -20,19 +20,26 @@
 // See probe.h and ads1119.h for full architecture notes and GPIO pin assignments.
 
 #include "probe.h"
+#include <ArduinoJson.h>
 #include <math.h>
 
 ProbeReader probeReader;
 
+static float validOrSentinel(float temp) {
+    return tempInProcessRange(temp, cfg.temp_unit) ? temp : PROBE_SENTINEL_VALUE;
+}
+
 struct Pt100Route {
     uint8_t mask;
     uint8_t valueCfg;
+    uint8_t compCfg;
+    uint8_t twoWireCfg;
     float scale;
 };
 
 static const Pt100Route kPt100Routes[2] = {
-    {0x03, 0xa0, 1.50f},
-    {0x0c, 0xd0, 3.03f},
+    {0x03, 0x70, 0x90, 0x70, 1.00f},
+    {0x0c, 0xb0, 0xd0, 0xd0, 1.00f},
 };
 
 static void setProbeMask(uint8_t mask) {
@@ -46,11 +53,16 @@ static void restoreProbeExcitation() {
     ioExpander.configureProbeExcitation(cfg.ch2_probe_type, IO_EXP_BIT_CH2_MAIN, IO_EXP_BIT_CH2_COMP);
 }
 
-static float pt100TempFromRaw(uint16_t raw, float scale) {
-    if (raw > 0xff00u) return NAN;
+static uint16_t pt100ScaleRaw(uint16_t raw, float scale) {
+    if (raw > 0xff00u) return 0xffffu;
 
     uint32_t scaled = (uint32_t)((float)raw * scale + 0.5f);
     if (scaled >= 0xffffu) scaled = 0xfffeu;
+    return (uint16_t)scaled;
+}
+
+static float pt100TempFromScaled(uint16_t scaled) {
+    if (scaled == 0xffffu) return NAN;
 
     const float ratio = (float)scaled / 65535.0f;
     if (ratio <= 0.0f || ratio >= 1.0f) return NAN;
@@ -61,23 +73,50 @@ static float pt100TempFromRaw(uint16_t raw, float scale) {
     return tempC;
 }
 
-static float readPt100OemRoute(int channel) {
+static float pt100Temp2Wire(uint16_t raw, float scale) {
+    return pt100TempFromScaled(pt100ScaleRaw(raw, scale));
+}
+
+static bool readPt100OemRoute(int channel, uint16_t& raw, uint16_t& comp) {
+    if (channel < 1 || channel > 2) return false;
+
+    const Pt100Route& route = kPt100Routes[channel - 1];
+    setProbeMask(route.mask);
+    delay(20);
+
+    raw = ads1119.readRawConfig(route.valueCfg);
+    comp = ads1119.readRawConfig(route.compCfg);
+    restoreProbeExcitation();
+    return raw != 0xffffu;
+}
+
+static float readPt100OemRoute(int channel, bool threeWire) {
     if (channel < 1 || channel > 2) return NAN;
 
     const Pt100Route& route = kPt100Routes[channel - 1];
     setProbeMask(route.mask);
     delay(20);
 
-    uint16_t raw = ads1119.readRawConfig(route.valueCfg);
-    float tempC = pt100TempFromRaw(raw, route.scale);
+    uint16_t raw = ads1119.readRawConfig(threeWire ? route.valueCfg : route.twoWireCfg);
+    uint16_t comp = 0xffffu;
+    if (threeWire) {
+        comp = ads1119.readRawConfig(route.compCfg);
+    }
     restoreProbeExcitation();
+    if (raw == 0xffffu) return NAN;
+
+    float tempC = pt100Temp2Wire(raw, route.scale);
 
     if (isnan(tempC)) {
-        log_d("[PROBE] CH%d PT100 OEM route: cfg=0x%02X raw=%u scale=%.2f -> NaN",
-              channel, route.valueCfg, raw, route.scale);
+        log_d("[PROBE] CH%d PT100 %s route: cfg=0x%02X raw=%u compCfg=0x%02X comp=%u scale=%.2f -> NaN",
+              channel, threeWire ? "3W" : "2W",
+              threeWire ? route.valueCfg : route.twoWireCfg,
+              raw, route.compCfg, comp, route.scale);
     } else {
-        log_d("[PROBE] CH%d PT100 OEM route: cfg=0x%02X raw=%u scale=%.2f -> %.2fC",
-              channel, route.valueCfg, raw, route.scale, tempC);
+        log_d("[PROBE] CH%d PT100 %s route: cfg=0x%02X raw=%u compCfg=0x%02X comp=%u scale=%.2f -> %.2fC",
+              channel, threeWire ? "3W" : "2W",
+              threeWire ? route.valueCfg : route.twoWireCfg,
+              raw, route.compCfg, comp, route.scale, tempC);
     }
     return tempC;
 }
@@ -105,7 +144,7 @@ void ProbeReader::begin() {
     // DS18B20: initialise both 1-Wire buses and start first conversion.
     // We use non-blocking (setWaitForConversion=false) so the main loop
     // isn't stalled by the ~750ms DS18B20 conversion time.
-    // By the time readTemp() is first called (at sample_s tick, ≥15s later),
+    // By the time readTemp() is first called on the local 2s probe tick,
     // the conversion is long done.
     _ds1.begin();
     _ds1.setWaitForConversion(false);  // non-blocking requestTemperatures()
@@ -149,18 +188,18 @@ float ProbeReader::readTemp(int channel) {
 
     // PT100_2W: 2-wire RTD via ADS1119 differential (AIN0-AIN1 or AIN2-AIN3).
     if (pt == ProbeType::PT100_2W) {
-        float tempC = readPt100OemRoute(channel);
+        float tempC = readPt100OemRoute(channel, false);
         if (isnan(tempC)) return PROBE_SENTINEL_VALUE;
         float cal    = (channel == 1) ? cfg.ch1_probe_cal : cfg.ch2_probe_cal;
-        return _toDeviceUnit(tempC) + cal;
+        return validOrSentinel(_toDeviceUnit(tempC) + cal);
     }
 
     // PT100_3W: 3-wire RTD with lead compensation via AIN1-AIN2 differential.
     if (pt == ProbeType::PT100_3W) {
-        float tempC = readPt100OemRoute(channel);
+        float tempC = readPt100OemRoute(channel, true);
         if (isnan(tempC)) return PROBE_SENTINEL_VALUE;
         float cal    = (channel == 1) ? cfg.ch1_probe_cal : cfg.ch2_probe_cal;
-        return _toDeviceUnit(tempC) + cal;
+        return validOrSentinel(_toDeviceUnit(tempC) + cal);
     }
 
     // K_TYPE: thermocouple via ADS1119 differential — same AIN pairs as PT100_2W.
@@ -180,11 +219,167 @@ float ProbeReader::readTemp(int channel) {
         float tempC = ((float)raw * 62.5f) / 41.0f;
         if (tempC < -200.0f || tempC > 1300.0f) return PROBE_SENTINEL_VALUE;
         float cal = (channel == 1) ? cfg.ch1_probe_cal : cfg.ch2_probe_cal;
-        return _toDeviceUnit(tempC) + cal;
+        return validOrSentinel(_toDeviceUnit(tempC) + cal);
     }
 
     // NTC: ESP32 internal ADC
     return _readNtcAdc(channel);
+}
+
+void ProbeReader::printPt100Debug(Stream& out) {
+    JsonDocument doc;
+    doc["type"] = "pt100_debug";
+    doc["unit"] = cfg.temp_unit;
+
+    for (int channel = 1; channel <= 2; ++channel) {
+        const Pt100Route& route = kPt100Routes[channel - 1];
+        setProbeMask(route.mask);
+        delay(20);
+
+        uint16_t valueRaw = ads1119.readRawConfig(route.valueCfg);
+        uint16_t pairRaw = ads1119.readRawConfig(route.compCfg);
+        uint16_t twoWireRaw = ads1119.readRawConfig(route.twoWireCfg);
+        restoreProbeExcitation();
+
+        float valueTempC = pt100Temp2Wire(valueRaw, route.scale);
+        float pairTempC = pt100Temp2Wire(pairRaw, route.scale);
+        float twoWireTempC = pt100Temp2Wire(twoWireRaw, route.scale);
+
+        char key[4];
+        snprintf(key, sizeof(key), "ch%d", channel);
+        JsonObject ch = doc[key].to<JsonObject>();
+        ch["mask"] = route.mask;
+        ch["value_cfg"] = route.valueCfg;
+        ch["value_raw"] = valueRaw;
+        ch["pair_cfg"] = route.compCfg;
+        ch["pair_raw"] = pairRaw;
+        ch["two_wire_cfg"] = route.twoWireCfg;
+        ch["two_wire_raw"] = twoWireRaw;
+        ch["scale"] = route.scale;
+        if (isnan(valueTempC)) ch["value_temp"] = nullptr;
+        else ch["value_temp"] = _toDeviceUnit(valueTempC);
+        if (isnan(pairTempC)) ch["pair_temp"] = nullptr;
+        else ch["pair_temp"] = _toDeviceUnit(pairTempC);
+        if (isnan(twoWireTempC)) ch["two_wire_temp"] = nullptr;
+        else ch["two_wire_temp"] = _toDeviceUnit(twoWireTempC);
+    }
+
+    serializeJson(doc, out);
+    out.println();
+}
+
+void ProbeReader::printPt100Scan(Stream& out) {
+    static const uint8_t masks[] = {
+        0x00, 0x01, 0x02, 0x03,
+        0x04, 0x05, 0x06, 0x07,
+        0x08, 0x09, 0x0a, 0x0b,
+        0x0c, 0x0d, 0x0e, 0x0f
+    };
+    static const uint8_t configs[] = {
+        0x00, 0x10, 0x20, 0x30,
+        0x40, 0x50, 0x60, 0x70,
+        0x80, 0x90, 0xa0, 0xb0,
+        0xc0, 0xd0, 0xe0, 0xf0
+    };
+
+    out.print("{\"type\":\"pt100_scan\",\"unit\":\"");
+    out.print(cfg.temp_unit);
+    out.println("\",\"readings\":[");
+
+    bool first = true;
+    for (uint8_t mask : masks) {
+        setProbeMask(mask);
+        delay(20);
+        for (uint8_t config : configs) {
+            uint16_t raw = ads1119.readRawConfig(config);
+            float tempC = pt100TempFromScaled(raw);
+            if (!first) out.println(",");
+            first = false;
+            out.print("{\"mask\":");
+            out.print(mask);
+            out.print(",\"cfg\":");
+            out.print(config);
+            out.print(",\"raw\":");
+            out.print(raw);
+            out.print(",\"temp\":");
+            if (isnan(tempC)) {
+                out.print("null");
+            } else {
+                out.print(_toDeviceUnit(tempC), 2);
+            }
+            out.print("}");
+        }
+    }
+
+    restoreProbeExcitation();
+    out.println("]}");
+}
+
+void ProbeReader::printPt1003WireDebug(Stream& out) {
+    struct ChDiag {
+        uint8_t mask;
+        uint8_t cfgA;
+        uint8_t cfgB;
+        uint8_t cfgA1x;
+        uint8_t cfgB1x;
+    };
+    static const ChDiag diag[2] = {
+        {0x03, 0x70, 0x90, 0x60, 0x80}, // CH1: AIN0 / AIN1
+        {0x0c, 0xb0, 0xd0, 0xa0, 0xc0}, // CH2: AIN2 / AIN3
+    };
+
+    out.print("{\"type\":\"pt100_3w_debug\",\"unit\":\"");
+    out.print(cfg.temp_unit);
+    out.print("\"");
+
+    for (int channel = 1; channel <= 2; ++channel) {
+        const ChDiag& d = diag[channel - 1];
+        setProbeMask(d.mask);
+        delay(20);
+
+        uint16_t a4 = ads1119.readRawConfig(d.cfgA);
+        uint16_t b4 = ads1119.readRawConfig(d.cfgB);
+        uint16_t a1 = ads1119.readRawConfig(d.cfgA1x);
+        uint16_t b1 = ads1119.readRawConfig(d.cfgB1x);
+        int32_t diff4 = (int32_t)b4 - (int32_t)a4;
+        int32_t diff1 = (int32_t)b1 - (int32_t)a1;
+
+        char key[8];
+        snprintf(key, sizeof(key), ",\"ch%d\":", channel);
+        out.print(key);
+        out.print("{\"mask\":");
+        out.print(d.mask);
+        out.print(",\"a4_cfg\":");
+        out.print(d.cfgA);
+        out.print(",\"a4_raw\":");
+        out.print(a4);
+        out.print(",\"a4_temp\":");
+        float aTemp = pt100TempFromScaled(a4);
+        if (isnan(aTemp)) out.print("null"); else out.print(_toDeviceUnit(aTemp), 2);
+        out.print(",\"b4_cfg\":");
+        out.print(d.cfgB);
+        out.print(",\"b4_raw\":");
+        out.print(b4);
+        out.print(",\"b4_temp\":");
+        float bTemp = pt100TempFromScaled(b4);
+        if (isnan(bTemp)) out.print("null"); else out.print(_toDeviceUnit(bTemp), 2);
+        out.print(",\"diff4\":");
+        out.print(diff4);
+        out.print(",\"a1_cfg\":");
+        out.print(d.cfgA1x);
+        out.print(",\"a1_raw\":");
+        out.print(a1);
+        out.print(",\"b1_cfg\":");
+        out.print(d.cfgB1x);
+        out.print(",\"b1_raw\":");
+        out.print(b1);
+        out.print(",\"diff1\":");
+        out.print(diff1);
+        out.print("}");
+    }
+
+    restoreProbeExcitation();
+    out.println("}");
 }
 
 // ── _readDS18B20 ──────────────────────────────────────────────────────────────
@@ -201,7 +396,18 @@ float ProbeReader::_readDS18B20(int channel) {
     bool&              req = (channel == 1) ? _ds1Requested : _ds2Requested;
 
     if (ds.getDeviceCount() == 0) {
-        log_d("[PROBE] DS18B20 CH%d: no device found on bus", channel);
+        ds.begin();
+        ds.setWaitForConversion(false);
+        ds.setResolution(12);
+        if (ds.getDeviceCount() == 0) {
+            log_d("[PROBE] DS18B20 CH%d: no device found on GPIO%d",
+                  channel, channel == 1 ? DS18B20_CH1_GPIO : DS18B20_CH2_GPIO);
+            return PROBE_SENTINEL_VALUE;
+        }
+        ds.requestTemperatures();
+        req = true;
+        log_i("[PROBE] DS18B20 CH%d: device detected on GPIO%d — conversion started",
+              channel, channel == 1 ? DS18B20_CH1_GPIO : DS18B20_CH2_GPIO);
         return PROBE_SENTINEL_VALUE;
     }
 
@@ -236,15 +442,9 @@ float ProbeReader::_readDS18B20(int channel) {
     float cal    = (channel == 1) ? cfg.ch1_probe_cal : cfg.ch2_probe_cal;
     float result = _toDeviceUnit(tempC) + cal;
 
-    // Post-calibration bounds check.
-    // DS18B20 physical range: -55 to +125°C → -67 to +257°F.
-    // We allow ±20 units of cal headroom so small offsets near the sensor's limits pass.
-    bool isFahrenheit = (strcmp(cfg.temp_unit, "F") == 0);
-    float postMin = isFahrenheit ? -87.0f :  -75.0f;   // -67°F - 20 headroom  |  -55°C - 20
-    float postMax = isFahrenheit ?  277.0f :  145.0f;   // 257°F + 20 headroom  | 125°C + 20
-    if (result < postMin || result > postMax) {
-        log_w("[PROBE] DS18B20 CH%d: post-cal %.2f%s out of bounds [%.0f, %.0f]",
-              channel, result, cfg.temp_unit, postMin, postMax);
+    if (!tempInProcessRange(result, cfg.temp_unit)) {
+        log_w("[PROBE] DS18B20 CH%d: post-cal %.2f%s outside process range",
+              channel, result, cfg.temp_unit);
         return PROBE_SENTINEL_VALUE;
     }
 
@@ -281,15 +481,9 @@ float ProbeReader::_readNtcAdc(int channel) {
     float cal    = (channel == 1) ? cfg.ch1_probe_cal : cfg.ch2_probe_cal;
     float result = _toDeviceUnit(tempC) + cal;
 
-    // Sanity check: NTC ADC can produce physically impossible values if the
-    // resistor divider is wired for a different NTC than cfg.ntc_beta expects.
-    // Reject anything outside the plausible operating range of this device.
-    bool isFahrenheit = (strcmp(cfg.temp_unit, "F") == 0);
-    float ntcMin = isFahrenheit ? -148.0f : -100.0f;   // -100°C / -148°F practical floor
-    float ntcMax = isFahrenheit ?  572.0f :  300.0f;   //  300°C /  572°F practical ceiling
-    if (result < ntcMin || result > ntcMax) {
-        log_w("[PROBE] NTC CH%d: post-cal %.2f%s out of bounds [%.0f, %.0f]",
-              channel, result, cfg.temp_unit, ntcMin, ntcMax);
+    if (!tempInProcessRange(result, cfg.temp_unit)) {
+        log_w("[PROBE] NTC CH%d: post-cal %.2f%s outside process range",
+              channel, result, cfg.temp_unit);
         return PROBE_SENTINEL_VALUE;
     }
 

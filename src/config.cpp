@@ -35,11 +35,18 @@ void Config::load() {
     }
 
     // Telemetry
-    sample_s = prefs.getUShort("sample_s", 15);
+    sample_s = prefs.getUShort("sample_s", 6);
+    if (sample_s == 15) {
+        // Migrate the old default to the custom firmware's faster publish rate.
+        sample_s = 6;
+    }
     prefs.getString("temp_unit", temp_unit, sizeof(temp_unit));
     if (strlen(temp_unit) == 0) {
         strlcpy(temp_unit, "F", sizeof(temp_unit));
     }
+    const bool defaultCelsius = (strcmp(temp_unit, "C") == 0);
+    const float default170 = defaultCelsius ? ((170.0f - 32.0f) * 5.0f / 9.0f) : 170.0f;
+    const float default200 = defaultCelsius ? ((200.0f - 32.0f) * 5.0f / 9.0f) : 200.0f;
 
     // Set points
     ch1_sp  = prefs.getFloat("ch1_sp",  131.0f);
@@ -90,8 +97,9 @@ void Config::load() {
 
     // System behavior
     multi_control = prefs.getBool("multi_ctrl",   false);
-    auto_resume   = prefs.getBool("auto_resume",  true);
-    button_beep   = prefs.getBool("btn_beep",     true);
+    auto_resume   = prefs.getBool("auto_resume",  false);
+    button_beep   = prefs.getBool("btn_beep",     false);
+    remote_enabled = prefs.getBool("remote_en",    false);
 
     // PID Auto-Tune
     // OEM struct-initialises OutputStep to 100 (decompile line 34313: puVar1[0x64]=100).
@@ -112,17 +120,22 @@ void Config::load() {
     ch2_saved_paused  = prefs.getBool("ch2_paused",  false);
 
     // Power mode params (POWER_DIRECT)
-    pwr_acc_mode    = prefs.getBool("pwr_acc",       false);
-    pwr_dast        = prefs.getFloat("pwr_dast",     0.0f);
-    pwr_dout        = prefs.getUChar("pwr_dout",     0);
-    pwr_dfsp        = prefs.getFloat("pwr_dfsp",     0.0f);
+    bool applyPowerDefaultsV2 = !prefs.isKey("pwr_def_v2");
+    pwr_acc_mode    = prefs.getBool("pwr_acc",       true);
+    pwr_acc_elements_enabled = prefs.getBool("pwr_acc_el", true);
+    pwr_dast        = prefs.getFloat("pwr_dast",     default170);
+    pwr_dout        = prefs.getUChar("pwr_dout",     100);
+    pwr_dfsp        = prefs.getFloat("pwr_dfsp",     default200);
     pwr_wdog_s      = prefs.getUInt("pwr_wdog_s",    0);
     pwr_wdog_safe   = prefs.getUChar("pwr_wdog_safe",0);
-    pwr_dtsp        = prefs.getFloat("pwr_dtsp",     0.0f);
+    pwr_dtsp        = prefs.getFloat("pwr_dtsp",     default170);
     pwr_timer_s     = prefs.getUInt("pwr_timer_s",   0);
-    pwr_deo         = prefs.getUChar("pwr_deo",      0);
+    pwr_deo         = prefs.getUChar("pwr_deo",      1);
+    pwr_finish_time_s = prefs.getUInt("pwr_fin_s",   0);
     pwr_ramp_s      = prefs.getUInt("pwr_ramp_s",    0);
     pwr_distill_pct = prefs.getUChar("pwr_dist_pct", 100);
+    pwr_dc1_enabled = prefs.getBool("pwr_dc1_en",    true);
+    pwr_dc2_enabled = prefs.getBool("pwr_dc2_en",    true);
     pwr_relay1_mode = prefs.getUChar("pwr_rl1_mode", 0);
     pwr_relay2_mode = prefs.getUChar("pwr_rl2_mode", 0);
     pwr_r1_on_ms    = prefs.getUInt("pwr_r1_on",     1000);
@@ -131,6 +144,21 @@ void Config::load() {
     pwr_r2_cycle_ms = prefs.getUInt("pwr_r2_cyc",    5000);
 
     prefs.end();
+
+    if (applyPowerDefaultsV2) {
+        pwr_acc_mode    = true;
+        pwr_dast        = default170;
+        pwr_dout        = 100;
+        pwr_dtsp        = default170;
+        pwr_dfsp        = default200;
+        pwr_deo         = 1;
+
+        Preferences wprefs;
+        wprefs.begin(SMARTPID_NVS_NS, /*readOnly=*/false);
+        wprefs.putBool("pwr_def_v2", true);
+        wprefs.end();
+        savePowerParams();
+    }
 }
 
 // ── cfg.save() ────────────────────────────────────────────────────────────────
@@ -187,6 +215,7 @@ void Config::save() {
     prefs.putBool("multi_ctrl",    multi_control);
     prefs.putBool("auto_resume",   auto_resume);
     prefs.putBool("btn_beep",      button_beep);
+    prefs.putBool("remote_en",     remote_enabled);
 
     prefs.putUChar("log_mode",     log_mode);    // uint8_t enum 0–4
     prefs.putUShort("log_samp_s",  log_sample_s);
@@ -198,6 +227,7 @@ void Config::save() {
 
     // Power mode params
     prefs.putBool("pwr_acc",       pwr_acc_mode);
+    prefs.putBool("pwr_acc_el",    pwr_acc_elements_enabled);
     prefs.putFloat("pwr_dast",     pwr_dast);
     prefs.putUChar("pwr_dout",     pwr_dout);
     prefs.putFloat("pwr_dfsp",     pwr_dfsp);
@@ -206,8 +236,11 @@ void Config::save() {
     prefs.putFloat("pwr_dtsp",     pwr_dtsp);
     prefs.putUInt("pwr_timer_s",   pwr_timer_s);
     prefs.putUChar("pwr_deo",      pwr_deo);
+    prefs.putUInt("pwr_fin_s",     pwr_finish_time_s);
     prefs.putUInt("pwr_ramp_s",    pwr_ramp_s);
     prefs.putUChar("pwr_dist_pct", pwr_distill_pct);
+    prefs.putBool("pwr_dc1_en",    pwr_dc1_enabled);
+    prefs.putBool("pwr_dc2_en",    pwr_dc2_enabled);
     prefs.putUChar("pwr_rl1_mode", pwr_relay1_mode);
     prefs.putUChar("pwr_rl2_mode", pwr_relay2_mode);
     prefs.putUInt("pwr_r1_on",     pwr_r1_on_ms);
@@ -256,6 +289,7 @@ void Config::savePowerParams() {
     Preferences prefs;
     prefs.begin(SMARTPID_NVS_NS, /*readOnly=*/false);
     prefs.putBool("pwr_acc",       pwr_acc_mode);
+    prefs.putBool("pwr_acc_el",    pwr_acc_elements_enabled);
     prefs.putFloat("pwr_dast",     pwr_dast);
     prefs.putUChar("pwr_dout",     pwr_dout);
     prefs.putFloat("pwr_dfsp",     pwr_dfsp);
@@ -264,8 +298,11 @@ void Config::savePowerParams() {
     prefs.putFloat("pwr_dtsp",     pwr_dtsp);
     prefs.putUInt("pwr_timer_s",   pwr_timer_s);
     prefs.putUChar("pwr_deo",      pwr_deo);
+    prefs.putUInt("pwr_fin_s",     pwr_finish_time_s);
     prefs.putUInt("pwr_ramp_s",    pwr_ramp_s);
     prefs.putUChar("pwr_dist_pct", pwr_distill_pct);
+    prefs.putBool("pwr_dc1_en",    pwr_dc1_enabled);
+    prefs.putBool("pwr_dc2_en",    pwr_dc2_enabled);
     prefs.putUChar("pwr_rl1_mode", pwr_relay1_mode);
     prefs.putUChar("pwr_rl2_mode", pwr_relay2_mode);
     prefs.putUInt("pwr_r1_on",     pwr_r1_on_ms);

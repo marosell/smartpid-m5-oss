@@ -19,6 +19,14 @@
 // Proof side expects a large numeric, not null, for backwards compatibility.
 #define PROBE_SENTINEL_VALUE  9170000.0f
 
+static inline bool tempInProcessRange(float temp, const char* unit) {
+    if (isnan(temp)) return false;
+    const bool fahrenheit = (unit != nullptr && strcmp(unit, "F") == 0);
+    const float minTemp = fahrenheit ? 32.0f : 0.0f;
+    const float maxTemp = fahrenheit ? 248.0f : 120.0f;
+    return temp >= minTemp && temp <= maxTemp;
+}
+
 // ── Probe type ────────────────────────────────────────────────────────────────
 // Maps to OEM Setup → Probe Type menu: OFF / DS18B20 / NTC / PT100-2W /
 // PT100-3W / K-Type. Device was configured as PT100_3W on both channels.
@@ -46,7 +54,7 @@ struct Config {
     char topic_id[15];     // scrambled 14-char MQTT ID (derived from serial_hex)
 
     // ── Telemetry ─────────────────────────────────────────────────────────────
-    uint16_t sample_s;      // MQTT publish interval in seconds (default: 15)
+    uint16_t sample_s;      // MQTT publish interval in seconds (default: 6)
     char     temp_unit[3];  // "F" or "C" (default: "F")
 
     // ── Set Points ────────────────────────────────────────────────────────────
@@ -115,7 +123,8 @@ struct Config {
     // ── System behavior ───────────────────────────────────────────────────────
     bool     multi_control;  // false=independent channels, true=linked (CH2 follows CH1)
     bool     auto_resume;    // true=restore channel run state after power loss
-    bool     button_beep;    // true=beep on button press (default true)
+    bool     button_beep;    // retained for NVS compatibility; UI does not enable beeps
+    bool     remote_enabled; // persisted MQTT control permission
 
     // ── Auto-resume run state ─────────────────────────────────────────────────
     // Saved to NVS whenever a channel starts, stops, pauses, or resumes.
@@ -152,17 +161,21 @@ struct Config {
     // start via individual MQTT commands; device saves on receipt.
     // These are device-level (not per-channel) — Proof typically sets the same
     // values for both channels, and re-sends on reconnect/start.
-    bool     pwr_acc_mode;      // acceleration phase feature on/off (default false)
-    float    pwr_dast;          // accel start threshold temp (default 0.0 = disabled)
-    uint8_t  pwr_dout;          // accel phase DC OUT % (default 0)
-    float    pwr_dfsp;          // finish latch threshold (default 0.0 = disabled)
+    bool     pwr_acc_mode;      // acceleration phase feature on/off (default true)
+    bool     pwr_acc_elements_enabled; // false suppresses relays in acc_element mode
+    float    pwr_dast;          // accel end threshold temp (default 170F / 76.7C)
+    uint8_t  pwr_dout;          // accel phase DC OUT % (default 100)
+    float    pwr_dfsp;          // finish threshold (default 200F / 93.3C)
     uint32_t pwr_wdog_s;        // MQTT watchdog timeout seconds (default 0 = disabled)
     uint8_t  pwr_wdog_safe;     // watchdog safe-state power % (default 0)
-    float    pwr_dtsp;          // dtSP timer trigger temp (default 0.0 = disabled)
+    float    pwr_dtsp;          // dtSP timer start temp (default 170F / 76.7C)
     uint32_t pwr_timer_s;       // dtSP timer duration seconds (default 0)
-    uint8_t  pwr_deo;           // 0=continue, 1=shutoff on timer expiry (default 0)
+    uint8_t  pwr_deo;           // 0=continue, 1=end/latch off on finish (default 1)
+    uint32_t pwr_finish_time_s; // elapsed finish time seconds (default 0 = disabled)
     uint32_t pwr_ramp_s;        // soft-start ramp duration seconds (default 0 = instant)
     uint8_t  pwr_distill_pct;   // distillation target power % (default 100)
+    bool     pwr_dc1_enabled;   // DC1 role: true=element, false=off
+    bool     pwr_dc2_enabled;   // DC2 role: true=element, false=off
     uint8_t  pwr_relay1_mode;   // RelayMode for CH1 relay (RL1) (default 0 = OFF)
     uint8_t  pwr_relay2_mode;   // RelayMode for CH2 relay (RL2) (default 0 = OFF)
     uint32_t pwr_r1_on_ms;      // RL1 reflux ON time ms (default 1000)

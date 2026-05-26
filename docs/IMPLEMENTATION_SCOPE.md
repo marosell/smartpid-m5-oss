@@ -1,17 +1,19 @@
 > ## ⚠ HISTORICAL PLANNING DOCUMENT — STATUS UPDATE
 >
-> This document was written before implementation began. All phases (1–7) and Phase 8+
-> (POWER_DIRECT mode) are **complete**. The firmware is tagged `v0.1.0` and awaiting
-> first hardware flash. For current status, see `docs/WORKPLAN.md`.
+> This document was written before implementation began. It is retained as a historical
+> planning artifact only. The current firmware has moved into the custom ProofPro
+> workflow: Power screen first, Remote-gated MQTT control, DC1/DC2/RL1/RL2 control,
+> and bench-verified probe support. For current status, see `docs/WORKPLAN.md`,
+> `docs/BENCH_TEST_LOG.md`, `docs/WIRING.md`, and `docs/MQTT_SCHEMA.md`.
 >
 > The corrections block below remains valid — the body of this document contains errors
 > that were never corrected in-place. Source of truth for all confirmed values: `CLAUDE.md`
 > and the actual source files.
 >
-> **Phase 8 status correction:**
-> - Document says Phase 8 "Not started until Phase 3 acceptance criteria pass"
-> - **DONE:** POWER_DIRECT mode fully implemented (10 build steps + display menus).
->   See `WORKPLAN.md` for the full command set and config fields.
+> **Current status correction:**
+> - The body below describes the original OEM-compatible reimplementation plan.
+> - The active target is now the custom ProofPro firmware.
+> - Build/OTA/bench status is tracked in `WORKPLAN.md` and `BENCH_TEST_LOG.md`.
 >
 > **File paths:**
 > - `RE_FINDINGS.md` → now at `research/RE_FINDINGS.md`

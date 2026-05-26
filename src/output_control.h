@@ -55,7 +55,7 @@ public:
 
     void begin(Config& cfg);
 
-    // Run one update cycle.  Call every sample_s after probe reads.
+    // Run one update cycle after each local probe read.
     void update(ChannelState& ch1, ChannelState& ch2);
 
     // Time-proportioning PWM driver — call every loop() iteration.

@@ -78,11 +78,12 @@ struct ChannelState {
     uint8_t  distill_power_pct = 100;  // commanded target power %
 
     // ── Relay state and mode ──────────────────────────────────────────────────
-    // relay_state: actual relay output state.
-    //   • In REMOTE mode this ALSO serves as the commanded state (set by {"CHx relay"}).
-    //   • In other modes it reflects what output_control computed.
+    // relay_state: actual GPIO output state as last written by output_control.
+    // relay_command: requested state for REMOTE mode only.
     RelayMode relay_mode  = RelayMode::OFF;
     bool      relay_state = false;
+    bool      relay_command = false;
+    bool      programRunning = false;
 
     // ── Acceleration phase ────────────────────────────────────────────────────
     // acc_mode:         feature switch — explicitly toggled; dAST/dOUT saved even if off
@@ -90,6 +91,7 @@ struct ChannelState {
     // dAST:             temperature that ends acceleration phase (0 = phase never auto-ends)
     // dOUT:             DC OUT duty % DURING acceleration phase
     bool      acc_mode           = false;
+    bool      acc_elements_enabled = true;
     bool      accelPhaseActive   = false;
     float     dAST               = 0.0f;
     uint8_t   dOUT               = 0;
@@ -99,8 +101,11 @@ struct ChannelState {
     // When temp crosses dFSP: all outputs off and latched until {"reset": true}.
     // 0.0f = feature disabled.
     float     dFSP             = 0.0f;
+    uint32_t  finish_time_s    = 0;     // elapsed finish time (0 = disabled)
     bool      finishLatch      = false;
     bool      finishLatchJustSet = false;   // pulse: output_control sets, cmdHandler clears
+    bool      finishEnd        = false; // true when finish condition has occurred
+    bool      finishEndJustSet = false; // pulse for "End" event/display
 
     // ── MQTT watchdog ─────────────────────────────────────────────────────────
     // If watchdog_s > 0 and no MQTT message received for watchdog_s seconds,
@@ -121,6 +126,8 @@ struct ChannelState {
     bool      timerTriggered   = false; // true once dtSP threshold was crossed
     uint32_t  timerStartMs     = 0;     // millis() when timer was armed
     bool      timerExpired     = false; // true once timer_duration_s elapsed
+    bool      timerFrozen      = false; // true when End freezes displayed remaining time
+    uint32_t  timerFrozenRemaining_s = 0;
 
     // ── Power ramp / soft start ────────────────────────────────────────────────
     // On POWER_DIRECT start: if ramp_duration_s > 0, DC OUT ramps linearly from
@@ -161,13 +168,19 @@ struct ChannelState {
         // Power mode transient state
         power_pct            = 0;
         relay_state          = false;
+        relay_command        = false;
+        programRunning       = false;
         accelPhaseActive     = false;
         accelPhaseJustEnded  = false;
         finishLatch          = false;
         finishLatchJustSet   = false;
+        finishEnd            = false;
+        finishEndJustSet     = false;
         watchdogFired        = false;
         timerTriggered       = false;
         timerExpired         = false;
+        timerFrozen          = false;
+        timerFrozenRemaining_s = 0;
         rampActive           = false;
     }
 

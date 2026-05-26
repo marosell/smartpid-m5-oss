@@ -2,10 +2,12 @@
 // telemetry.h — Dynamic telemetry publisher and event publisher
 //
 // Publishes to:
-//   smartpidM5/pro/<id>/dynamic/CH1      — live CH1 data (NOT retained)
-//   smartpidM5/pro/<id>/dynamic/CH2      — live CH2 data (NOT retained)
-//   smartpidM5/pro/<id>/events/standard  — run events: start/stop/pause/resume/power-restored
-//   smartpidM5/pro/<id>/events/advanced  — profile sequencer events: profile/ramp N/soak N
+//   smartpidM5/proofpro/<id>/power/CH1      — power-mode CH1 data (NOT retained)
+//   smartpidM5/proofpro/<id>/power/CH2      — power-mode CH2 data (NOT retained)
+//   smartpidM5/proofpro/<id>/dynamic/CH1    — legacy-mode CH1 data (NOT retained)
+//   smartpidM5/proofpro/<id>/dynamic/CH2    — legacy-mode CH2 data (NOT retained)
+//   smartpidM5/proofpro/<id>/events/standard
+//   smartpidM5/proofpro/<id>/events/advanced
 //
 // Timing:
 //   - CH1 + CH2 publish on the same tick, every cfg.sample_s seconds
@@ -26,13 +28,16 @@ class TelemetryPublisher {
 public:
     void begin(Config& cfg, MQTTManager& mqtt);
 
-    // Call in loop(). Fires publish when sample_s has elapsed.
+    // Call in loop(). Fires publish when cfg.sample_s has elapsed.
     void loop(const ChannelState& ch1, const ChannelState& ch2);
 
     // Publish an event to events/standard immediately.
-    // Used for: start, stop, pause, resume, power restored, socket connected.
     // payload: { "time": <boot_seconds>, "event": "<string>" }
     void publishEvent(const char* eventStr);
+    void publishEventTyped(const char* eventStr,
+                           const char* type,
+                           int8_t channel = 0,
+                           const char* reason = nullptr);
 
     // Publish an event to events/advanced immediately.
     // Used for profile sequencer events: "profile", "ramp N", "soak N".

@@ -66,6 +66,7 @@ static void serialSetDc1(int pct);
 static void serialSetDc2(int pct);
 static void serialSetRl1(bool on);
 static void serialSetRl2(bool on);
+static bool serialHandleCalibration(const String& lower);
 static void serialAllOff();
 static bool serialHandleRawOut(const String& lower);
 static void serialRawAllOff(bool leaveOverride);
@@ -273,6 +274,8 @@ void setup() {
     ch2.power_pct = 0;
     ch1.relay_state = false;
     ch2.relay_state = false;
+    ch1.relay_command = false;
+    ch2.relay_command = false;
 
     telemetry.begin(cfg, mqttMgr);
     cmdHandler.begin(cfg, mqttMgr, telemetry, ch1, ch2);
@@ -299,8 +302,7 @@ void setup() {
         Runmode r1 = (Runmode)cfg.ch1_saved_runmode;
         Runmode r2 = (Runmode)cfg.ch2_saved_runmode;
         if (r1 != Runmode::IDLE || r2 != Runmode::IDLE) {
-            gPendingAutoResume = true;
-            log_i("[RESUME] Power cycle with saved state CH1=%u CH2=%u — deferred resume pending",
+            log_i("[RESUME] Saved state CH1=%u CH2=%u — available from main menu",
                   (uint8_t)r1, (uint8_t)r2);
         }
     }
@@ -332,7 +334,8 @@ void loop() {
     // Phase 2+3: probe reads, PID update, command tick, telemetry, PWM output
     static unsigned long lastSampleMs = 0;
     unsigned long nowMs = millis();
-    if (nowMs - lastSampleMs >= (unsigned long)cfg.sample_s * 1000UL) {
+    static constexpr unsigned long kProbeSampleMs = 2000UL;
+    if (nowMs - lastSampleMs >= kProbeSampleMs) {
         lastSampleMs = nowMs;
         // Read probes (Phase 3)
         ch1.temp = probeReader.readTemp(1);
@@ -373,13 +376,13 @@ void loop() {
             otaBootWatchdogClear();
             // "socket connected" event: OEM publishes this on every MQTT connect
             // (confirmed from decompile — fires before any other event on connect)
-            telemetry.publishEvent("socket connected");
+            telemetry.publishEventTyped("socket connected", "mqtt_connected");
             // Re-announce all stored profiles so Proof stays in sync (OEM behavior)
             profiles.publishAll();
             // Deferred auto-resume: publish "power restored" and arm 62-second timer
             if (gPendingAutoResume) {
                 gPendingAutoResume = false;
-                telemetry.publishEvent("power restored");
+                telemetry.publishEventTyped("power restored", "power_restored");
                 gAutoResumeAtMs = millis() + 62000UL;
                 log_i("[RESUME] Published 'power restored' — will resume in 62s");
             }
@@ -419,7 +422,7 @@ void loop() {
                   (unsigned)ch2.watchdog_s);
         }
 
-        telemetry.publishEvent("resume");
+        telemetry.publishEventTyped("resume", "program_resumed");
         log_i("[RESUME] Applied: CH1=%s%s  CH2=%s%s",
               runmodeStr(r1), cfg.ch1_saved_paused ? " (paused)" : "",
               runmodeStr(r2), cfg.ch2_saved_paused ? " (paused)" : "");
@@ -534,6 +537,23 @@ static void handleSerialCommand(String line) {
         printBenchStatus("sensors");
         return;
     }
+    if (lower == "pt100" || lower == "pt100 raw" || lower == "probe raw") {
+        probeReader.printPt100Debug(Serial);
+        return;
+    }
+    if (lower == "pt100 scan" || lower == "probe scan") {
+        probeReader.printPt100Scan(Serial);
+        return;
+    }
+    if (lower == "pt100 3w" || lower == "pt100 comp" || lower == "probe comp") {
+        probeReader.printPt1003WireDebug(Serial);
+        return;
+    }
+    if (serialHandleCalibration(lower)) {
+        forceProbeSample();
+        printBenchStatus("cal");
+        return;
+    }
     if (lower == "monitor") {
         const char* json = "{\"start\":\"monitor\"}";
         cmdHandler.handle((const uint8_t*)json, strlen(json));
@@ -608,6 +628,11 @@ static void handleSerialCommand(String line) {
 static void printSerialHelp() {
     Serial.println("Serial bench commands:");
     Serial.println("  sensors/status        read probes now and print JSON");
+    Serial.println("  pt100 raw             print PT100 ADS1119 route diagnostics");
+    Serial.println("  pt100 scan            scan PT100 excitation/config candidates");
+    Serial.println("  pt100 3w              print PT100 3-wire terminal/comp diagnostics");
+    Serial.println("  cal                   print probe calibration offsets");
+    Serial.println("  cal1|cal2 <offset>    set probe calibration offset in current temp unit");
     Serial.println("  monitor               send OEM JSON {\"start\":\"monitor\"}");
     Serial.println("  power start           send OEM JSON {\"start\":\"power\"}");
     Serial.println("  power <0-100>         serial-only DC1 duty command");
@@ -633,27 +658,38 @@ static void printBenchStatus(const char* reason) {
     doc["ip"] = WiFi.localIP().toString();
     doc["mqtt"] = mqttMgr.connected();
     doc["remote"] = mqttRemoteEnabled();
+    doc["acc_elements_enabled"] = accElementsEnabled();
     doc["raw_output_override"] = gRawOutputOverride;
 
     JsonObject c1 = doc["ch1"].to<JsonObject>();
+    bool c1Valid = tempInProcessRange(ch1.temp, cfg.temp_unit);
     c1["temp"] = ch1.temp;
-    c1["valid"] = !isnan(ch1.temp) && ch1.temp < (PROBE_SENTINEL_VALUE / 2.0f);
+    c1["valid"] = c1Valid;
+    c1["display"] = c1Valid ? String(ch1.temp, 1) : "ERR";
     c1["probe"] = (uint8_t)cfg.ch1_probe_type;
+    c1["cal"] = cfg.ch1_probe_cal;
     c1["sp"] = ch1.sp;
     c1["runmode"] = runmodeStr(ch1.runmode);
     c1["dc1_power"] = ch1.power_pct;
     c1["relay_mode"] = relayModeStr(ch1.relay_mode);
     c1["rl1"] = ch1.relay_state;
+    c1["ended"] = ch1.finishEnd;
+    c1["latched"] = ch1.finishLatch;
 
     JsonObject c2 = doc["ch2"].to<JsonObject>();
+    bool c2Valid = tempInProcessRange(ch2.temp, cfg.temp_unit);
     c2["temp"] = ch2.temp;
-    c2["valid"] = !isnan(ch2.temp) && ch2.temp < (PROBE_SENTINEL_VALUE / 2.0f);
+    c2["valid"] = c2Valid;
+    c2["display"] = c2Valid ? String(ch2.temp, 1) : "ERR";
     c2["probe"] = (uint8_t)cfg.ch2_probe_type;
+    c2["cal"] = cfg.ch2_probe_cal;
     c2["sp"] = ch2.sp;
     c2["runmode"] = runmodeStr(ch2.runmode);
     c2["dc2_power"] = ch2.power_pct;
     c2["relay_mode"] = relayModeStr(ch2.relay_mode);
     c2["rl2"] = ch2.relay_state;
+    c2["ended"] = ch2.finishEnd;
+    c2["latched"] = ch2.finishLatch;
 
     serializeJson(doc, Serial);
     Serial.println();
@@ -675,6 +711,13 @@ static void applyOutputsNow() {
 
 static void serialSetDc1(int pct) {
     pct = constrain(pct, 0, 100);
+    if (!cfg.pwr_dc1_enabled) {
+        ch1.power_pct = 0;
+        ch1.accelPhaseActive = false;
+        applyOutputsNow();
+        log_w("[SERIAL] dc1 ignored — DC1 mode is Off");
+        return;
+    }
     if (ch1.runmode != Runmode::POWER_DIRECT) {
         ch1.runmode = Runmode::POWER_DIRECT;
         ch1.paused = false;
@@ -690,6 +733,13 @@ static void serialSetDc1(int pct) {
 
 static void serialSetDc2(int pct) {
     pct = constrain(pct, 0, 100);
+    if (!cfg.pwr_dc2_enabled) {
+        ch2.power_pct = 0;
+        ch2.accelPhaseActive = false;
+        applyOutputsNow();
+        log_w("[SERIAL] dc2 ignored — DC2 mode is Off");
+        return;
+    }
     if (ch2.runmode != Runmode::POWER_DIRECT) {
         ch2.runmode = Runmode::POWER_DIRECT;
         ch2.paused = false;
@@ -704,6 +754,13 @@ static void serialSetDc2(int pct) {
 }
 
 static void serialSetRl1(bool on) {
+    if (cfg.pwr_relay1_mode == (uint8_t)RelayMode::OFF) {
+        ch1.relay_command = false;
+        ch1.relay_state = false;
+        applyOutputsNow();
+        log_w("[SERIAL] rl1 ignored — RL1 mode is Off");
+        return;
+    }
     if (ch1.runmode != Runmode::POWER_DIRECT) {
         ch1.runmode = Runmode::POWER_DIRECT;
         ch1.paused = false;
@@ -713,11 +770,18 @@ static void serialSetRl1(bool on) {
     ch1.power_pct = 0;
     ch1.accelPhaseActive = false;
     ch1.relay_mode = RelayMode::REMOTE;
-    ch1.relay_state = on;
+    ch1.relay_command = on;
     applyOutputsNow();
 }
 
 static void serialSetRl2(bool on) {
+    if (cfg.pwr_relay2_mode == (uint8_t)RelayMode::OFF) {
+        ch2.relay_command = false;
+        ch2.relay_state = false;
+        applyOutputsNow();
+        log_w("[SERIAL] rl2 ignored — RL2 mode is Off");
+        return;
+    }
     if (ch2.runmode != Runmode::POWER_DIRECT) {
         ch2.runmode = Runmode::POWER_DIRECT;
         ch2.paused = false;
@@ -727,8 +791,37 @@ static void serialSetRl2(bool on) {
     ch2.power_pct = 0;
     ch2.accelPhaseActive = false;
     ch2.relay_mode = RelayMode::REMOTE;
-    ch2.relay_state = on;
+    ch2.relay_command = on;
     applyOutputsNow();
+}
+
+static bool serialHandleCalibration(const String& lower) {
+    if (lower == "cal" || lower == "calibration") {
+        Serial.printf("{\"type\":\"calibration\",\"unit\":\"%s\",\"ch1\":%.3f,\"ch2\":%.3f}\n",
+                      cfg.temp_unit, cfg.ch1_probe_cal, cfg.ch2_probe_cal);
+        return true;
+    }
+
+    float value = 0.0f;
+    if (sscanf(lower.c_str(), "cal1 %f", &value) == 1 ||
+        sscanf(lower.c_str(), "probe1 cal %f", &value) == 1) {
+        cfg.ch1_probe_cal = constrain(value, -20.0f, 20.0f);
+        cfg.save();
+        Serial.printf("{\"type\":\"calibration\",\"set\":\"ch1\",\"unit\":\"%s\",\"value\":%.3f}\n",
+                      cfg.temp_unit, cfg.ch1_probe_cal);
+        return true;
+    }
+
+    if (sscanf(lower.c_str(), "cal2 %f", &value) == 1 ||
+        sscanf(lower.c_str(), "probe2 cal %f", &value) == 1) {
+        cfg.ch2_probe_cal = constrain(value, -20.0f, 20.0f);
+        cfg.save();
+        Serial.printf("{\"type\":\"calibration\",\"set\":\"ch2\",\"unit\":\"%s\",\"value\":%.3f}\n",
+                      cfg.temp_unit, cfg.ch2_probe_cal);
+        return true;
+    }
+
+    return false;
 }
 
 static void serialAllOff() {
@@ -785,6 +878,8 @@ static void serialRawAllOff(bool leaveOverride) {
     ch2.power_pct = 0;
     ch1.relay_state = false;
     ch2.relay_state = false;
+    ch1.relay_command = false;
+    ch2.relay_command = false;
 }
 
 static void serialRawSetSlot(int slot, bool on, bool exclusive) {

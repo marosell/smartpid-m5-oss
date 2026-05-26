@@ -62,9 +62,9 @@
 // to a bidirectional GPIO for 1-Wire (DS18B20) mode in addition to the ADC
 // path for NTC mode. The actual GPIOs depend on the carrier board PCB.
 //
-// Current guesses (M5Stack Gray M-Bus bidirectional GPIOs not used by outputs):
-//   CH1: GPIO 25 — DAC1, bidirectional, available on M-Bus
-//   CH2: GPIO 17 — available on M-Bus (UART2 TX repurposed as GPIO)
+// OEM/decompiled hardware init uses:
+//   CH1: GPIO 2
+//   CH2: GPIO 15
 //
 // Update DS18B20_CH1_GPIO / DS18B20_CH2_GPIO after bench inspection and
 // continuity test of probe-terminal-to-GPIO connections.
@@ -77,8 +77,8 @@
 // add an external 4.7 kΩ pull-up from the data pin to 3.3V.
 // Without a pull-up, DS18B20 will not respond and readTemp() will always
 // return PROBE_SENTINEL_VALUE regardless of probe connection.
-#define DS18B20_CH1_GPIO  25   // BENCH-VERIFY: CH1 probe terminal → GPIO25?
-#define DS18B20_CH2_GPIO  17   // BENCH-VERIFY: CH2 probe terminal → GPIO17?
+#define DS18B20_CH1_GPIO  2
+#define DS18B20_CH2_GPIO  15
 
 // ── NTC voltage divider parameters ───────────────────────────────────────────
 #define NTC_R25         10000.0f  // NTC nominal resistance at 25°C (10kΩ)
@@ -89,13 +89,18 @@ class ProbeReader {
 public:
     // Initialise ADC + DS18B20 buses.
     // Starts the first DS18B20 temperature conversion so it's ready
-    // by the time readTemp() is called at the first sample_s tick.
+    // by the time readTemp() is called at the first local probe tick.
     void begin();
 
     // Read channel (1 or 2) temperature.
     // Returns PROBE_SENTINEL_VALUE if probe is open-circuit or disconnected.
     // Temperature returned in device units (°F when cfg.temp_unit=="F", else °C).
     float readTemp(int channel);
+
+    // Print raw PT100 routing diagnostics to the supplied stream.
+    void printPt100Debug(Stream& out);
+    void printPt100Scan(Stream& out);
+    void printPt1003WireDebug(Stream& out);
 
     // NTC ADC count → temperature in °C via Steinhart-Hart Beta equation.
     // Uses cfg.ntc_beta as the Beta coefficient (default 3977).

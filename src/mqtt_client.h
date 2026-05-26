@@ -13,9 +13,9 @@
 #include <functional>   // std::function
 #include "config.h"
 
-// Topic base for all SmartPID M5 PRO topics.
+// Topic base for all Proof Pro topics.
 // Full path: TOPIC_BASE + topic_id + "/" + suffix
-#define TOPIC_BASE "smartpidM5/pro/"
+#define TOPIC_BASE "smartpidM5/proofpro/"
 
 class MQTTManager {
 public:
@@ -39,7 +39,7 @@ public:
     // Publish a message. Returns false if not connected.
     bool publish(const char* topic, const char* payload, bool retained = false);
 
-    // Publish the retained status message to smartpidM5/pro/<id>/status.
+    // Publish the retained status message to smartpidM5/proofpro/<id>/status.
     // Called automatically on connect; also dispatched by {"status": true} command.
     bool publishStatus();
 

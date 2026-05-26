@@ -1,9 +1,18 @@
 // telemetry.cpp — Dynamic telemetry and event publisher
 
 #include "telemetry.h"
+#include "command_handler.h"
 #include <ArduinoJson.h>
 
 TelemetryPublisher telemetry;
+
+static uint32_t telemetryTimerRemainingSeconds(const ChannelState& ch) {
+    if (ch.timerFrozen) return ch.timerFrozenRemaining_s;
+    if (ch.timerExpired) return 0;
+    if (!ch.timerTriggered) return ch.timer_duration_s;
+    uint32_t elapsed = (uint32_t)((millis() - ch.timerStartMs) / 1000UL);
+    return elapsed >= ch.timer_duration_s ? 0 : (ch.timer_duration_s - elapsed);
+}
 
 // ── begin ─────────────────────────────────────────────────────────────────────
 void TelemetryPublisher::begin(Config& cfg, MQTTManager& mqtt) {
@@ -49,20 +58,32 @@ void TelemetryPublisher::loop(const ChannelState& ch1, const ChannelState& ch2) 
 //   Monitor:      { time, temp, unit, runmode }
 //   Standard/Adv: { time, temp, unit, runmode, countdown, countup, SP, mode,
 //                   pwm, maxpwm, relay }
-//   Power:        { time, temp, unit, runmode:"power", relay, power }
+//   Power:        { time, temp, unit, runmode:"power", relay, power, dc_mode }
 //                   power = current DC OUT duty % (reflects ramp, accel phase)
 void TelemetryPublisher::_publishChannel(const char* chName, const ChannelState& ch) {
     JsonDocument doc;
 
     doc["time"] = bootSeconds();
     doc["temp"] = ch.temp;
+    doc["temp_valid"] = tempInProcessRange(ch.temp, _cfg->temp_unit);
     doc["unit"] = _cfg->temp_unit;
 
     if (ch.runmode == Runmode::POWER_DIRECT) {
         // Power mode: unique payload with power field, no PID fields
+        const bool dcEnabled = (strcmp(chName, "CH1") == 0)
+            ? _cfg->pwr_dc1_enabled
+            : _cfg->pwr_dc2_enabled;
         doc["runmode"] = "power";
         doc["relay"]   = ch.relay_state;
         doc["power"]   = ch.power_pct;  // current actual duty (post-ramp, post-accel)
+        doc["dc_mode"] = dcEnabled ? "element" : "off";
+        doc["relay_mode"] = relayModeStr(ch.relay_mode);
+        doc["remote"] = mqttRemoteEnabled();
+        doc["acc_elements_enabled"] = accElementsEnabled();
+        doc["ended"] = ch.finishEnd;
+        doc["latched"] = ch.finishLatch;
+        doc["timer_remaining_s"] = telemetryTimerRemainingSeconds(ch);
+        doc["timer_frozen"] = ch.timerFrozen;
 
     } else {
         doc["runmode"] = runmodeStr(ch.runmode);
@@ -83,24 +104,37 @@ void TelemetryPublisher::_publishChannel(const char* chName, const ChannelState&
     String payload;
     serializeJson(doc, payload);
 
-    // Topic: smartpidM5/pro/<id>/dynamic/CH1 (or CH2)
-    String suffix = String("dynamic/") + chName;
+    // Topic: smartpidM5/proofpro/<id>/power/CH1 (power mode)
+    //     or smartpidM5/proofpro/<id>/dynamic/CH1 (legacy modes)
+    String suffix = (ch.runmode == Runmode::POWER_DIRECT)
+        ? (String("power/") + chName)
+        : (String("dynamic/") + chName);
     String topic  = _mqtt->fullTopic(suffix.c_str());
     _mqtt->publish(topic.c_str(), payload.c_str(), /*retained=*/false);
 
     log_d("[TELE] %s: %s", chName, payload.c_str());
 }
 
-// ── publishEvent ─────────────────────────────────────────────────────────────
-// Publishes to smartpidM5/pro/<id>/events/standard
-// Used for: start, stop, pause, resume, power restored, socket connected.
-// Payload: { "time": N, "event": "<string>" }
 void TelemetryPublisher::publishEvent(const char* eventStr) {
+    publishEventTyped(eventStr, nullptr, 0, nullptr);
+}
+
+// ── publishEventTyped ────────────────────────────────────────────────────────
+// Publishes to smartpidM5/proofpro/<id>/events/standard.
+// Payload always includes a human-readable "event"; custom firmware events
+// also include stable machine fields: "type", optional "channel", "reason".
+void TelemetryPublisher::publishEventTyped(const char* eventStr,
+                                           const char* type,
+                                           int8_t channel,
+                                           const char* reason) {
     if (!_mqtt->connected()) return;
 
     JsonDocument doc;
     doc["time"]  = bootSeconds();
     doc["event"] = eventStr;
+    if (type && type[0]) doc["type"] = type;
+    if (channel > 0) doc["channel"] = channel;
+    if (reason && reason[0]) doc["reason"] = reason;
 
     String payload;
     serializeJson(doc, payload);
