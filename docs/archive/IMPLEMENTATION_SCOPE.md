@@ -4,22 +4,24 @@
 > planning artifact only. The current firmware has moved into the custom ProofPro
 > workflow: Power screen first, Remote-gated MQTT control, DC1/DC2/RL1/RL2 control,
 > and bench-verified probe support. For current status, see `docs/WORKPLAN.md`,
-> `docs/BENCH_TEST_LOG.md`, `docs/WIRING.md`, and `docs/MQTT_SCHEMA.md`.
+> `docs/WIRING.md`, and `docs/MQTT_SCHEMA.md`.
 >
-> The corrections block below remains valid — the body of this document contains errors
-> that were never corrected in-place. Source of truth for all confirmed values: `CLAUDE.md`
-> and the actual source files.
+> The corrections block below remains valid. The body has been lightly updated
+> where stale values would otherwise conflict with active docs, but this remains
+> an archived planning artifact. Source of truth for all confirmed values:
+> `CLAUDE.md` and the actual source files.
 >
 > **Current status correction:**
 > - The body below describes the original OEM-compatible reimplementation plan.
 > - The active target is now the custom ProofPro firmware.
-> - Build/OTA/bench status is tracked in `WORKPLAN.md` and `BENCH_TEST_LOG.md`.
+> - Build/OTA status is tracked in `WORKPLAN.md`; hardware and bench facts are
+>   consolidated in `WIRING.md`.
 >
 > **File paths:**
-> - `RE_FINDINGS.md` → now at `research/RE_FINDINGS.md`
-> - `smartpid_decompiled.c` → now at `research/smartpid_decompiled.c`
-> - All other cross-references that used absolute `/Users/Mike/Projects/M5/` paths
->   should be resolved relative to the repo root.
+> - OEM reverse-engineering files are now local/ignored under `firmware-oem/research/`.
+> - `RE_FINDINGS.md` → `firmware-oem/research/RE_FINDINGS.md`
+> - `smartpid_decompiled.c` → `firmware-oem/research/smartpid_decompiled.c`
+> - The active custom firmware source is root `src/`.
 >
 > ## ⚠ CORRECTIONS — READ BEFORE USING THIS DOCUMENT
 >
@@ -27,8 +29,8 @@
 > original text. Source of truth for all confirmed values: `CLAUDE.md` and the actual source files.
 >
 > **1. Board target (affects entire document)**
-> - Document says: `m5stack-core2`
-> - **Correct value: `m5stack-grey`** — The device is an M5Stack Gray, not a Core2.
+> - Historical body originally targeted Core2.
+> - **Correct value: `m5stack-core-esp32-16M`** — The device is Basic/Gray-class M5Stack hardware with 16MB flash, not a Core2.
 >
 > **2. PID defaults (P3 table and Phase 1 NVS table)**
 > - Document says: Kp=3.6, Ki=4.5, Kd=9.0
@@ -44,11 +46,11 @@
 >   - No header before stage data
 >
 > **4. Display hardware and library (Phase 5)**
-> - Document says: M5Stack Core2, ILI9342C, capacitive touch, M5Unified library
+> - Historical body referenced the wrong display stack and touch hardware.
 > - **WRONG.** Device is M5Stack Gray:
->   - Display: ILI9341 (not ILI9342C)
+>   - Display: ILI9341
 >   - Input: **3 mechanical buttons** (BtnA/BtnB/BtnC) — **no touchscreen**
->   - Library: **M5Stack.h** (`m5stack/M5Stack`) — NOT M5Unified
+>   - Library: **M5Unified** (`m5stack/M5Unified`)
 >
 > **5. Phase 6 NVS namespace**
 > - Document says namespace `"thermostat"` for profile storage
@@ -58,14 +60,14 @@
 > **6. PID sample time**
 > - Document implies `sample_s * 1000` for PID sample time
 > - **WRONG.** PID sample time is **1500ms** (config field: `pid_sample_ms`).
->   This is separate from the 15s telemetry interval (`sample_s = 15`).
+>   This is separate from the current 6s power telemetry interval (`sample_s = 6`).
 
 ---
 
 # SmartPID M5 PRO — Replacement Firmware: Implementation Scope
 
 > **Primary goal:** A faithful, open-source reimplementation of the SmartPID M5 PRO firmware
-> running on the same M5Stack Core2 hardware, behaviorally identical to the OEM firmware as
+> running on the same M5Stack Basic/Gray-class hardware, behaviorally aligned with the OEM firmware as
 > documented by bench testing and reverse engineering. New features are deferred until the base
 > is validated.
 >
@@ -101,8 +103,8 @@ search, Quick Start Guide V2 (pages 8–17), bench test results.
 | # | Precondition | Status | Confirmed Value |
 |---|---|---|---|
 | P1 | **GPIO pin mapping** | ✅ CONFIRMED | GPIO 12, 13, 26, 16 (channels 0–3). Physical terminal assignment (RL1/RL2/DCOUT1/DCOUT2 order) verified by bench test during Phase 3. |
-| P2 | **PT100 ADC chip** | ⚠️ PARTIAL | I2C device at 0x77 (chip identity unknown — not MAX31865, not ADS1115). NTC probe uses ESP32 internal ADC. Phase 3 uses NTC/ADC path; PT100/K-type via I2C is Phase 3+ extension. |
-| P3 | **PID defaults** | ✅ CONFIRMED | Kp=3.6, Ki=4.5, Kd=9.0 (parallel form). 4th param=12.6 (purpose unknown). Default SP: CH1=131.0°F, CH2=104.0°F. |
+| P2 | **PT100 ADC chip** | ✅ CONFIRMED | ADS1119 at I2C `0x40`; GPIO expander at `0x41`. See `docs/WIRING.md`. |
+| P3 | **PID defaults** | ✅ CONFIRMED | OEM PID defaults shown on device: Kp=15.0, Ki=0.00, Kd=0.0. Earlier 3.6/4.5/9.0 values are hysteresis/reset-DT fields, not PID gains. |
 | P4 | **NVS key/structure** | ✅ CONFIRMED | OEM namespace: `"thermostat"`, main blob key `"params"` (600 bytes). MQTT: `"mqtt_addr"`, `"mqtt_port"`, `"mqtt_user"`, `"mqtt_pwd"`. Profiles: `"profile1"`–`"profile10"` (100 bytes each). |
 | P5 | **PWM period** | ✅ CONFIRMED | 3500ms default (stored in "params" blob). Min 500ms. |
 | P6 | **Display screenshots** | ✅ RESOLVED | Quick Start Guide V2 pages 8–17: full menu tree, monitor screen, run screen, HW Setup, Process Params, profile editor. |
@@ -118,12 +120,12 @@ search, Quick Start Guide V2 (pages 8–17), bench test results.
 |---|---|---|
 | Framework | **Arduino for ESP32** | Same as OEM (core 1.0.6; we use latest stable, same behavior) |
 | Build system | **PlatformIO** | Dependency management, partition table, OTA support |
-| Board target | `m5stack-core2` | M5Unified handles AXP192, display, touch |
-| Display | **M5Unified** | Canonical M5Stack library; drives ILI9342C 320×240 |
+| Board target | `m5stack-core-esp32-16M` | M5Stack Basic/Gray-class Core ESP32 16MB |
+| Display | **M5Unified** | Canonical M5Stack library; drives ILI9341 320×240 |
 | JSON | **ArduinoJson v7** | Replaces OEM's custom linked-list parser; same semantics |
 | MQTT | **PubSubClient** | Simplest path; matches OEM's synchronous MQTT usage pattern |
 | PID | **Arduino-PID-Library (Brett Beauregard v1.x)** | Industry standard; matches OEM algorithm class |
-| WiFi config | **WiFiManager** | Captive portal; same commissioning UX as OEM soft-AP |
+| WiFi config | Built-in `WebServer` + `DNSServer` captive portal | No external WiFiManager dependency |
 | NVS | **Preferences (Arduino NVS wrapper)** | Same key/value store as OEM |
 | OTA | **ArduinoOTA** (LAN) | Trigger endpoint; no cloud OTA in Phase 7 |
 
@@ -147,8 +149,8 @@ spiffs    0xc90000  0x360000
 - Device connects to WiFi using stored credentials; reconnects on drop
 - If no WiFi credentials in NVS, device enters AP mode (`SmartPID-XXXXXX`) and serves a config portal
 - Device connects to MQTT broker using stored credentials; reconnects on drop
-- On MQTT connect: subscribe to `smartpidM5/pro/<id>/commands` and `smartpidM5/pro/<id>/profiles/update/#`
-- On MQTT connect: publish retained status to `smartpidM5/pro/<id>/status`:
+- On MQTT connect: subscribe to `smartpidM5/proofpro/<id>/commands` and `smartpidM5/proofpro/<id>/profiles/update/#`
+- On MQTT connect: publish retained status to `smartpidM5/proofpro/<id>/status`:
   ```json
   { "serial": "<7-byte-hex>", "SSID": "<current SSID>", "client": "<device IP>" }
   ```
@@ -168,7 +170,7 @@ binary layout (config doesn't survive OEM→OSS flash, which is acceptable).
 | `smartpid` | `mqtt_port` | UInt16 | 1883 | |
 | `smartpid` | `mqtt_user` | String | — | |
 | `smartpid` | `mqtt_pass` | String | — | |
-| `smartpid` | `sample_s` | UInt16 | 15 | Confirmed from OEM NVS |
+| `smartpid` | `sample_s` | UInt16 | 6 | Current custom ProofPro power telemetry default |
 | `smartpid` | `temp_unit` | String | `"F"` | `"C"` or `"F"` |
 | `smartpid` | `ch1_sp` | Float | 131.0 | Default SP CH1 (= 55°C) |
 | `smartpid` | `ch2_sp` | Float | 104.0 | Default SP CH2 (= 40°C) |
@@ -184,7 +186,7 @@ binary layout (config doesn't survive OEM→OSS flash, which is acceptable).
 ```
 src/main.cpp
 src/config.h / config.cpp     — NVS load/save, defaults
-src/wifi_manager.cpp          — WiFi connect + AP fallback (WiFiManager)
+src/captive_portal.cpp        — WiFi/MQTT AP setup portal
 src/mqtt_client.h / .cpp      — connect, subscribe, reconnect, publish
 src/util/topic_id.h / .cpp    — serial → MQTT ID scrambler
 platformio.ini
@@ -192,9 +194,9 @@ partitions.csv
 ```
 
 ### Acceptance criteria
-- [ ] `mosquitto_sub -t 'smartpidM5/pro/+/status'` receives the retained status message within 10 seconds of device boot
+- [ ] `mosquitto_sub -t 'smartpidM5/proofpro/+/status'` receives the retained status message within 10 seconds of device boot
 - [ ] Status payload contains correct `serial`, `SSID`, `client` fields
-- [ ] `mosquitto_pub -t 'smartpidM5/pro/<id>/commands' -m '{"status":true}'` triggers immediate re-publish of status
+- [ ] `mosquitto_pub -t 'smartpidM5/proofpro/<id>/commands' -m '{"status":true}'` triggers immediate re-publish of status
 - [ ] Device recovers WiFi and MQTT after broker restart (within 30s)
 - [ ] `scramble_serial("040531000000E0")` returns `"6e345245af3704"` (locked reference vector)
 - [ ] AP mode appears as `SmartPID-XXXXXX` when WiFi credentials are absent
@@ -210,7 +212,7 @@ partitions.csv
 The bench results document is the complete behavioral spec for this phase. Key rules:
 
 **Telemetry (dynamic topic):**
-- Publish to `smartpidM5/pro/<id>/dynamic/CH1` and `/CH2` at `sample_s` interval
+- Publish to `smartpidM5/proofpro/<id>/dynamic/CH1` and `/CH2` at `sample_s` interval
 - `time` = seconds since boot (monotonic; resets on power cycle)
 - Monitor mode payload: `{ "time": N, "temp": T, "unit": "F", "runmode": "monitor" }`
 - Standard mode payload adds: `"countdown"`, `"countup"`, `"SP"`, `"mode"`, `"pwm"`, `"maxpwm"`, `"runmode": "standard"`
@@ -262,7 +264,7 @@ src/channel_state.h / .cpp     — per-channel state: mode, SP, maxpwm, runmode,
 ```
 
 ### Acceptance criteria
-- [ ] `mosquitto_sub -t 'smartpidM5/pro/+/dynamic/+'` receives CH1 + CH2 on the same tick every 15s
+- [ ] `mosquitto_sub -t 'smartpidM5/proofpro/+/dynamic/+'` receives CH1 + CH2 on the same tick at the configured publish interval
 - [ ] Monitor mode payload has exactly the 4 fields (`time`, `temp`, `unit`, `runmode`) — no SP/pwm/maxpwm
 - [ ] Standard mode payload has all fields including SP, pwm, maxpwm, mode, runmode, countdown, countup
 - [ ] `{"CH1 SP": 200}` while running: reflected in next telemetry tick; no restart required
@@ -375,8 +377,8 @@ Relay channels use direct `digitalWrite` (pin not overridden to 0xff).
 **Profile editor (page 12):** 8-stage table per profile slot
 
 **Display hardware:**
-- M5Stack Core2: ILI9342C 320×240 TFT, capacitive touch
-- M5Unified library manages display + touch
+- M5Stack Basic/Gray-class Core: ILI9341 320x240 TFT, 3 mechanical buttons
+- M5Unified manages display and button input
 - Orientation: landscape (320 wide × 240 tall)
 - Font: standard M5GFX fonts; large temp = font size 4–5, labels = size 2
 
@@ -384,7 +386,7 @@ Relay channels use direct `digitalWrite` (pin not overridden to 0xff).
 - [ ] Main screen shows CH1 + CH2 temps, SP, power%, mode at all times
 - [ ] MQTT indicator turns red within one tick of broker disconnect
 - [ ] MQTT indicator turns green within 5s of broker reconnect
-- [ ] STOP touch button sends `{"stop": true}` and updates displayed runmode
+- [ ] Stop control sends `{"stop": true}` and updates displayed runmode
 - [ ] Settings screen saves all fields to NVS; device reboots into new config
 
 ---
@@ -415,8 +417,8 @@ Stage with SP=0.0 / soak=0.0 / ramp=0.0 treated as end-of-profile sentinel.
 - Each stage: SP (°F or °C per device unit setting), soak_seconds, ramp_seconds
 - Storage: NVS namespace `"thermostat"` keys `"profile1"`–`"profile10"` (100-byte binary blob)
   to match OEM format (profiles survive firmware swap)
-- On connect: publish all non-empty profile slots to `smartpidM5/pro/<id>/profiles/<X>`
-- Receive profile updates on `smartpidM5/pro/<id>/profiles/update/<X>`, parse, save, re-publish
+- On connect: publish all non-empty profile slots to `smartpidM5/proofpro/<id>/profiles/<X>`
+- Receive profile updates on `smartpidM5/proofpro/<id>/profiles/update/<X>`, parse, save, re-publish
 - Advanced mode execution: ramp through stages, fire events per stage transition
   - `"ramp N"` event on ramp start (N = stage number 1–7)
   - `"soak N"` event on soak start (N = stage number 1–8)
@@ -455,7 +457,8 @@ Stage with SP=0.0 / soak=0.0 / ramp=0.0 treated as end-of-profile sentinel.
 
 ## Phase 8 — New capabilities (after base is bench-validated)
 
-Not started until Phase 3 acceptance criteria pass against hardware. Design TBD.
+Superseded by the active custom ProofPro workflow in root `src/`; current open
+work is tracked in `docs/WORKPLAN.md`.
 
 Candidates (from original project motivation):
 - `{"CH1 power": N}` / `{"CH2 power": N}` — direct power command bypassing SP-pinning workaround
@@ -496,10 +499,10 @@ smartpid-m5-oss/
     test_topic_id.cpp              Locked reference vector test
     test_pid.cpp                   PID output sanity
   docs/
-    PRECONDITIONS.md               P1–P7 status, findings as resolved
-    WIRING.md                      GPIO pin map (filled in when P1 resolved)
+    WIRING.md                      canonical hardware, wiring, probe, and bench reference
+    PRECONDITIONS.md               pointer to resolved preconditions in WIRING.md
     COMMISSIONING.md               First-boot AP setup procedure
-    BENCH_TEST_LOG.md              Phase 3 hardware validation results
+    WORKPLAN.md                    current status and next bench tests
 ```
 
 ---
@@ -512,8 +515,8 @@ These improvements were added after Phase 7 to close remaining OEM behavioral ga
 ### DS18B20 probe driver ✅ DONE
 - `probe.cpp`: Implements OneWire + DallasTemperature for `ProbeType::DS18B20`
 - Non-blocking async pattern: `requestTemperatures()` returns immediately; result read on next sample_s tick
-- GPIO pins: `DS18B20_CH1_GPIO 25` / `DS18B20_CH2_GPIO 17` — **BENCH-VERIFY** on carrier board
-- PT100/K-Type still fall back to NTC ADC — chip at I2C 0x77 identity TBD
+- GPIO pins: see current `src/probe.h` and `docs/WIRING.md`.
+- PT100/K-Type use the ADS1119 route described in `docs/WIRING.md`.
 - lib_deps: `paulstoffregen/OneWire @ ^2.3.7` + `milesburton/DallasTemperature @ ^3.11.0`
 
 ### Auto-resume run state persistence ✅ DONE
@@ -544,10 +547,9 @@ These improvements were added after Phase 7 to close remaining OEM behavioral ga
 ### Remaining gaps (requires hardware)
 | Gap | Blocker |
 |---|---|
-| PT100 (2W/3W) probe driver | I2C device at 0x77 chip identity TBD — inspect carrier board PCB |
-| K-Type probe driver | SPI chip TBD |
-| DS18B20 GPIO pin confirmation | BENCH-VERIFY: GPIO 25 / GPIO 17 are guesses |
-| GPIO → terminal mapping | BENCH-VERIFY Phase 3 validation still needed |
+| Watchdog safe behavior | Needs focused bench validation |
+| Relay cycle mode | Needs focused bench validation |
+| PT100 2-wire T1 pairing | Needs final bench confirmation |
 
 ---
 
@@ -557,7 +559,4 @@ These improvements were added after Phase 7 to close remaining OEM behavioral ga
 
 Phase 1 starting now. Sequence: Phase 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8+.
 
-One remaining investigation (non-blocking):
-- **I2C device at 0x77** — unknown chip. NTC/ADC path (Phase 3) does not need it.
-  PT100 and K-type probe support will use this device; Ghidra analysis of FUN_400df184
-  can identify it when PT100 support is added in Phase 3+.
+Remaining hardware validation is tracked in `docs/WIRING.md`.

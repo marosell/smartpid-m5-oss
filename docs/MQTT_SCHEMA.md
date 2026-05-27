@@ -129,6 +129,7 @@ All commands are JSON objects. Multiple keys may be sent in one payload.
 {"resume": true}
 {"reset": true}
 {"acc_elements": true}
+{"CH1 acc_mode": true}
 ```
 
 Remote gating:
@@ -158,6 +159,8 @@ If DC1/DC2 is configured `off`, commands to that DC channel are ignored.
 {"CH1 relay_mode": "off"}
 {"CH1 relay": true}
 {"CH1 relay": false}
+{"CH1 on_ms": 1000}
+{"CH1 cycle_ms": 5000}
 ```
 
 Use `CH2` for RL2. Direct `CHx relay` only drives the relay when its relay mode
@@ -168,6 +171,8 @@ Accepted compatibility aliases:
 - `remote` maps to `remote_other`
 - `reflux_timer` maps to `cycle`
 - `acc_sync` maps to `acc_element`
+
+`on_ms` and `cycle_ms` configure relay timing for `cycle` mode.
 
 ### Program commands
 
@@ -195,6 +200,8 @@ Field meanings:
 | `CHx finish_time_s` | elapsed finish time, currently legacy/secondary |
 | `CHx ramp_s` | soft-start ramp seconds |
 
+Program parameter writes require Remote enabled.
+
 ### Watchdog commands
 
 ```json
@@ -204,12 +211,12 @@ Field meanings:
 }
 ```
 
-Watchdog is still on the next-test list. Expected behavior is:
+Watchdog behavior is implemented and remains on the bench regression list:
 
 - any received command updates the watchdog timestamp
 - no command traffic for `watchdog_s` seconds trips watchdog safe
 - DC output drops to `watchdog_safe_pct`
-- relay safe behavior must be bench-confirmed
+- relays are driven off while watchdog safe is active
 - a later command should clear the watchdog and emit `watchdog cleared`
 
 ### Legacy OEM command compatibility

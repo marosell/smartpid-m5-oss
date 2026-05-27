@@ -1,7 +1,8 @@
 # Custom M5 PRO Firmware — Distilling Capabilities Spec
 
-**Status:** Implementation-ready. All architectural decisions locked.
-**Preconditions:** All resolved — see `docs/PRECONDITIONS.md`.
+**Status:** Archived design reference. Current implementation status is tracked
+in `docs/WORKPLAN.md`.
+**Preconditions:** All resolved — see `docs/WIRING.md`.
 **Hardware gate:** Phase 3 bench validation (USB flash + output wiring confirmation) is
 technically a prerequisite for production use. Implementation proceeds in parallel.
 
@@ -14,7 +15,7 @@ technically a prerequisite for production use. Implementation proceeds in parall
 | Unit | CH1 | CH2 |
 |---|---|---|
 | M5 #1 (control) | Boiler temp | Head / vapor temp |
-| M5 #2 (cooling + safety) | Condensate output temp | Fourth probe — TBD / experimental |
+| M5 #2 (cooling + safety) | Condensate output temp | Future experimental fourth probe, not assigned in current firmware |
 
 M5 #1 owns the distilling process variables. Boiler and vapor temps drive all power
 control, phase transitions, and safety cutoffs. Everything on M5 #1 that acts on
@@ -398,7 +399,8 @@ Steps 7–10 are capability expansion.
 - Ramp/soak temperature profiles (mashing feature — separate spec, `temperature_program`)
 - Display UI beyond minimal functional (connection state, temps, power % — v1 only)
 - I2C inter-unit communication (deferred — simpler paths cover the use cases)
-- I2C chip identification at 0x77 (PT100 interface — open item in PRECONDITIONS.md)
+- Probe ADC identification is resolved: ADS1119 at I2C `0x40`; GPIO expander at
+  `0x41`. See `docs/WIRING.md`.
 - Multi-slot named power profiles (Proof is the profile store; single device slot sufficient)
 - Computed telemetry fields (dT/dt, est. ABV) — Proof computes from received temp data
 - Cut alarm monitoring in firmware (dALH / SIL / HY) — all cut decisions are Proof's job

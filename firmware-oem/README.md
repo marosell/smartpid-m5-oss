@@ -1,7 +1,5 @@
 # OEM Firmware — SmartPID M5 PRO
 
-## ⚠️ DO NOT MODIFY OR OVERWRITE THESE FILES
-
 These are read-only backups captured from the physical device on 2026-05-23 via
 USB-C read-only connection. No settings were changed during capture.
 
@@ -27,8 +25,9 @@ wrong during custom firmware development. Keep them exactly as-is forever.
 
 > **Core2 vs Gray note:** Initial esptool string extraction found `@M5Stack initializing...` and
 > some Core2 references in the OEM binary, leading to an early misidentification. The device is
-> confirmed M5Stack Gray (3 mechanical buttons, ILI9341 320×240 display, no touchscreen, no
-> AXP192 PMIC). `board = m5stack-grey` in platformio.ini is correct.
+> confirmed M5Stack Gray/Basic-class hardware (3 mechanical buttons, ILI9341
+> 320×240 display, no touchscreen, no AXP192 PMIC). The current build target used
+> by this project is `m5stack-core-esp32-16M`.
 
 ---
 
@@ -77,8 +76,9 @@ used** to determine flash voltage (VDD_SDIO) at reset:
 - GPIO 12 LOW at reset → 3.3V flash (correct)
 - GPIO 12 HIGH at reset → 1.8V flash → **hard fault / brick risk**
 
-GPIO 12 is wired to RL1 (the cooling relay). Before connecting USB to flash:
-1. Measure voltage on GPIO 12 / RL1 terminal with a voltmeter
+GPIO 12 is wired to DC OUT 1 on the current bench-confirmed carrier map. Before
+connecting USB to flash:
+1. Measure voltage on GPIO 12 / DC OUT 1 terminal with a voltmeter
 2. Must read **0V (LOW)** — relay driver should hold it low at idle
 3. If it reads 3.3V, do NOT flash until the relay state is resolved
 
@@ -94,6 +94,26 @@ This check is only needed for USB flashing. OTA updates are not affected.
 | `smartpid_app0.bin` | app0 partition only (1.94 MB, the actual application) |
 | `smartpid_m5pro_partitions.bin` | Partition table region (3 KB, offset `0x8000`) |
 | `efuse_summary.txt` | Full eFuse register dump from `esptool efuse_summary` |
+| `src/` | Cleaned decompile-derived source archive from the OEM reverse-engineering pass |
+| `platformio.ini` | Local build config for `src/` |
+| `partitions.csv` | Development partition table for building the cleaned source archive |
+
+## Source archive
+
+`firmware-oem/src/` is not the untouched OEM binary source code. It is the
+cleaned, renamed, decompile-derived C++ source tree produced during the
+reverse-engineering/integration pass. It is kept here so the project has a
+separate reference implementation tree alongside the protected binary backups.
+
+Build from this directory:
+
+```bash
+cd firmware-oem
+pio run -e m5stack-core-esp32-16M
+```
+
+The root repository `src/` directory is the current custom ProofPro firmware.
+Do not copy files between the two trees without explicitly documenting why.
 
 ### How the dump was taken
 

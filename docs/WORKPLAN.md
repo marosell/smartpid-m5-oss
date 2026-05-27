@@ -1,6 +1,6 @@
 # SmartPID M5 OSS — Workplan
 
-**Current status, 2026-05-26:** Custom ProofPro firmware builds, OTA updates,
+**Current status, 2026-05-27:** Custom ProofPro firmware builds, OTA updates,
 boots on the test unit, connects to WiFi/MQTT, renders the custom Power UI, and
 has bench-confirmed output and probe paths.
 
@@ -19,14 +19,16 @@ workflow. The active product workflow is:
 ## Standing rule — decompile first
 
 For every unimplemented function, calculation, UI element, or data structure:
-search the decompiled OEM firmware first and copy it as closely as practical
-when the OEM behavior is still relevant.
+search the decompiled OEM firmware first when the OEM behavior is still
+relevant. The local decompile/research archive now lives under ignored
+`firmware-oem/research/`.
 
 The custom ProofPro workflow intentionally diverges from the OEM app in several
 places, especially the Power screen, remote gating, and program controls. For
 those custom pieces, document the divergence in `docs/`.
 
-Do not touch `research/` or `firmware-oem/` during normal implementation.
+Do not touch `firmware-oem/` during normal implementation unless the task is
+explicitly about OEM backups, decompile research, or firmware switching.
 
 ---
 
@@ -119,7 +121,7 @@ smartpidM5/proofpro/{topic_id}/profiles/update/#
 
 ---
 
-## Tomorrow's first tests
+## Next bench tests
 
 1. **Watchdog test**
    - Configure watchdog and watchdog-safe percent.

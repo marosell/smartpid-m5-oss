@@ -7,13 +7,17 @@ plus decompiled firmware color constants and platform documentation.
 menu item, layout detail, color, and navigation rule is derived from direct
 observation of the OEM hardware.
 
+**Current-status note:** This is archived OEM UI reference. The active custom
+ProofPro UI is implemented in `src/display.cpp` and summarized in
+`docs/WORKPLAN.md`.
+
 ---
 
 ## 1. Hardware
 
 | Item | Value |
 |---|---|
-| Board | M5Stack Gray (`m5stack-grey`) |
+| Board | M5Stack Basic/Gray-class Core ESP32 16MB (`m5stack-core-esp32-16M`) |
 | Display | ILI9341 TFT, 320×240 pixels, landscape |
 | Color depth | RGB565 (16-bit) |
 | Library | `M5Stack/M5Stack` — use `M5.Lcd.*` (NOT M5Unified for Phase 5) |
@@ -566,7 +570,8 @@ Header: `Logging Configuration`
 Options: `OFF / WiFi / SD Card / WiFi + SD`  
 (WiFi = MQTT publishing enabled; OFF = connected but silent.)
 
-**Sample Time:** `0:15` = MM:SS format (0 minutes, 15 seconds = 15s interval).
+**Sample Time:** `0:15` = MM:SS format from the OEM UI. The current custom
+ProofPro firmware defaults power telemetry to 6 seconds.
 
 ### 10.3 Status (IMG_2588)
 
@@ -884,7 +889,9 @@ Both icons are approximately 12×10 px, drawn just left of the clock.
 ## 18. Implementation Notes for Phase 5
 
 ### Library selection
-Use `M5Stack/M5Stack` (`M5.h`), NOT M5Unified. The board target is `m5stack-grey`.
+Current custom firmware uses M5Unified/M5GFX on `m5stack-core-esp32-16M`.
+The OEM app used the older M5Stack Arduino library; keep that distinction clear
+when comparing decompile references against current source.
 - Display calls: `M5.Lcd.fillScreen()`, `M5.Lcd.setTextColor()`, `M5.Lcd.setCursor()`, `M5.Lcd.printf()`, `M5.Lcd.drawRect()`, `M5.Lcd.fillRect()`, `M5.Lcd.drawLine()`
 - Button reads: `M5.BtnA.wasPressed()`, `M5.BtnB.wasPressed()`, `M5.BtnC.wasPressed()`
 - Call `M5.update()` every loop iteration
@@ -893,7 +900,8 @@ Use `M5Stack/M5Stack` (`M5.h`), NOT M5Unified. The board target is `m5stack-grey
 - Maintain a `UIScreen currentScreen` state variable
 - On state entry, do a full `fillScreen(COL_BG)` + draw header + draw footer + draw content
 - On live value updates (temp, time), redraw only the specific region using `fillRect()` to erase then redraw — do not full-screen redraw every second
-- Temperature and SP values change at most every `sample_s` (15s) — partial redraw is fine
+- Temperature and SP values change at the configured `sample_s`; current custom
+  ProofPro default is 6 seconds.
 - Timer countup changes every second — redraw just the timer text region in the header
 
 ### Partial redraw regions (Running Screen 1)

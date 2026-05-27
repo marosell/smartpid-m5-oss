@@ -14,6 +14,7 @@ compile_commands.json
 # Build
 *.o
 *.d
+__pycache__/
 
 # Credentials — never commit NVS snapshots or credential files
 *.nvs
@@ -22,3 +23,9 @@ mqtt_creds.*
 
 # firmware-releases/ binaries ARE tracked intentionally (post-flash-verified archives)
 # Do NOT add *.bin to this file
+
+# OEM firmware backups and decompile-derived archive are local/protected assets.
+firmware-oem/
+
+# Generated Ghidra analysis logs are local provenance/noise unless deliberately archived.
+research/logs/
