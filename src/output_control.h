@@ -55,6 +55,10 @@ public:
 
     void begin(Config& cfg);
 
+    // Force all physical outputs low immediately. Used for boot, OTA, and
+    // diagnostics paths where state-machine timing must not leave hardware on.
+    void forceAllOff();
+
     // Run one update cycle after each local probe read.
     void update(ChannelState& ch1, ChannelState& ch2);
 

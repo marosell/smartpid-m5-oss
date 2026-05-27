@@ -103,3 +103,82 @@ pio run -t upload --upload-port <device-ip>
 ```
 
 Device hostname: `smartpid-m5` via mDNS.
+
+Before and after OTA, firmware forces DC1/DC2/RL1/RL2 low and logs GPIO
+readback. This is especially important for DC OUT 1, which is GPIO12 and also
+an ESP32 boot strapping pin.
+
+## Output strap diagnostics
+
+Firmware publishes `events/standard` diagnostics after MQTT connects:
+
+```json
+{
+  "type": "boot_diagnostics",
+  "event": "boot diagnostics",
+  "reset_reason": "poweron",
+  "dc1_gpio12_high_at_boot": false,
+  "gpio": {
+    "0": 1,
+    "2": 0,
+    "4": 0,
+    "5": 1,
+    "12": 0,
+    "13": 0,
+    "15": 1,
+    "16": 0,
+    "26": 0
+  }
+}
+```
+
+If GPIO12 is high in the boot snapshot, firmware also publishes:
+
+```json
+{
+  "type": "hardware_warning",
+  "event": "hardware warning",
+  "reason": "gpio12_high_at_boot",
+  "message": "DC OUT 1 / GPIO12 high during boot; USB flashing may fail"
+}
+```
+
+Request live output readback over MQTT:
+
+```bash
+mosquitto_pub -h <broker-ip> -u proof -P test123 \
+  -t 'smartpidM5/proofpro/<topic-id>/commands' \
+  -m '{"diagnostics":"outputs"}'
+```
+
+Or over serial:
+
+```text
+diag
+```
+
+The response/event has this shape:
+
+```json
+{
+  "type": "output_diagnostics",
+  "event": "output diagnostics",
+  "reason": "mqtt_command",
+  "commanded": {
+    "dc1": 0,
+    "dc2": 0,
+    "rl1": false,
+    "rl2": false
+  },
+  "actual": {
+    "rl1": false,
+    "rl2": false
+  },
+  "gpio_readback": {
+    "dc1_gpio12": 0,
+    "dc2_gpio13": 0,
+    "rl1_gpio26": 0,
+    "rl2_gpio16": 0
+  }
+}
+```

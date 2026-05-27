@@ -2,6 +2,7 @@
 
 #include "telemetry.h"
 #include "command_handler.h"
+#include "output_control.h"
 #include <ArduinoJson.h>
 
 TelemetryPublisher telemetry;
@@ -219,6 +220,87 @@ void TelemetryPublisher::publishCommandError(const char* command,
     _mqtt->publish(topic.c_str(), payload.c_str(), /*retained=*/false);
 
     log_i("[EVENT/STD] command rejected");
+}
+
+void TelemetryPublisher::publishBootDiagnostics(const char* resetReason,
+                                                int gpio0, int gpio2, int gpio4, int gpio5,
+                                                int gpio12, int gpio13, int gpio15,
+                                                int gpio16, int gpio26) {
+    if (!_mqtt->connected()) return;
+
+    JsonDocument doc;
+    doc["time"] = bootSeconds();
+    doc["type"] = "boot_diagnostics";
+    doc["event"] = "boot diagnostics";
+    doc["reset_reason"] = resetReason ? resetReason : "unknown";
+    doc["dc1_gpio12_high_at_boot"] = (gpio12 == HIGH);
+
+    JsonObject gpio = doc["gpio"].to<JsonObject>();
+    gpio["0"] = gpio0;
+    gpio["2"] = gpio2;
+    gpio["4"] = gpio4;
+    gpio["5"] = gpio5;
+    gpio["12"] = gpio12;
+    gpio["13"] = gpio13;
+    gpio["15"] = gpio15;
+    gpio["16"] = gpio16;
+    gpio["26"] = gpio26;
+
+    String payload;
+    serializeJson(doc, payload);
+
+    String topic = _mqtt->fullTopic("events/standard");
+    _mqtt->publish(topic.c_str(), payload.c_str(), /*retained=*/false);
+    log_i("[EVENT/STD] boot diagnostics: %s", payload.c_str());
+
+    if (gpio12 == HIGH) {
+        JsonDocument warn;
+        warn["time"] = bootSeconds();
+        warn["type"] = "hardware_warning";
+        warn["event"] = "hardware warning";
+        warn["reason"] = "gpio12_high_at_boot";
+        warn["message"] = "DC OUT 1 / GPIO12 high during boot; USB flashing may fail";
+
+        String warnPayload;
+        serializeJson(warn, warnPayload);
+        _mqtt->publish(topic.c_str(), warnPayload.c_str(), /*retained=*/false);
+        log_w("[EVENT/STD] GPIO12 high at boot");
+    }
+}
+
+void TelemetryPublisher::publishOutputDiagnostics(const char* reason,
+                                                  const ChannelState& ch1,
+                                                  const ChannelState& ch2) {
+    if (!_mqtt->connected()) return;
+
+    JsonDocument doc;
+    doc["time"] = bootSeconds();
+    doc["type"] = "output_diagnostics";
+    doc["event"] = "output diagnostics";
+    doc["reason"] = reason ? reason : "requested";
+
+    JsonObject commanded = doc["commanded"].to<JsonObject>();
+    commanded["dc1"] = ch1.power_pct;
+    commanded["dc2"] = ch2.power_pct;
+    commanded["rl1"] = ch1.relay_command;
+    commanded["rl2"] = ch2.relay_command;
+
+    JsonObject actual = doc["actual"].to<JsonObject>();
+    actual["rl1"] = ch1.relay_state;
+    actual["rl2"] = ch2.relay_state;
+
+    JsonObject gpio = doc["gpio_readback"].to<JsonObject>();
+    gpio["dc1_gpio12"] = digitalRead(GPIO_DCOUT1);
+    gpio["dc2_gpio13"] = digitalRead(GPIO_DCOUT2);
+    gpio["rl1_gpio26"] = digitalRead(GPIO_RL1);
+    gpio["rl2_gpio16"] = digitalRead(GPIO_RL2);
+
+    String payload;
+    serializeJson(doc, payload);
+
+    String topic = _mqtt->fullTopic("events/standard");
+    _mqtt->publish(topic.c_str(), payload.c_str(), /*retained=*/false);
+    log_i("[EVENT/STD] output diagnostics: %s", payload.c_str());
 }
 
 // ── publishEventAdv ───────────────────────────────────────────────────────────

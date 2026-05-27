@@ -201,6 +201,9 @@ Known event strings/types:
 | `watchdog config rejected` | `watchdog_config_error` | device |
 | `watchdog safe pct ignored` | `watchdog_config_deprecated` | device |
 | `command rejected` | `command_error` | device |
+| `boot diagnostics` | `boot_diagnostics` | device |
+| `output diagnostics` | `output_diagnostics` | device |
+| `hardware warning` | `hardware_warning` | device |
 
 Watchdog trip event:
 
@@ -240,6 +243,54 @@ General command rejection event:
 }
 ```
 
+Boot/output diagnostic events:
+
+```json
+{
+  "time": 123,
+  "type": "boot_diagnostics",
+  "event": "boot diagnostics",
+  "reset_reason": "poweron",
+  "dc1_gpio12_high_at_boot": false,
+  "gpio": {
+    "0": 1,
+    "2": 0,
+    "4": 0,
+    "5": 1,
+    "12": 0,
+    "13": 0,
+    "15": 1,
+    "16": 0,
+    "26": 0
+  }
+}
+```
+
+```json
+{
+  "time": 123,
+  "type": "output_diagnostics",
+  "event": "output diagnostics",
+  "reason": "mqtt_command",
+  "commanded": {
+    "dc1": 0,
+    "dc2": 0,
+    "rl1": false,
+    "rl2": false
+  },
+  "actual": {
+    "rl1": false,
+    "rl2": false
+  },
+  "gpio_readback": {
+    "dc1_gpio12": 0,
+    "dc2_gpio13": 0,
+    "rl1_gpio26": 0,
+    "rl2_gpio16": 0
+  }
+}
+```
+
 ### `events/advanced`
 
 Legacy profile-sequencer topic. Not part of the main ProofPro custom workflow.
@@ -257,6 +308,14 @@ logic should use `commands` unless profile support is deliberately revived.
 ## Command payloads
 
 All commands are JSON objects. Multiple keys may be sent in one payload.
+
+Request live output diagnostics:
+
+```json
+{
+  "diagnostics": "outputs"
+}
+```
 
 ### General commands
 

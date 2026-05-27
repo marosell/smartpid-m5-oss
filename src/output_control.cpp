@@ -40,11 +40,7 @@ static void freezePowerTimer(ChannelState& ch) {
 void OutputController::begin(Config& cfg) {
     _cfg = &cfg;
 
-    const int pins[] = {GPIO_CH0_OUT, GPIO_CH1_OUT, GPIO_CH2_OUT, GPIO_CH3_OUT};
-    for (int pin : pins) {
-        pinMode(pin, OUTPUT);
-        digitalWrite(pin, LOW);
-    }
+    forceAllOff();
     log_i("[OUT] GPIO init: pins 12/13/26/16 → LOW");
 
     delete _pid1;
@@ -65,6 +61,21 @@ void OutputController::begin(Config& cfg) {
           _cfg->ch1_kp, _cfg->ch1_ki, _cfg->ch1_kd, _cfg->pid_sample_ms);
     log_i("[OUT] PID2 Kp=%.2f Ki=%.2f Kd=%.2f  SampleTime=%ums",
           _cfg->ch2_kp, _cfg->ch2_ki, _cfg->ch2_kd, _cfg->pid_sample_ms);
+}
+
+void OutputController::forceAllOff() {
+    const int pins[] = {GPIO_CH0_OUT, GPIO_CH1_OUT, GPIO_CH2_OUT, GPIO_CH3_OUT};
+    for (int pin : pins) {
+        pinMode(pin, OUTPUT);
+        digitalWrite(pin, LOW);
+    }
+    _pwm1.dutyCurrent = 0;
+    _pwm2.dutyCurrent = 0;
+    _pwm1.pinHigh = false;
+    _pwm2.pinHigh = false;
+    _onoff1.relayOn = false;
+    _onoff2.relayOn = false;
+    _rl1CoolingState = false;
 }
 
 // ── update ────────────────────────────────────────────────────────────────────

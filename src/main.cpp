@@ -38,6 +38,7 @@
 #include <ArduinoJson.h>
 #include <Preferences.h>
 #include <esp_ota_ops.h>    // esp_ota_set_boot_partition — OTA boot-loop rollback
+#include <esp_system.h>
 
 #include "config.h"
 #include "mqtt_client.h"
@@ -60,6 +61,7 @@ static void handleSerialInput();
 static void handleSerialCommand(String line);
 static void printSerialHelp();
 static void printBenchStatus(const char* reason);
+static void printOutputDiagnostics(const char* reason);
 static void forceProbeSample();
 static void applyOutputsNow();
 static void serialSetDc1(int pct);
@@ -142,6 +144,51 @@ static bool          gMqttWasConnected  = false;
 static String        gStatusLine        = "booting...";
 static String        gSerialLine;
 static bool          gRawOutputOverride = false;
+static bool          gBootDiagnosticsPublished = false;
+
+struct BootPinSnapshot {
+    int gpio0 = LOW;
+    int gpio2 = LOW;
+    int gpio4 = LOW;
+    int gpio5 = LOW;
+    int gpio12 = LOW;
+    int gpio13 = LOW;
+    int gpio15 = LOW;
+    int gpio16 = LOW;
+    int gpio26 = LOW;
+};
+
+static BootPinSnapshot gBootPins;
+static esp_reset_reason_t gBootResetReason = ESP_RST_UNKNOWN;
+
+static const char* resetReasonString(esp_reset_reason_t reason) {
+    switch (reason) {
+        case ESP_RST_POWERON:   return "poweron";
+        case ESP_RST_EXT:       return "external";
+        case ESP_RST_SW:        return "software";
+        case ESP_RST_PANIC:     return "panic";
+        case ESP_RST_INT_WDT:   return "interrupt_watchdog";
+        case ESP_RST_TASK_WDT:  return "task_watchdog";
+        case ESP_RST_WDT:       return "watchdog";
+        case ESP_RST_DEEPSLEEP: return "deepsleep";
+        case ESP_RST_BROWNOUT:  return "brownout";
+        case ESP_RST_SDIO:      return "sdio";
+        default:                return "unknown";
+    }
+}
+
+static void captureBootPinSnapshot() {
+    gBootResetReason = esp_reset_reason();
+    gBootPins.gpio0 = digitalRead(0);
+    gBootPins.gpio2 = digitalRead(2);
+    gBootPins.gpio4 = digitalRead(4);
+    gBootPins.gpio5 = digitalRead(5);
+    gBootPins.gpio12 = digitalRead(GPIO_DCOUT1);
+    gBootPins.gpio13 = digitalRead(GPIO_DCOUT2);
+    gBootPins.gpio15 = digitalRead(15);
+    gBootPins.gpio16 = digitalRead(GPIO_RL2);
+    gBootPins.gpio26 = digitalRead(GPIO_RL1);
+}
 
 // Deferred auto-resume state.
 // On boot with saved runmode: we do NOT immediately apply channel states.
@@ -167,10 +214,19 @@ void setup() {
     Serial.begin(115200);
     delay(200);
 
+    captureBootPinSnapshot();
+    outputCtrl.forceAllOff();
+
     log_i("==============================");
     log_i("SmartPID M5 OSS — Phase 1 boot");
     log_i("==============================");
     log_i("[BOARD] M5.getBoard() = %d  (1=M5Stack/Basic/Gray, 3=Core2)", (int)M5.getBoard());
+    log_i("[BOOT] reset_reason=%s", resetReasonString(gBootResetReason));
+    log_i("[BOOT] pin snapshot: GPIO0=%d GPIO2=%d GPIO4=%d GPIO5=%d GPIO12(DC1)=%d GPIO13(DC2)=%d GPIO15=%d GPIO16(RL2)=%d GPIO26(RL1)=%d",
+          gBootPins.gpio0, gBootPins.gpio2, gBootPins.gpio4, gBootPins.gpio5,
+          gBootPins.gpio12, gBootPins.gpio13, gBootPins.gpio15,
+          gBootPins.gpio16, gBootPins.gpio26);
+    log_i("[BOOT] forced outputs LOW after snapshot");
 
     // ── I2C bus scan ──────────────────────────────────────────────────────────
     // One-time scan to enumerate every device on the I2C bus.
@@ -377,6 +433,16 @@ void loop() {
             // "socket connected" event: OEM publishes this on every MQTT connect
             // (confirmed from decompile — fires before any other event on connect)
             telemetry.publishEventTyped("socket connected", "mqtt_connected");
+            if (!gBootDiagnosticsPublished) {
+                gBootDiagnosticsPublished = true;
+                telemetry.publishBootDiagnostics(resetReasonString(gBootResetReason),
+                                                 gBootPins.gpio0, gBootPins.gpio2,
+                                                 gBootPins.gpio4, gBootPins.gpio5,
+                                                 gBootPins.gpio12, gBootPins.gpio13,
+                                                 gBootPins.gpio15, gBootPins.gpio16,
+                                                 gBootPins.gpio26);
+                telemetry.publishOutputDiagnostics("mqtt_connected", ch1, ch2);
+            }
             // Re-announce all stored profiles so Proof stays in sync (OEM behavior)
             profiles.publishAll();
             // Deferred auto-resume: publish "power restored" and arm 62-second timer
@@ -549,6 +615,10 @@ static void handleSerialCommand(String line) {
         probeReader.printPt1003WireDebug(Serial);
         return;
     }
+    if (lower == "diag" || lower == "diagnostics" || lower == "outputs") {
+        printOutputDiagnostics("serial_command");
+        return;
+    }
     if (serialHandleCalibration(lower)) {
         forceProbeSample();
         printBenchStatus("cal");
@@ -631,6 +701,7 @@ static void printSerialHelp() {
     Serial.println("  pt100 raw             print PT100 ADS1119 route diagnostics");
     Serial.println("  pt100 scan            scan PT100 excitation/config candidates");
     Serial.println("  pt100 3w              print PT100 3-wire terminal/comp diagnostics");
+    Serial.println("  diag/outputs          print output GPIO readback diagnostics");
     Serial.println("  cal                   print probe calibration offsets");
     Serial.println("  cal1|cal2 <offset>    set probe calibration offset in current temp unit");
     Serial.println("  monitor               send OEM JSON {\"start\":\"monitor\"}");
@@ -693,6 +764,45 @@ static void printBenchStatus(const char* reason) {
 
     serializeJson(doc, Serial);
     Serial.println();
+}
+
+static void printOutputDiagnostics(const char* reason) {
+    JsonDocument doc;
+    doc["type"] = "output_diagnostics";
+    doc["reason"] = reason;
+    doc["time"] = millis();
+    doc["reset_reason"] = resetReasonString(gBootResetReason);
+
+    JsonObject boot = doc["boot_gpio"].to<JsonObject>();
+    boot["0"] = gBootPins.gpio0;
+    boot["2"] = gBootPins.gpio2;
+    boot["4"] = gBootPins.gpio4;
+    boot["5"] = gBootPins.gpio5;
+    boot["12"] = gBootPins.gpio12;
+    boot["13"] = gBootPins.gpio13;
+    boot["15"] = gBootPins.gpio15;
+    boot["16"] = gBootPins.gpio16;
+    boot["26"] = gBootPins.gpio26;
+
+    JsonObject commanded = doc["commanded"].to<JsonObject>();
+    commanded["dc1"] = ch1.power_pct;
+    commanded["dc2"] = ch2.power_pct;
+    commanded["rl1"] = ch1.relay_command;
+    commanded["rl2"] = ch2.relay_command;
+
+    JsonObject actual = doc["actual"].to<JsonObject>();
+    actual["rl1"] = ch1.relay_state;
+    actual["rl2"] = ch2.relay_state;
+
+    JsonObject gpio = doc["gpio_readback"].to<JsonObject>();
+    gpio["dc1_gpio12"] = digitalRead(GPIO_DCOUT1);
+    gpio["dc2_gpio13"] = digitalRead(GPIO_DCOUT2);
+    gpio["rl1_gpio26"] = digitalRead(GPIO_RL1);
+    gpio["rl2_gpio16"] = digitalRead(GPIO_RL2);
+
+    serializeJson(doc, Serial);
+    Serial.println();
+    telemetry.publishOutputDiagnostics(reason, ch1, ch2);
 }
 
 static void forceProbeSample() {

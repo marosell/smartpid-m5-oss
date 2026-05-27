@@ -6,6 +6,7 @@
 
 #include "ota.h"
 #include "display.h"
+#include "output_control.h"
 #include <ArduinoOTA.h>
 
 OTAManager otaMgr;
@@ -16,10 +17,18 @@ void OTAManager::begin(const char* hostname) {
     ArduinoOTA.onStart([]() {
         bool isFs = (ArduinoOTA.getCommand() == U_SPIFFS);
         log_i("[OTA] Start: updating %s", isFs ? "filesystem" : "firmware");
+        outputCtrl.forceAllOff();
+        log_i("[OTA] Forced outputs LOW before update: DC1(GPIO12)=%d DC2(GPIO13)=%d RL1(GPIO26)=%d RL2(GPIO16)=%d",
+              digitalRead(GPIO_DCOUT1), digitalRead(GPIO_DCOUT2),
+              digitalRead(GPIO_RL1), digitalRead(GPIO_RL2));
         display.notifyOtaStart(isFs);
     });
 
     ArduinoOTA.onEnd([]() {
+        outputCtrl.forceAllOff();
+        log_i("[OTA] Forced outputs LOW before reboot: DC1(GPIO12)=%d DC2(GPIO13)=%d RL1(GPIO26)=%d RL2(GPIO16)=%d",
+              digitalRead(GPIO_DCOUT1), digitalRead(GPIO_DCOUT2),
+              digitalRead(GPIO_RL1), digitalRead(GPIO_RL2));
         log_i("[OTA] Complete — rebooting");
         display.notifyOtaEnd();
     });

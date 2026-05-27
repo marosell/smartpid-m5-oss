@@ -214,6 +214,15 @@ void CommandHandler::handle(const uint8_t* payload, unsigned int len) {
         log_d("[CMD] heartbeat");
     }
 
+    if (doc["diagnostics"].is<const char*>()) {
+        const char* diag = doc["diagnostics"].as<const char*>();
+        if (strcmp(diag, "outputs") == 0) {
+            _tele->publishOutputDiagnostics("mqtt_command", *_ch[0], *_ch[1]);
+        } else {
+            _tele->publishCommandError("diagnostics", "invalid_value", diag);
+        }
+    }
+
     // ── Device-level watchdog config ──────────────────────────────────────────
     if (!doc["watchdog_s"].isNull()) {
         _cmdSetWatchdogTimeout(doc["watchdog_s"].as<int>());

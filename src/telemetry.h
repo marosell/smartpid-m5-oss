@@ -44,6 +44,13 @@ public:
     void publishCommandError(const char* command,
                              const char* reason,
                              const char* value = nullptr);
+    void publishBootDiagnostics(const char* resetReason,
+                                int gpio0, int gpio2, int gpio4, int gpio5,
+                                int gpio12, int gpio13, int gpio15,
+                                int gpio16, int gpio26);
+    void publishOutputDiagnostics(const char* reason,
+                                  const ChannelState& ch1,
+                                  const ChannelState& ch2);
 
     // Publish an event to events/advanced immediately.
     // Used for profile sequencer events: "profile", "ramp N", "soak N".
