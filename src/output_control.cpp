@@ -3,7 +3,7 @@
 // Paths:
 //   STANDARD / ADVANCED: PID or On/Off hysteresis control
 //   POWER_DIRECT:        Fixed duty DC OUT + relay modes + acceleration phase
-//                        + finish latch + watchdog + soft-start ramp + reflux timer
+//                        + finish latch + soft-start ramp + reflux timer
 //
 // Bench-confirmed timing:
 //   DC OUT 50% at 3500ms → ON ~1750ms, OFF ~1750ms
@@ -73,6 +73,24 @@ void OutputController::update(ChannelState& ch1, ChannelState& ch2) {
     ControlAlgo algo1 = (ControlAlgo)_cfg->ch1_control_algo;
     ControlAlgo algo2 = (ControlAlgo)_cfg->ch2_control_algo;
 
+    if (ch1.watchdogFired || ch2.watchdogFired) {
+        _pwm1.dutyCurrent = 0;
+        _pwm2.dutyCurrent = 0;
+        _pwm1.pinHigh = false;
+        _pwm2.pinHigh = false;
+        digitalWrite(GPIO_DCOUT1, LOW);
+        digitalWrite(GPIO_DCOUT2, LOW);
+        digitalWrite(GPIO_RL1, LOW);
+        digitalWrite(GPIO_RL2, LOW);
+        ch1.power_pct = 0;
+        ch2.power_pct = 0;
+        ch1.relay_state = false;
+        ch2.relay_state = false;
+        ch1.relay_command = false;
+        ch2.relay_command = false;
+        return;
+    }
+
     // CH1: DC OUT 1 (GPIO_DCOUT1) is the primary heating output.
     //       RL1 (GPIO_RL1) is the cooling/relay output.
     if (ch1.runmode == Runmode::POWER_DIRECT) {
@@ -103,9 +121,8 @@ void OutputController::update(ChannelState& ch1, ChannelState& ch2) {
 //   1. Probe sentinel      → force all off (safety)
 //   2. Finish latch (dFSP) → outputs latched off; set pulse flag for event
 //   3. Not running/paused  → all off
-//   4. Watchdog fired      → DC OUT at watchdog_safe_pct, relay off
-//   5. Acceleration phase  → DC OUT at dOUT%, relay per relay_mode (ACC_SYNC)
-//   6. Normal run          → DC OUT at distill_power_pct (with ramp), relay per relay_mode
+//   4. Acceleration phase  → DC OUT at dOUT%, relay per relay_mode (ACC_SYNC)
+//   5. Normal run          → DC OUT at distill_power_pct (with ramp), relay per relay_mode
 //
 // Writes ch.power_pct to reflect actual current duty (post-ramp, post-accel).
 void OutputController::_updatePowerDirect(int chIdx, ChannelState& ch,
@@ -166,22 +183,7 @@ void OutputController::_updatePowerDirect(int chIdx, ChannelState& ch,
         return;
     }
 
-    // 4. MQTT watchdog fired: hold at safe power, relay off
-    if (ch.watchdogFired) {
-        uint8_t safePct = dcEnabled ? ch.watchdog_safe_pct : 0;
-        pwmState.dutyCurrent = safePct;
-        if (safePct == 0 && pwmState.pinHigh) {
-            digitalWrite(dcOutPin, LOW);
-            pwmState.pinHigh = false;
-        }
-        digitalWrite(relayPin, LOW);
-        ch.relay_state = false;
-        ch.power_pct = safePct;
-        log_d("[OUT] CH%d watchdog safe: %u%%", chIdx, safePct);
-        return;
-    }
-
-    // 5 + 6. Compute target power considering acceleration phase
+    // 4 + 5. Compute target power considering acceleration phase
     uint8_t targetPct;
     if (ch.acc_mode && ch.accelPhaseActive) {
         // Check if acceleration phase end threshold crossed

@@ -9,6 +9,8 @@ CommandHandler cmdHandler;
 static bool gMqttRemoteEnabled = false;
 static bool gAccElementsEnabled = true;
 static Config* gRuntimeCfg = nullptr;
+static uint32_t gLastMqttMsgMs = 0;
+static bool gWatchdogFired = false;
 
 bool mqttRemoteEnabled() {
     return gMqttRemoteEnabled;
@@ -31,6 +33,26 @@ static void setAccElementsEnabled(bool enabled) {
     if (gRuntimeCfg) {
         gRuntimeCfg->pwr_acc_elements_enabled = enabled;
         gRuntimeCfg->savePowerParams();
+    }
+}
+
+static void setDeviceWatchdogFired(ChannelState* ch1, ChannelState* ch2, bool fired) {
+    gWatchdogFired = fired;
+    if (ch1) {
+        ch1->watchdogFired = fired;
+        if (fired) {
+            ch1->power_pct = 0;
+            ch1->relay_state = false;
+            ch1->relay_command = false;
+        }
+    }
+    if (ch2) {
+        ch2->watchdogFired = fired;
+        if (fired) {
+            ch2->power_pct = 0;
+            ch2->relay_state = false;
+            ch2->relay_command = false;
+        }
     }
 }
 
@@ -72,6 +94,8 @@ void CommandHandler::begin(Config& cfg, MQTTManager& mqtt,
     gRuntimeCfg = &cfg;
     gMqttRemoteEnabled = cfg.remote_enabled;
     gAccElementsEnabled = cfg.pwr_acc_elements_enabled;
+    gLastMqttMsgMs = millis();
+    gWatchdogFired = false;
 }
 
 ChannelState* CommandHandler::_channel(int idx) {
@@ -88,18 +112,29 @@ void CommandHandler::handle(const uint8_t* payload, unsigned int len) {
         return;
     }
 
-    // ── Watchdog: stamp MQTT message timestamp on both channels ───────────────
-    // Any received MQTT command message resets the watchdog for all channels.
+    // ── Watchdog: stamp MQTT message timestamp ────────────────────────────────
+    // Any received MQTT command message resets the device-level watchdog.
     {
         unsigned long nowMs = millis();
-        if (_ch[0]) _ch[0]->lastMqttMsgMs = nowMs;
-        if (_ch[1]) _ch[1]->lastMqttMsgMs = nowMs;
+        gLastMqttMsgMs = nowMs;
+        if (gWatchdogFired) {
+            setDeviceWatchdogFired(_ch[0], _ch[1], false);
+            _tele->publishEventTyped("watchdog cleared", "watchdog_cleared");
+        }
     }
 
     // ── {"status": true} ──────────────────────────────────────────────────────
     if (doc["status"].is<bool>() && doc["status"].as<bool>()) {
         log_i("[CMD] status → re-publishing");
         _mqtt->publishStatus();
+    }
+
+    // ── Device-level watchdog config ──────────────────────────────────────────
+    if (!doc["watchdog_s"].isNull()) {
+        _cmdSetWatchdogTimeout(doc["watchdog_s"].as<int>());
+    }
+    if (doc["watchdog_enabled"].is<bool>()) {
+        _cmdSetWatchdogEnabled(doc["watchdog_enabled"].as<bool>());
     }
 
     // ── {"start": "power"/"remote"} ──────────────────────────────────────────
@@ -245,11 +280,21 @@ void CommandHandler::handle(const uint8_t* payload, unsigned int len) {
         else log_w("[CMD] CH2 dFSP ignored — Remote is OFF");
     }
 
-    // MQTT watchdog
-    if (!doc["CH1 watchdog_s"].isNull()) _cmdSetWatchdog(1, doc["CH1 watchdog_s"].as<int>());
-    if (!doc["CH2 watchdog_s"].isNull()) _cmdSetWatchdog(2, doc["CH2 watchdog_s"].as<int>());
-    if (!doc["CH1 watchdog_safe_pct"].isNull()) _cmdSetWatchdogSafe(1, doc["CH1 watchdog_safe_pct"].as<int>());
-    if (!doc["CH2 watchdog_safe_pct"].isNull()) _cmdSetWatchdogSafe(2, doc["CH2 watchdog_safe_pct"].as<int>());
+    // Legacy per-channel watchdog aliases. They normalize to device-level config.
+    if (!doc["CH1 watchdog_s"].isNull() || !doc["CH2 watchdog_s"].isNull()) {
+        int ch1 = doc["CH1 watchdog_s"].isNull() ? -1 : doc["CH1 watchdog_s"].as<int>();
+        int ch2 = doc["CH2 watchdog_s"].isNull() ? -1 : doc["CH2 watchdog_s"].as<int>();
+        if (ch1 >= 0 && ch2 >= 0 && ch1 != ch2) {
+            _tele->publishEventTyped("watchdog config rejected", "watchdog_config_error", 0, "mismatched_legacy_timeouts");
+            log_w("[CMD] legacy watchdog_s rejected — CH1=%d CH2=%d", ch1, ch2);
+        } else {
+            _cmdSetWatchdogTimeout(ch1 >= 0 ? ch1 : ch2);
+        }
+    }
+    if (!doc["CH1 watchdog_safe_pct"].isNull() || !doc["CH2 watchdog_safe_pct"].isNull()) {
+        _tele->publishEventTyped("watchdog safe pct ignored", "watchdog_config_deprecated", 0, "safe_state_is_device_off");
+        log_w("[CMD] legacy watchdog_safe_pct ignored — device safe state is all outputs off");
+    }
 
     // Temperature-triggered timer
     if (!doc["CH1 dtSP"].isNull()) {
@@ -427,8 +472,6 @@ void CommandHandler::_applyPowerParams(int chIdx) {
     ch->distill_power_pct = _cfg->pwr_distill_pct;
     ch->dFSP              = _cfg->pwr_dfsp;
     ch->finish_time_s     = _cfg->pwr_finish_time_s;
-    ch->watchdog_s        = _cfg->pwr_wdog_s;
-    ch->watchdog_safe_pct = _cfg->pwr_wdog_safe;
     ch->dtSP              = _cfg->pwr_dtsp;
     ch->timer_duration_s  = _cfg->pwr_timer_s;
     ch->timer_dir         = _cfg->pwr_deo;
@@ -445,8 +488,8 @@ void CommandHandler::_applyPowerParams(int chIdx) {
         ch->relay_cycle_ms = _cfg->pwr_r2_cycle_ms;
     }
 
-    // Reset watchdog timestamp so it doesn't fire immediately
-    ch->lastMqttMsgMs = millis();
+    // Reset device watchdog timestamp so it doesn't fire immediately after start.
+    gLastMqttMsgMs = millis();
 
     // Init ramp if configured
     if (ch->ramp_duration_s > 0) {
@@ -496,10 +539,8 @@ void CommandHandler::_cmdResume() {
     log_i("[CMD] resume");
     _ch[0]->paused = false;
     _ch[1]->paused = false;
-    // Reset watchdog timestamps on resume so they don't fire immediately
-    unsigned long now = millis();
-    if (_ch[0]) _ch[0]->lastMqttMsgMs = now;
-    if (_ch[1]) _ch[1]->lastMqttMsgMs = now;
+    // Reset watchdog timestamp on resume so it doesn't fire immediately.
+    gLastMqttMsgMs = millis();
     _tele->publishEventTyped("resume", "program_resumed");
     _cfg->saveRunState((uint8_t)_ch[0]->runmode, (uint8_t)_ch[1]->runmode,
                        false, false);
@@ -690,29 +731,37 @@ void CommandHandler::_cmdSetDFSP(int chIdx, float temp) {
     _cfg->savePowerParams();
 }
 
-// ── _cmdSetWatchdog ───────────────────────────────────────────────────────────
-void CommandHandler::_cmdSetWatchdog(int chIdx, int seconds) {
-    ChannelState* ch = _channel(chIdx);
-    if (!ch) return;
-    seconds = max(0, seconds);
-    log_i("[CMD] CH%d watchdog_s → %d", chIdx, seconds);
-    ch->watchdog_s = (uint32_t)seconds;
-    _cfg->pwr_wdog_s = (uint32_t)seconds;
-    // Reset watchdog state when timeout is reconfigured
-    ch->watchdogFired = false;
-    ch->lastMqttMsgMs = millis();
+// ── _cmdSetWatchdogEnabled ────────────────────────────────────────────────────
+void CommandHandler::_cmdSetWatchdogEnabled(bool enabled) {
+    log_i("[CMD] watchdog_enabled → %s", enabled ? "true" : "false");
+    if (enabled && _cfg->pwr_wdog_s == 0) {
+        _cfg->pwr_wdog_enabled = false;
+        _tele->publishEventTyped("watchdog config rejected", "watchdog_config_error", 0, "missing_watchdog_timeout");
+        _cfg->savePowerParams();
+        _mqtt->publishStatus();
+        return;
+    }
+    _cfg->pwr_wdog_enabled = enabled;
+    gLastMqttMsgMs = millis();
+    if (!enabled) {
+        setDeviceWatchdogFired(_ch[0], _ch[1], false);
+    }
     _cfg->savePowerParams();
+    _mqtt->publishStatus();
 }
 
-// ── _cmdSetWatchdogSafe ───────────────────────────────────────────────────────
-void CommandHandler::_cmdSetWatchdogSafe(int chIdx, int pct) {
-    ChannelState* ch = _channel(chIdx);
-    if (!ch) return;
-    pct = constrain(pct, 0, 100);
-    log_i("[CMD] CH%d watchdog_safe_pct → %d%%", chIdx, pct);
-    ch->watchdog_safe_pct = (uint8_t)pct;
-    _cfg->pwr_wdog_safe = (uint8_t)pct;
+// ── _cmdSetWatchdogTimeout ────────────────────────────────────────────────────
+void CommandHandler::_cmdSetWatchdogTimeout(int seconds) {
+    seconds = max(0, seconds);
+    log_i("[CMD] watchdog_s → %d", seconds);
+    _cfg->pwr_wdog_s = (uint32_t)seconds;
+    if (seconds == 0) {
+        _cfg->pwr_wdog_enabled = false;
+        setDeviceWatchdogFired(_ch[0], _ch[1], false);
+    }
+    gLastMqttMsgMs = millis();
     _cfg->savePowerParams();
+    _mqtt->publishStatus();
 }
 
 // ── _cmdSetDtSP ───────────────────────────────────────────────────────────────
@@ -804,13 +853,25 @@ void CommandHandler::_cmdSetRelayCycleMs(int chIdx, int ms) {
 //   • Advance countup / decrement countdown (OEM + POWER_DIRECT)
 //   • Fire "timer expired" events (OEM countdown)
 //   • Fire "SP reached" events (STANDARD mode)
-//   • Check MQTT watchdog (POWER_DIRECT mode)
+//   • Check device-level MQTT watchdog
 //   • Check dtSP temperature timer (POWER_DIRECT mode)
 //   • Publish event pulses set by output_control (accel end, finish latch)
 void CommandHandler::tick() {
     unsigned long now = millis();
     if (now - _lastTickMs < 1000UL) return;
     _lastTickMs = now;
+
+    if (_cfg->pwr_wdog_enabled && _cfg->pwr_wdog_s > 0 && gLastMqttMsgMs > 0) {
+        unsigned long elapsed = now - gLastMqttMsgMs;
+        bool timedOut = (elapsed > (unsigned long)_cfg->pwr_wdog_s * 1000UL);
+        if (!gWatchdogFired && timedOut) {
+            setDeviceWatchdogFired(_ch[0], _ch[1], true);
+            _tele->publishWatchdogSafe(_cfg->pwr_wdog_s);
+            _applyRuntimeOutputs();
+            log_w("[EVT] watchdog safe state — no MQTT for %lus",
+                  (unsigned long)_cfg->pwr_wdog_s);
+        }
+    }
 
     for (int i = 0; i < 2; i++) {
         ChannelState* ch = _ch[i];
@@ -881,28 +942,6 @@ void CommandHandler::tick() {
             if (ch->timer_dir == 1) {
                 ch->finishLatch = true;
                 ch->finishLatchJustSet = true;
-            }
-        }
-
-        // ── MQTT watchdog ──────────────────────────────────────────────────
-        if (ch->watchdog_s > 0 && ch->lastMqttMsgMs > 0) {
-            unsigned long elapsed = now - ch->lastMqttMsgMs;
-            bool timedOut = (elapsed > (unsigned long)ch->watchdog_s * 1000UL);
-
-            if (!ch->watchdogFired && timedOut) {
-                ch->watchdogFired = true;
-                char evtBuf[28];
-                snprintf(evtBuf, sizeof(evtBuf), "%s watchdog safe", chName);
-                _tele->publishEventTyped(evtBuf, "watchdog_safe", (int8_t)(i + 1));
-                log_w("[EVT] %s — no MQTT for %lus, safe=%u%%",
-                      evtBuf, (unsigned long)ch->watchdog_s, ch->watchdog_safe_pct);
-            } else if (ch->watchdogFired && !timedOut) {
-                // Message received — watchdog recovered
-                ch->watchdogFired = false;
-                char evtBuf[28];
-                snprintf(evtBuf, sizeof(evtBuf), "%s watchdog cleared", chName);
-                _tele->publishEventTyped(evtBuf, "watchdog_cleared", (int8_t)(i + 1));
-                log_i("[EVT] %s", evtBuf);
             }
         }
 

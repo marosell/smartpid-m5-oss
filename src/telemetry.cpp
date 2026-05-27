@@ -145,6 +145,24 @@ void TelemetryPublisher::publishEventTyped(const char* eventStr,
     log_i("[EVENT/STD] %s", eventStr);
 }
 
+void TelemetryPublisher::publishWatchdogSafe(uint32_t watchdog_s) {
+    if (!_mqtt->connected()) return;
+
+    JsonDocument doc;
+    doc["time"] = bootSeconds();
+    doc["type"] = "watchdog_safe";
+    doc["event"] = "watchdog safe state";
+    doc["watchdog_s"] = watchdog_s;
+
+    String payload;
+    serializeJson(doc, payload);
+
+    String topic = _mqtt->fullTopic("events/standard");
+    _mqtt->publish(topic.c_str(), payload.c_str(), /*retained=*/false);
+
+    log_i("[EVENT/STD] watchdog safe state");
+}
+
 // ── publishEventAdv ───────────────────────────────────────────────────────────
 // Publishes to smartpidM5/pro/<id>/events/advanced
 // Used for profile sequencer events: "profile", "ramp N", "soak N".

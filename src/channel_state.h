@@ -107,14 +107,10 @@ struct ChannelState {
     bool      finishEnd        = false; // true when finish condition has occurred
     bool      finishEndJustSet = false; // pulse for "End" event/display
 
-    // ── MQTT watchdog ─────────────────────────────────────────────────────────
-    // If watchdog_s > 0 and no MQTT message received for watchdog_s seconds,
-    // DC OUT drops to watchdog_safe_pct (relay goes off).
-    // Recovers automatically when a new message arrives.
-    uint32_t  watchdog_s        = 0;     // timeout in seconds (0 = disabled)
-    uint8_t   watchdog_safe_pct = 0;     // power % when watchdog fires
-    uint32_t  lastMqttMsgMs     = 0;     // millis() of last MQTT message
-    bool      watchdogFired     = false; // currently in watchdog safe state
+    // ── Device MQTT watchdog reflection ───────────────────────────────────────
+    // Watchdog config/timing is device-level. This mirrors the global safe state
+    // so per-channel telemetry and UI can show that outputs are forced off.
+    bool      watchdogFired     = false;
 
     // ── Temperature-triggered timer (dtSP / dEO) ──────────────────────────────
     // When temp crosses dtSP: arm a countdown of timer_duration_s seconds.
@@ -154,7 +150,7 @@ struct ChannelState {
 
     // Called when stop command received or on boot init.
     // Clears all transient state; preserves configuration fields
-    // (acc_mode, dAST, dOUT, dFSP, watchdog_*, dtSP, timer_*, ramp_*,
+    // (acc_mode, dAST, dOUT, dFSP, dtSP, timer_*, ramp_*,
     //  relay_mode, relay_on_ms, relay_cycle_ms) so the operator doesn't have
     // to re-set them on every start.
     void stop() {

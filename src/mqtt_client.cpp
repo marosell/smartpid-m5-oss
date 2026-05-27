@@ -80,6 +80,9 @@ bool MQTTManager::publishStatus() {
     doc["serial"] = _cfg->serial_hex;
     doc["SSID"]   = WiFi.SSID();
     doc["client"] = WiFi.localIP().toString();
+    doc["unit"]   = _cfg->temp_unit;
+    doc["watchdog_enabled"] = _cfg->pwr_wdog_enabled;
+    doc["watchdog_s"] = _cfg->pwr_wdog_s;
 
     String payload;
     serializeJson(doc, payload);

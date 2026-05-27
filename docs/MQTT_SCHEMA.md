@@ -20,9 +20,17 @@ Retained. Published on MQTT connect and in response to `{"status":true}`.
 {
   "serial": "000C3BA7C0E8FC",
   "SSID": "Chaos",
-  "client": "10.0.1.60"
+  "client": "10.0.1.60",
+  "unit": "F",
+  "watchdog_enabled": true,
+  "watchdog_s": 30
 }
 ```
+
+`status` is the discovery/onboarding source of truth. `unit` is device-level and
+is always `"F"` or `"C"`. Proof should auto-fill and lock temperature unit from
+retained status rather than asking the user to choose per channel. Watchdog
+settings are also device-level.
 
 ### `power/CH1` and `power/CH2`
 
@@ -52,6 +60,8 @@ in power mode. Current firmware target cadence is every 6 seconds.
 Field notes:
 
 - `temp_valid` is false when the value is outside the process range.
+- `unit` is required in every temperature-bearing telemetry payload and must
+  match retained `status.unit`.
 - `dc_mode` is `element` or `off`.
 - `relay_mode` is `off`, `acc_element`, `remote_other`, or `cycle`.
 - `power` is actual driven DC output percent, including watchdog/accel effects.
@@ -96,8 +106,18 @@ Known event strings/types:
 | `CH1 timer expired` / `CH2 timer expired` | `timer_expired` |
 | `CH1 accel end` / `CH2 accel end` | `accel_complete` |
 | `CH1 End` / `CH2 End` | `program_ended` |
-| `CH1 watchdog safe` / `CH2 watchdog safe` | `watchdog_safe` |
-| `CH1 watchdog cleared` / `CH2 watchdog cleared` | `watchdog_cleared` |
+| `watchdog safe state` | `watchdog_safe` |
+| `watchdog cleared` | `watchdog_cleared` |
+
+Watchdog trip event shape:
+
+```json
+{
+  "type": "watchdog_safe",
+  "event": "watchdog safe state",
+  "watchdog_s": 30
+}
+```
 
 ### `events/advanced`
 
@@ -206,18 +226,45 @@ Program parameter writes require Remote enabled.
 
 ```json
 {
-  "CH1 watchdog_s": 30,
-  "CH1 watchdog_safe_pct": 0
+  "watchdog_enabled": true,
+  "watchdog_s": 30
 }
 ```
 
-Watchdog behavior is implemented and remains on the bench regression list:
+Disable/unarm:
 
+```json
+{
+  "watchdog_enabled": false
+}
+```
+
+Watchdog behavior:
+
+- watchdog config is device-level, not per channel
+- `watchdog_enabled=false` disables/unarms the watchdog
+- `watchdog_enabled=true` arms it
+- `watchdog_s` is the device-level timeout in seconds
 - any received command updates the watchdog timestamp
 - no command traffic for `watchdog_s` seconds trips watchdog safe
-- DC output drops to `watchdog_safe_pct`
-- relays are driven off while watchdog safe is active
-- a later command should clear the watchdog and emit `watchdog cleared`
+- watchdog trip forces DC OUT 1 = 0%, DC OUT 2 = 0%, RL1 off, and RL2 off
+- safe/off applies regardless of channel mode, relay mode, program state, or
+  Remote command state
+- there are no per-channel watchdog safe percentages
+- a later command clears watchdog safe state and emits `watchdog cleared`
+
+Deprecated compatibility fields:
+
+- `CH1 watchdog_s`
+- `CH2 watchdog_s`
+- `CH1 watchdog_safe_pct`
+- `CH2 watchdog_safe_pct`
+
+Legacy `CHx watchdog_s` values normalize to device-level `watchdog_s` when only
+one value is supplied or both channel values match. If CH1 and CH2 timeout values
+differ in the same command, firmware rejects the watchdog update and publishes a
+`watchdog_config_error` event. Legacy safe-percent fields are ignored because the
+device safe state is always all outputs off.
 
 ### Legacy OEM command compatibility
 

@@ -124,12 +124,11 @@ smartpidM5/proofpro/{topic_id}/profiles/update/#
 ## Next bench tests
 
 1. **Watchdog test**
-   - Configure watchdog and watchdog-safe percent.
+   - Configure device-level `watchdog_enabled` and `watchdog_s`.
    - Enable Remote and start a run.
    - Stop MQTT command traffic long enough to exceed the watchdog interval.
-   - Verify DC outputs drop to watchdog-safe percent.
-   - Verify relays go to the documented safe state.
-   - Verify a `watchdog safe` event publishes.
+   - Verify DC1/DC2 drop to 0% and RL1/RL2 turn off.
+   - Verify a `watchdog safe state` event publishes with `watchdog_s`.
    - Send a valid command again.
    - Verify watchdog clears and a `watchdog cleared` event publishes.
 
@@ -138,23 +137,21 @@ smartpidM5/proofpro/{topic_id}/profiles/update/#
    - Document which red lead position is valid for each channel.
    - Update `docs/WIRING.md` if the terminal pairing needs user-facing wording.
 
-3. **PT100 3-wire regression**
-   - Reconnect both red leads and white lead per OEM diagram.
-   - Compare custom firmware against OEM at room temperature and one hot-water
-     point.
-   - Confirm current calibration offsets still make sense.
+3. **Relay cycle mode**
+   - Configure RL1/RL2 as `cycle`.
+   - Verify relay timing follows configured `on_ms` / `cycle_ms`.
+   - Verify telemetry reflects actual relay GPIO state.
 
-4. **Program state regression**
-   - `RST` does not start the program.
-   - `MAN/RUN` starts/stops the program.
-   - DC values shown on screen match actual output state.
-   - Relay tiles reflect physical relay state, not only commanded intent.
-   - END from timer and END from temperature both latch correctly.
+4. **NTC route**
+   - Test if an NTC probe becomes available.
 
-5. **MQTT remote gating**
-   - Remote off: MQTT output commands ignored.
-   - Remote on: MQTT output commands accepted.
-   - Remote survives power cycle according to the configured policy.
+## Recently cleared
+
+| Item | Current status |
+|---|---|
+| PT100 3-wire regression | Cleared. Both PT100 3-wire probes were confirmed on OEM and custom firmware with the current calibration offsets documented in `docs/WIRING.md`. |
+| Program state regression | Cleared. `RST` resets without start, `MAN/RUN` starts/stops, output tiles reflect actual state, and END latch/freeze behavior is implemented and no longer on the next-test list. |
+| MQTT Remote gating | Cleared. Remote gates MQTT start/output/program commands, and the setting is persisted as `remote_en`. |
 
 ---
 
@@ -162,12 +159,12 @@ smartpidM5/proofpro/{topic_id}/profiles/update/#
 
 | Item | Why it remains |
 |---|---|
-| Watchdog behavior | Implemented enough to test, but not yet bench-verified after latest program changes |
+| Watchdog behavior | Device-level config and all-off safe state implemented; needs bench validation |
 | PT100 2-wire CH1 route | T2 confirmed; CH1 still needs the same wiring test |
 | NTC | Code path present, but no current NTC probe available for bench validation |
 | Relay cycle mode | Settings/UI present; needs a focused bench pass |
 | MQTT schema doc | Needs a final machine-readable version once the app wizard consumes it |
-| Production release tag | Wait until watchdog and PT100 regression tests pass |
+| Production release tag | Wait until watchdog and PT100 2-wire CH1 tests pass |
 
 ---
 

@@ -2029,11 +2029,11 @@ static void fmtHoursMinutesSeconds(char* buf, size_t sz, uint32_t seconds) {
 static const char* const kProcItems[] = {
     "DC1 Mode", "DC2 Mode",
     "Max Power 1", "Max Power 2",
-    "Watchdog", "Watchdog Safe",
+    "Watchdog",
     "DC Cycle",
     "Exit"
 };
-static const int kProcCount = 8;
+static const int kProcCount = 7;
 
 static const char* const kDcModeOpts[] = {
     "Off", "Element"
@@ -2130,11 +2130,10 @@ void DisplayManager::_drawSetupProcess() {
     strlcpy(vbufs[1], c.pwr_dc2_enabled ? "Element" : "Off", sizeof(vbufs[1])); vals[1] = vbufs[1];
     snprintf(vbufs[2], sizeof(vbufs[2]), "%u%%", mp1); vals[2] = vbufs[2];
     snprintf(vbufs[3], sizeof(vbufs[3]), "%u%%", mp2); vals[3] = vbufs[3];
-    if (c.pwr_wdog_s > 0) snprintf(vbufs[4], sizeof(vbufs[4]), "%lu s", (unsigned long)c.pwr_wdog_s);
+    if (c.pwr_wdog_enabled && c.pwr_wdog_s > 0) snprintf(vbufs[4], sizeof(vbufs[4]), "%lu s", (unsigned long)c.pwr_wdog_s);
     else                  strlcpy(vbufs[4], "Off", sizeof(vbufs[4]));
     vals[4] = vbufs[4];
-    snprintf(vbufs[5], sizeof(vbufs[5]), "%u%%", c.pwr_wdog_safe); vals[5] = vbufs[5];
-    snprintf(vbufs[6], sizeof(vbufs[6]), "%u ms", c.pwm_ms); vals[6] = vbufs[6];
+    snprintf(vbufs[5], sizeof(vbufs[5]), "%u ms", c.pwm_ms); vals[5] = vbufs[5];
 
     _drawMenuList(kProcItems, vals, kProcCount, _menuSel, _menuScroll);
 }
@@ -2474,34 +2473,14 @@ void DisplayManager::_handleSetupProcess(UIEvent ev) {
                     _editMin = 0.0f; _editMax = 3600.0f; _editStep = 1.0f;
                     _editCallback = [](float v){
                         cfg.pwr_wdog_s = (uint32_t)v;
+                        cfg.pwr_wdog_enabled = (v > 0.0f);
                         cfg.savePowerParams();
-                        if (gDisplayCh1) {
-                            gDisplayCh1->watchdog_s = (uint32_t)v;
-                            gDisplayCh1->watchdogFired = false;
-                            gDisplayCh1->lastMqttMsgMs = millis();
-                        }
-                        if (gDisplayCh2) {
-                            gDisplayCh2->watchdog_s = (uint32_t)v;
-                            gDisplayCh2->watchdogFired = false;
-                            gDisplayCh2->lastMqttMsgMs = millis();
-                        }
+                        if (gDisplayCh1) gDisplayCh1->watchdogFired = false;
+                        if (gDisplayCh2) gDisplayCh2->watchdogFired = false;
                     };
                     _goTo(UIScreen::VALUE_ENTRY_DIALOG);
                     break;
-                case 5: // Watchdog Safe
-                    strlcpy(_editLabel, "Watchdog Safe", sizeof(_editLabel));
-                    strlcpy(_editUnit, "%", sizeof(_editUnit));
-                    _editValue = (float)_cfg->pwr_wdog_safe;
-                    _editMin = 0.0f; _editMax = 100.0f; _editStep = 1.0f;
-                    _editCallback = [](float v){
-                        cfg.pwr_wdog_safe = (uint8_t)v;
-                        cfg.savePowerParams();
-                        if (gDisplayCh1) gDisplayCh1->watchdog_safe_pct = (uint8_t)v;
-                        if (gDisplayCh2) gDisplayCh2->watchdog_safe_pct = (uint8_t)v;
-                    };
-                    _goTo(UIScreen::VALUE_ENTRY_DIALOG);
-                    break;
-                case 6: // DC Cycle
+                case 5: // DC Cycle
                     strlcpy(_editLabel, "DC Cycle", sizeof(_editLabel));
                     strlcpy(_editUnit, " ms", sizeof(_editUnit));
                     _editValue = (float)_cfg->pwm_ms;
@@ -2512,7 +2491,7 @@ void DisplayManager::_handleSetupProcess(UIEvent ev) {
                     };
                     _goTo(UIScreen::VALUE_ENTRY_DIALOG);
                     break;
-                case 7: _goTo(UIScreen::SETUP_MENU); break; // Exit
+                case 6: _goTo(UIScreen::SETUP_MENU); break; // Exit
                 default: break;
             }
             break;

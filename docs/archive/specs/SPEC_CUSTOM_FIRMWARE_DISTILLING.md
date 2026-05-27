@@ -1,7 +1,9 @@
 # Custom M5 PRO Firmware — Distilling Capabilities Spec
 
 **Status:** Archived design reference. Current implementation status is tracked
-in `docs/WORKPLAN.md`.
+in `docs/WORKPLAN.md`. Current watchdog behavior is device-level: retained
+status exposes `watchdog_enabled` / `watchdog_s`, and safe state forces DC1/DC2
+to 0% and RL1/RL2 off.
 **Preconditions:** All resolved — see `docs/WIRING.md`.
 **Hardware gate:** Phase 3 bench validation (USB flash + output wiring confirmation) is
 technically a prerequisite for production use. Implementation proceeds in parallel.
@@ -74,8 +76,8 @@ one domain or the other, never both simultaneously.
 - `dAST` — boiler temp threshold for accel→distill transition
 - `dOUT` — primary element power % during acceleration phase (0–100)
 - `dFSP` — latching finishing setpoint; 0 = disabled
-- `watchdog_s` — MQTT silence timeout; 0 = disabled
-- `watchdog_safe_pct` — power level when watchdog fires
+- `watchdog_enabled` — device-level MQTT silence watchdog enabled/disabled
+- `watchdog_s` — device-level MQTT silence timeout in seconds
 - `dtSP` — temp at which timer starts counting; 0 = start immediately
 - `timer_duration_s` — 0 = no timer
 - `timer_direction` — up / down
@@ -163,13 +165,16 @@ Maps directly to DSPR400 `dFSP / FF` behavior.
 
 ### 2.3 MQTT watchdog / safe state
 
-**Behavior:** if the device has not received any MQTT message from Proof for `watchdog_s`
-seconds, it drops CH1 output to `watchdog_safe_pct`. Partial answer to connection-loss
-— falls back to a known safe level rather than holding last-commanded power indefinitely.
+**Behavior:** if the device-level watchdog is enabled and the device has not received any
+MQTT command message from Proof for `watchdog_s` seconds, it forces the whole device to
+safe/off: DC OUT 1 = 0%, DC OUT 2 = 0%, RL1 off, and RL2 off. This applies regardless of
+channel mode, relay mode, program state, or remote command state.
 
 **Parameters:**
-- `watchdog_s` — timeout in seconds; 0 = disabled (current behavior — holds last command)
-- `watchdog_safe_pct` — power level on watchdog fire; 0 = full shutoff
+- `watchdog_enabled` — false disables/unarms, true arms when `watchdog_s` is nonzero
+- `watchdog_s` — timeout in seconds
+
+There are no per-channel watchdog timers or per-channel watchdog safe percentages.
 
 ### 2.4 Power ramp / soft start
 
@@ -348,8 +353,8 @@ pwr_acc_mode       bool      false
 pwr_dast           float     0.0
 pwr_dout           uint8_t   100
 pwr_dfsp           float     0.0
-pwr_wdog_s         uint16_t  0
-pwr_wdog_safe      uint8_t   0
+pwr_wdog_en        bool      false
+pwr_wdog_s         uint32_t  0
 pwr_dtsp           float     0.0
 pwr_timer_s        uint32_t  0
 pwr_timer_dir      uint8_t   0       (0=up, 1=down)
@@ -383,7 +388,7 @@ Steps 7–10 are capability expansion.
 | 2 | **Direct power mode** — `Runmode::POWER_DIRECT`; `{"start": "power"}`; `{"CHx power": N}`; SP commands ignored; telemetry `runmode: "power"` |
 | 3 | **Relay mode infrastructure + acceleration phase** — `RelayMode` enum (`off`, `acc_sync`, `remote`, `reflux_timer`); `acc_mode` bool; `dAST` / `dOUT` fields; device-enforced phase transition; relay pin respects mode |
 | 4 | **Remote relay mode** — `{"CHx relay_mode": "remote"}`; `{"CHx relay": true/false}`; DC OUT unaffected |
-| 5 | **MQTT watchdog / safe state** — last-message timestamp in `MQTTManager`; tick checks timeout; drops to `watchdog_safe_pct` |
+| 5 | **MQTT watchdog / safe state** — device-level last-message timestamp; tick checks timeout; forces DC1/DC2 to 0% and RL1/RL2 off |
 | 6 | **Latching finishing temperature** — `dFSP`; `FF` latch; all outputs off and latched; `{"reset": true}` clears; won't auto-resume while latched |
 | 7 | **Temperature-triggered timer** — `dtSP`; `timer_duration_s`; `timer_direction`; `dEO`; fires event on expiry; latches on `shutoff` |
 | 8 | **Power ramp / soft start** — `ramp_duration_s`; output ramps 0 → target on start |

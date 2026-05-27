@@ -208,23 +208,21 @@ behavior that should be retested on hardware before release.
 | 2026-05-26 | Acceleration end by temp | Accel ended and RL1 dropped out when threshold crossed |
 | 2026-05-26 | Timer start | Timer starts from Timer Start Temp, not from Accel Temp |
 | 2026-05-26 | END by timer | Program reaches END when timer expires |
-| 2026-05-26 | Disabled-tile navigation | Needs regression confirmation |
-| 2026-05-26 | Timer display as `HH:MM:SS` | Needs regression confirmation |
-| 2026-05-26 | `RST` reset-without-start behavior | Needs regression confirmation |
-| 2026-05-26 | Live parameter reads during run | Needs regression confirmation |
-| 2026-05-26 | END-before-timer freeze behavior | Needs regression confirmation |
+| 2026-05-26 | Disabled-tile navigation | Implemented and cleared from next-test list |
+| 2026-05-26 | Timer display as `HH:MM:SS` | Implemented and cleared from next-test list |
+| 2026-05-26 | `RST` reset-without-start behavior | Cleared: reset does not start the program |
+| 2026-05-26 | Live parameter reads during run | Cleared from next-test list |
+| 2026-05-26 | END-before-timer freeze behavior | Cleared: remaining time freezes when END occurs early |
+| 2026-05-27 | PT100 3-wire regression | Cleared; current calibration offsets remain documented above |
+| 2026-05-27 | MQTT Remote gating | Cleared; Remote gates MQTT start/output/program commands and persists across power cycle |
 
 ## Must Test Next
 
-1. Watchdog and watchdog-safe behavior.
+1. Device-level watchdog and all-off safe behavior.
 2. PT100 2-wire T1 terminal pairing.
-3. PT100 3-wire regression after reconnecting both red leads.
-4. Remote on/off gating for MQTT output commands.
-5. Relay `cycle` mode.
-6. NTC route if an NTC probe becomes available.
-7. Disabled-tile skip behavior on Power screen.
-8. Program reset behavior: `RST` must reset the run state without starting it.
-9. Timer edit behavior: changing timer value mid-run must set the new total, not
+3. Relay `cycle` mode.
+4. NTC route if an NTC probe becomes available.
+5. Timer edit behavior: changing timer value mid-run must set the new total, not
    add relative time accidentally.
 
 ## Useful Commands

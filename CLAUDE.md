@@ -81,7 +81,8 @@ pio run -e desktop
 - `status`, `stop`, `pause`, `resume`, and `reset` are accepted regardless of
   Remote. `start`, output control, relay control, and program parameter writes
   require Remote enabled.
-- Watchdog safe state drives DC output to `watchdog_safe_pct` and relays off.
+- Watchdog is device-level. Retained status publishes `watchdog_enabled` and
+  `watchdog_s`; a trip forces DC1/DC2 to 0% and RL1/RL2 off.
 
 ## Source Layout
 

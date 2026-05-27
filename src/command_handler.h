@@ -1,8 +1,8 @@
 #pragma once
 // command_handler.h — MQTT command parser and dispatcher
 //
-// Parses JSON from smartpidM5/pro/<id>/commands and dispatches to channel state.
-// All OEM commands documented in smartpid-bench-results.md / smartpid-mqtt-reference.md.
+// Parses JSON from smartpidM5/proofpro/<id>/commands and dispatches to device
+// config plus channel state.
 //
 // New POWER_DIRECT commands (our extension):
 //   {"start": "power"}                      Start direct-power mode (both channels)
@@ -15,8 +15,8 @@
 //   {"CHx dOUT": N}                         DC OUT % during accel phase (0–100)
 //   {"CHx dFSP": N}                         Finish latch temperature threshold
 //   {"reset": true}                         Clear finish latch on all channels
-//   {"CHx watchdog_s": N}                   MQTT watchdog timeout seconds (0=off)
-//   {"CHx watchdog_safe_pct": N}            Safe power % when watchdog fires (0–100)
+//   {"watchdog_enabled": bool}              Enable/disable device watchdog
+//   {"watchdog_s": N}                       Device watchdog timeout seconds
 //   {"CHx dtSP": N}                         Temperature that arms the run timer
 //   {"CHx timer_s": N}                      Run timer duration in seconds
 //   {"CHx dEO": "continue"/"latch_off"}     Action on finish condition
@@ -84,8 +84,8 @@ private:
     void _cmdSetDAST(int chIdx, float temp);       // {"CHx dAST": N}
     void _cmdSetDOut(int chIdx, int pct);          // {"CHx dOUT": N}
     void _cmdSetDFSP(int chIdx, float temp);       // {"CHx dFSP": N}
-    void _cmdSetWatchdog(int chIdx, int seconds);  // {"CHx watchdog_s": N}
-    void _cmdSetWatchdogSafe(int chIdx, int pct);  // {"CHx watchdog_safe_pct": N}
+    void _cmdSetWatchdogEnabled(bool enabled);     // {"watchdog_enabled": bool}
+    void _cmdSetWatchdogTimeout(int seconds);      // {"watchdog_s": N}
     void _cmdSetDtSP(int chIdx, float temp);       // {"CHx dtSP": N}
     void _cmdSetTimerDuration(int chIdx, int s);   // {"CHx timer_s": N}
     void _cmdSetTimerDir(int chIdx, const char* dir);  // {"CHx dEO": "continue"/"shutoff"}

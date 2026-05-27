@@ -410,16 +410,16 @@ void loop() {
             // Use cmdHandler helper to apply config power params into ch1
             cmdHandler._applyPowerParams(1);
             ch1.finishLatch = false;  // don't resume into a latched state
-            log_i("[RESUME] CH1 POWER_DIRECT: dist=%u%% acc=%s watchdog=%us",
+            log_i("[RESUME] CH1 POWER_DIRECT: dist=%u%% acc=%s watchdog=%s/%us",
                   ch1.distill_power_pct, ch1.acc_mode ? "on" : "off",
-                  (unsigned)ch1.watchdog_s);
+                  cfg.pwr_wdog_enabled ? "on" : "off", (unsigned)cfg.pwr_wdog_s);
         }
         if (r2 == Runmode::POWER_DIRECT) {
             cmdHandler._applyPowerParams(2);
             ch2.finishLatch = false;
-            log_i("[RESUME] CH2 POWER_DIRECT: dist=%u%% acc=%s watchdog=%us",
+            log_i("[RESUME] CH2 POWER_DIRECT: dist=%u%% acc=%s watchdog=%s/%us",
                   ch2.distill_power_pct, ch2.acc_mode ? "on" : "off",
-                  (unsigned)ch2.watchdog_s);
+                  cfg.pwr_wdog_enabled ? "on" : "off", (unsigned)cfg.pwr_wdog_s);
         }
 
         telemetry.publishEventTyped("resume", "program_resumed");
