@@ -1,9 +1,11 @@
 # Custom M5 PRO Firmware — Distilling Capabilities Spec
 
 **Status:** Archived design reference. Current implementation status is tracked
-in `docs/WORKPLAN.md`. Current watchdog behavior is device-level and only active
-while Remote is enabled: retained status exposes `watchdog_enabled` /
-`watchdog_s`, and safe state forces DC1/DC2 to 0% and RL1/RL2 off.
+in `docs/WORKPLAN.md`; current MQTT schema is tracked in
+`docs/MQTT_SCHEMA.md`. Current watchdog behavior is device-level and only active
+while Remote is ON: retained status exposes `watchdog_enabled` / `watchdog_s`,
+Proof sends heartbeat every 10 seconds, valid timeout is 30-60 seconds, and
+safe state forces DC1/DC2 to 0% and RL1/RL2 off.
 **Preconditions:** All resolved — see `docs/WIRING.md`.
 **Hardware gate:** Phase 3 bench validation (USB flash + output wiring confirmation) is
 technically a prerequisite for production use. Implementation proceeds in parallel.
@@ -165,16 +167,18 @@ Maps directly to DSPR400 `dFSP / FF` behavior.
 
 ### 2.3 MQTT watchdog / safe state
 
-**Behavior:** if Remote is enabled, the device-level watchdog is enabled, and the device
-has not received any MQTT command message from Proof for `watchdog_s` seconds, it forces
-the whole device to safe/off: DC OUT 1 = 0%, DC OUT 2 = 0%, RL1 off, and RL2 off. This
-applies regardless of channel mode, relay mode, or program state. While Remote is
-disabled, watchdog config is retained but runtime watchdog protection is inactive.
+**Behavior:** if Remote is ON, the device-level watchdog is enabled, and the device
+has not received heartbeat or accepted remote command traffic from Proof for
+`watchdog_s` seconds, it forces the whole device to safe/off: DC OUT 1 = 0%,
+DC OUT 2 = 0%, RL1 off, and RL2 off. This applies regardless of channel mode,
+relay mode, or program state. While Remote is OFF or RDY, watchdog config is
+retained but runtime watchdog protection is inactive.
 
 **Parameters:**
-- `watchdog_enabled` — false disables/unarms, true arms for Remote mode when
-  `watchdog_s` is nonzero
-- `watchdog_s` — timeout in seconds
+- `watchdog_enabled` — false disables/unarms only while Remote is OFF; enabling
+  Remote forces watchdog enabled
+- `watchdog_s` — timeout in seconds, valid range 30-60; Proof heartbeat cadence
+  is 10 seconds
 
 There are no per-channel watchdog timers or per-channel watchdog safe percentages.
 

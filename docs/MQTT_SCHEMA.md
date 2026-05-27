@@ -2,19 +2,19 @@
 
 Firmware flavor: ProofPro custom SmartPID M5 firmware.
 
-Topic ID from current bench unit: `791402d5ac0fe1`.
-
-## Topic root
+Topic root:
 
 ```text
 smartpidM5/proofpro/{topic_id}/
 ```
 
+Topic ID from current bench unit: `791402d5ac0fe1`.
+
 ## Published topics
 
 ### `status`
 
-Retained. Published on MQTT connect and in response to `{"status":true}`.
+Retained. Published on MQTT connect and in response to `{"status": true}`.
 
 ```json
 {
@@ -27,15 +27,18 @@ Retained. Published on MQTT connect and in response to `{"status":true}`.
 }
 ```
 
-`status` is the discovery/onboarding source of truth. `unit` is device-level and
-is always `"F"` or `"C"`. Proof should auto-fill and lock temperature unit from
-retained status rather than asking the user to choose per channel. Watchdog
-settings are also device-level.
+`status` is the Proof discovery/onboarding source of truth.
+
+- `unit` is device-level and is always `"F"` or `"C"`.
+- Proof should auto-fill and lock temperature unit from retained `status.unit`.
+- Proof must not infer temperature unit per channel.
+- `watchdog_enabled` and `watchdog_s` are device-level.
+- Proof should display retained watchdog settings during onboarding.
 
 ### `power/CH1` and `power/CH2`
 
-Not retained. Published every configured sample interval while the channel is
-in power mode. Current firmware target cadence is every 6 seconds.
+Not retained. Published every configured sample interval while the channel is in
+power mode. Current default publish cadence is 6 seconds.
 
 ```json
 {
@@ -45,6 +48,7 @@ in power mode. Current firmware target cadence is every 6 seconds.
   "unit": "F",
   "runmode": "power",
   "relay": false,
+  "relay_engaged": false,
   "power": 0,
   "dc_mode": "element",
   "relay_mode": "off",
@@ -59,25 +63,40 @@ in power mode. Current firmware target cadence is every 6 seconds.
 
 Field notes:
 
-- `temp_valid` is false when the value is outside the process range.
 - `unit` is required in every temperature-bearing telemetry payload and must
   match retained `status.unit`.
+- `temp_valid` is false when the temperature is outside the process range.
 - `dc_mode` is `element` or `off`.
-- `relay_mode` is `off`, `acc_element`, `remote_other`, or `cycle`.
-- `power` is actual driven DC output percent, including watchdog/accel effects.
-- `relay` is the actual relay GPIO state as last written.
-- `remote` gates whether MQTT output/program commands are accepted.
-- `timer_remaining_s` freezes when END occurs before the timer expires.
+- `relay_mode` is `off`, `manual_on_off`, `acc_element`, `remote_other`, or
+  `cycle`.
+- `power` is actual driven DC output percent after accel, watchdog, END latch,
+  and DC enable/disable effects.
+- `relay` is the actual physical relay output state.
+- `relay_engaged` is the commanded/armed relay state for `remote_other`,
+  `manual_on_off`, `acc_element`, and `cycle`; it is false for `off`.
+- In `acc_element`, `relay_engaged=true` means the acceleration relay is allowed
+  to run while acceleration is active.
+- In `cycle`, `relay_engaged=true` means the cycle is armed even when the actual
+  `relay` output is in the OFF portion of the cycle.
+- Local user disengage is authoritative. If an operator disengages a managed
+  relay on the device, Proof should observe `relay_engaged=false` and should not
+  re-engage automatically unless the operator/app explicitly chooses to resume.
+- `remote` reports whether MQTT output/program commands are accepted.
+- `ended=true` is a device/program END state reflected on both channel payloads.
+- `latched=true` means outputs are latched safe/off until reset/start.
+- `timer_remaining_s` freezes when END occurs before the finish timer expires.
 
 ### `dynamic/CH1` and `dynamic/CH2`
 
-Legacy topic for monitor/standard/advanced modes. The custom workflow should
-prefer `power/CHx`.
+Legacy monitor/standard/advanced telemetry topics. ProofPro custom workflow
+should prefer `power/CHx`.
 
 ### `events/standard`
 
 Not retained. Human-readable `event` is preserved for compatibility; custom
 firmware also sends stable machine fields when available.
+
+Channel-scoped event example:
 
 ```json
 {
@@ -88,40 +107,78 @@ firmware also sends stable machine fields when available.
 }
 ```
 
-Known event strings/types:
-
-| Event | Type |
-|---|---|
-| `power lost` | `power_lost` |
-| `socket connected` | socket connect event |
-| `power restored` | reconnect/power restore event |
-| `start power` | `program_started` |
-| `stop` | `program_stopped` |
-| `pause` | `program_paused` |
-| `resume` | `program_resumed` |
-| `reset` | `program_reset` |
-| `acc elements enabled` | `acc_elements_enabled` |
-| `acc elements disabled` | `acc_elements_disabled` |
-| `CH1 timer started` / `CH2 timer started` | `timer_started` |
-| `CH1 timer expired` / `CH2 timer expired` | `timer_expired` |
-| `CH1 accel end` / `CH2 accel end` | `accel_complete` |
-| `CH1 End` / `CH2 End` | `program_ended` |
-| `watchdog safe state` | `watchdog_safe` |
-| `watchdog cleared` | `watchdog_cleared` |
-
-Watchdog trip event shape:
+Device-level ProofPro END example:
 
 ```json
 {
+  "time": 123,
+  "event": "program ended",
+  "type": "program_ended",
+  "reason": "finish_timer"
+}
+```
+
+`program_ended` is device-level for ProofPro and does not include `channel`.
+
+`program_ended.reason` is one of:
+
+| Reason | Meaning |
+|---|---|
+| `finish_timer` | Programmed/runtime finish timer ended the run |
+| `finish_temp` | Finish temperature ended the run |
+| `finish` | Explicit finish/END or END without a more specific reason |
+
+Known event strings/types:
+
+| Event | Type | Scope |
+|---|---|---|
+| `power lost` | `power_lost` | device |
+| `socket connected` | socket connect event | device |
+| `power restored` | reconnect/power restore event | device |
+| `start power` | `program_started` | device |
+| `stop` | `program_stopped` | device |
+| `pause` | `program_paused` | device |
+| `resume` | `program_resumed` | device |
+| `reset` | `program_reset` | device |
+| `acc elements enabled` | `acc_elements_enabled` | device |
+| `acc elements disabled` | `acc_elements_disabled` | device |
+| `CH1 timer started` / `CH2 timer started` | `timer_started` | channel |
+| `CH1 timer expired` / `CH2 timer expired` | `timer_expired` | channel |
+| `CH1 accel end` / `CH2 accel end` | `accel_complete` | channel |
+| `program ended` | `program_ended` | device |
+| `watchdog safe state` | `watchdog_safe` | device |
+| `watchdog cleared` | `watchdog_cleared` | device |
+| `watchdog config rejected` | `watchdog_config_error` | device |
+| `watchdog safe pct ignored` | `watchdog_config_deprecated` | device |
+
+Watchdog trip event:
+
+```json
+{
+  "time": 123,
   "type": "watchdog_safe",
   "event": "watchdog safe state",
   "watchdog_s": 30
 }
 ```
 
+Watchdog config rejection event:
+
+```json
+{
+  "time": 123,
+  "type": "watchdog_config_error",
+  "event": "watchdog config rejected",
+  "reason": "watchdog_s_out_of_range",
+  "value": 10,
+  "min_s": 30,
+  "max_s": 60
+}
+```
+
 ### `events/advanced`
 
-Legacy profile-sequencer topic. Not part of the main custom workflow.
+Legacy profile-sequencer topic. Not part of the main ProofPro custom workflow.
 
 ## Subscribed topics
 
@@ -130,17 +187,18 @@ smartpidM5/proofpro/{topic_id}/commands
 smartpidM5/proofpro/{topic_id}/profiles/update/#
 ```
 
-`profiles/update/#` is currently legacy compatibility. The custom app should
-use `commands` unless profile support is deliberately revived.
+`profiles/update/#` is retained for legacy compatibility. ProofPro custom app
+logic should use `commands` unless profile support is deliberately revived.
 
 ## Command payloads
 
 All commands are JSON objects. Multiple keys may be sent in one payload.
 
-### General
+### General commands
 
 ```json
 {"status": true}
+{"heartbeat": true}
 {"start": "power"}
 {"start": "remote"}
 {"stop": true}
@@ -154,10 +212,16 @@ All commands are JSON objects. Multiple keys may be sent in one payload.
 
 Remote gating:
 
-- `status`, `stop`, `pause`, `resume`, and `reset` are accepted regardless of
-  Remote.
+- `status`, `heartbeat`, `stop`, `pause`, `resume`, and `reset` are accepted
+  regardless of Remote.
 - `start`, output control, relay control, and program parameter writes require
   Remote enabled.
+- Remote has two runtime states after it is enabled:
+  - `RDY`: firmware can accept Proof commands.
+  - `ON`: Proof has started an active remote session by sending heartbeat or a
+    remote command.
+- Proof sends `{"heartbeat": true}` every 10 seconds while actively controlling
+  the device.
 
 ### DC output commands
 
@@ -166,33 +230,53 @@ Remote gating:
 {"CH2 power": 0}
 ```
 
-Power values are percent `0..100`.
-
-If DC1/DC2 is configured `off`, commands to that DC channel are ignored.
+Power values are percent `0..100`. If DC1/DC2 is configured `off`, commands to
+that DC channel are ignored.
 
 ### Relay commands
 
 ```json
+{"CH1 relay_mode": "off"}
+{"CH1 relay_mode": "manual_on_off"}
 {"CH1 relay_mode": "acc_element"}
 {"CH1 relay_mode": "remote_other"}
 {"CH1 relay_mode": "cycle"}
-{"CH1 relay_mode": "off"}
 {"CH1 relay": true}
 {"CH1 relay": false}
 {"CH1 on_ms": 1000}
 {"CH1 cycle_ms": 5000}
 ```
 
-Use `CH2` for RL2. Direct `CHx relay` only drives the relay when its relay mode
-is `remote_other`. If the relay is configured `off`, commands are ignored.
+Use `CH2` for RL2.
 
-Accepted compatibility aliases:
+Relay mode command semantics:
+
+| Relay mode | `CHx relay` meaning | Timing commands |
+|---|---|---|
+| `off` | ignored; relay forced off | ignored by behavior |
+| `manual_on_off` | ignored; local UI only | ignored by behavior |
+| `acc_element` | engage/disengage acceleration relay | ignored by behavior |
+| `remote_other` | actual relay ON/OFF | ignored by behavior |
+| `cycle` | engage/disengage cycle | `on_ms` and `cycle_ms` set cycle timing |
+
+Behavior notes:
+
+- Changing `relay_mode` always clears `relay_command` and forces the physical
+  relay off. The new mode must be turned on again manually or remotely.
+- `remote_other` lets Proof directly drive the relay with `CHx relay`.
+- `acc_element` lets Proof engage/disengage the acceleration relay. Firmware
+  still controls actual output from acceleration state.
+- `cycle` lets Proof engage/disengage cycling. Firmware controls actual
+  physical ON/OFF pulse from `on_ms` and `cycle_ms`.
+- `manual_on_off` is local UI only; remote direct relay commands are ignored.
+- `off` / Disabled ignores relay commands and forces the relay off.
+
+Accepted relay mode aliases:
 
 - `remote` maps to `remote_other`
 - `reflux_timer` maps to `cycle`
 - `acc_sync` maps to `acc_element`
-
-`on_ms` and `cycle_ms` configure relay timing for `cycle` mode.
+- `manual` and `on_off` map to `manual_on_off`
 
 ### Program commands
 
@@ -203,9 +287,14 @@ Accepted compatibility aliases:
   "CH1 dtSP": 170,
   "CH1 timer_s": 3600,
   "CH1 dFSP": 200,
-  "CH1 dEO": "end"
+  "CH1 dEO": "end",
+  "CH1 ramp_s": 0
 }
 ```
+
+Use `CH2` for channel 2. Program parameters are stored device-level in firmware;
+Proof should treat them as one ProofPro program configuration, not independent
+per-channel user-facing settings.
 
 Field meanings:
 
@@ -213,14 +302,16 @@ Field meanings:
 |---|---|
 | `CHx dAST` | acceleration end temperature |
 | `CHx dOUT` | acceleration output percent |
-| `CHx dtSP` | timer start temperature |
-| `CHx timer_s` | timer duration in seconds |
+| `CHx dtSP` | finish timer start temperature |
+| `CHx timer_s` | finish timer duration in seconds |
 | `CHx dFSP` | finish temperature; `0` disables finish-by-temp |
 | `CHx dEO` | finish action; `end`/`shutoff` latches END, `continue` does not |
-| `CHx finish_time_s` | elapsed finish time, currently legacy/secondary |
 | `CHx ramp_s` | soft-start ramp seconds |
 
-Program parameter writes require Remote enabled.
+Deprecated compatibility field:
+
+- `CHx finish_time_s` is accepted as a legacy alias for `CHx timer_s`; it does
+  not create a separate END condition or separate `program_ended.reason`.
 
 ### Watchdog commands
 
@@ -231,7 +322,7 @@ Program parameter writes require Remote enabled.
 }
 ```
 
-Disable/unarm:
+Disable/unarm is accepted only when Remote is OFF:
 
 ```json
 {
@@ -241,22 +332,30 @@ Disable/unarm:
 
 Watchdog behavior:
 
-- watchdog config is device-level, not per channel
-- `watchdog_enabled=false` disables/unarms the watchdog
-- `watchdog_enabled=true` arms it for Remote mode
-- `watchdog_s` is the device-level timeout in seconds
-- any received command updates the watchdog timestamp
-- no command traffic for `watchdog_s` seconds while Remote is enabled trips
-  watchdog safe
-- while Remote is disabled, watchdog config is retained but runtime watchdog
-  protection is inactive
-- disabling Remote clears any active watchdog safe state
-- watchdog trip forces DC OUT 1 = 0%, DC OUT 2 = 0%, RL1 off, and RL2 off
-- safe/off applies regardless of channel mode, relay mode, or program state
-- there are no per-channel watchdog safe percentages
-- a later command clears watchdog safe state and emits `watchdog cleared`
+- Watchdog config is device-level, not per channel.
+- `watchdog_enabled=true` is the normal/default ProofPro configuration.
+- `watchdog_enabled=false` disables/unarms only when Remote is OFF.
+- Enabling Remote forces watchdog enabled and clamps invalid timeout to default.
+- `watchdog_s` is the device-level timeout in seconds, valid range `30..60`.
+- Default `watchdog_s` is `30`.
+- Proof sends a heartbeat every 10 seconds while active Remote control is ON.
+- Heartbeat or accepted remote command traffic updates the watchdog timestamp.
+- No heartbeat/remote command traffic for `watchdog_s` seconds while Remote is
+  ON trips watchdog safe.
+- While Remote is OFF or RDY, watchdog config is retained but runtime watchdog
+  protection is inactive.
+- Disabling Remote clears any active watchdog safe state.
+- Watchdog trip returns Remote from ON to RDY.
+- Watchdog trip forces DC OUT 1 = 0%, DC OUT 2 = 0%, RL1 off, and RL2 off.
+- Safe/off applies regardless of channel mode, relay mode, program state, or
+  remote command state.
+- There are no per-channel watchdog safe percentages.
+- A later accepted command clears watchdog safe state and emits
+  `watchdog_cleared`.
+- Out-of-range `watchdog_s` values are rejected with
+  `watchdog_config_error`.
 
-Deprecated compatibility fields:
+Deprecated watchdog compatibility fields:
 
 - `CH1 watchdog_s`
 - `CH2 watchdog_s`
@@ -264,22 +363,21 @@ Deprecated compatibility fields:
 - `CH2 watchdog_safe_pct`
 
 Legacy `CHx watchdog_s` values normalize to device-level `watchdog_s` when only
-one value is supplied or both channel values match. If CH1 and CH2 timeout values
-differ in the same command, firmware rejects the watchdog update and publishes a
-`watchdog_config_error` event. Legacy safe-percent fields are ignored because the
-device safe state is always all outputs off.
+one value is supplied or both channel values match. If CH1 and CH2 timeout
+values differ in the same command, firmware rejects the watchdog update and
+publishes `watchdog_config_error`. Legacy safe-percent fields are ignored
+because the device safe state is always all outputs off.
 
-### Legacy OEM command compatibility
+## Legacy OEM command compatibility
 
 These are still accepted for compatibility, though they are not the preferred
 ProofPro workflow:
 
 ```json
-{"CH1 SP": 131}
-{"CH1 maxpwm": 50}
-{"CH1 countdown": 60}
-{"CH1 profile": 1}
-{"CH1 next step": true}
+{"start": "monitor"}
+{"start": "standard"}
+{"CH1 SP": 150}
+{"CH1 maxpwm": 80}
+{"CH1 countdown": 120}
 ```
 
-Use `CH2` equivalents for channel 2.

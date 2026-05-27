@@ -44,8 +44,18 @@ mosquitto_sub -h <broker-ip> -u proof -P test123 \
 Expected status shape:
 
 ```json
-{"serial":"000C3BA7C0E8FC","SSID":"Chaos","client":"10.0.1.60"}
+{
+  "serial": "000C3BA7C0E8FC",
+  "SSID": "Chaos",
+  "client": "10.0.1.60",
+  "unit": "F",
+  "watchdog_enabled": true,
+  "watchdog_s": 30
+}
 ```
+
+Retained `status` is the ProofPro onboarding source of truth. `unit`,
+`watchdog_enabled`, and `watchdog_s` are device-level settings.
 
 Enable Remote on the device, then send the power start command:
 
@@ -56,6 +66,12 @@ mosquitto_pub -h <broker-ip> -u proof -P test123 \
 
 Power telemetry publishes on `power/CH1` and `power/CH2` at the configured
 publish cadence. The current default is 6 seconds.
+
+Program END publishes a device-level `events/standard` payload:
+
+```json
+{"type":"program_ended","event":"program ended","reason":"finish_timer"}
+```
 
 ## Setting the OEM serial
 

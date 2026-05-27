@@ -215,6 +215,7 @@ behavior that should be retested on hardware before release.
 | 2026-05-26 | END-before-timer freeze behavior | Cleared: remaining time freezes when END occurs early |
 | 2026-05-27 | PT100 3-wire regression | Cleared; current calibration offsets remain documented above |
 | 2026-05-27 | MQTT Remote gating | Cleared; Remote gates MQTT start/output/program commands and persists across power cycle |
+| 2026-05-27 | MQTT schema cleanup | Retained status exposes device-level unit/watchdog config; END event is device-level `program_ended` with `finish_timer` / `finish_temp` / `finish` reason |
 
 ## Must Test Next
 
@@ -222,8 +223,7 @@ behavior that should be retested on hardware before release.
 2. PT100 2-wire T1 terminal pairing.
 3. Relay `cycle` mode.
 4. NTC route if an NTC probe becomes available.
-5. Timer edit behavior: changing timer value mid-run must set the new total, not
-   add relative time accidentally.
+5. Proof integration against updated MQTT schema in `docs/MQTT_SCHEMA.md`.
 
 ## Useful Commands
 

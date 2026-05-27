@@ -79,7 +79,7 @@ explicitly about OEM backups, decompile research, or firmware switching.
 | RL2 | 16 | 3 | RL2 | digital relay |
 
 DC outputs can be configured as `element` or `off`. Relays can be configured as
-`off`, `acc_element`, `remote_other`, or `cycle`.
+`off`, `manual_on_off`, `acc_element`, `remote_other`, or `cycle`.
 
 ### Program logic
 
@@ -91,9 +91,15 @@ DC outputs can be configured as `element` or `off`. Relays can be configured as
   the acceleration percent.
 - When acceleration ends, DC outputs return to their selected percent.
 - Timer is entered as hours/minutes and displays as `HH:MM:SS` while running.
-- Timer starts when Timer Start Temp is reached.
+- In programmed Accel, the finish timer starts when status enters `ACCEL`.
+- In non-Accel programmed runs, the finish timer starts when Timer Start Temp
+  is reached.
+- Power-screen timer edits are runtime-only and never overwrite the programmed
+  timer saved in Settings.
 - If Finish Temp reaches END before the timer expires, the timer should freeze
   with remaining time visible.
+- END publishes a device-level `program_ended` event with reason
+  `finish_timer`, `finish_temp`, or `finish`.
 - END should latch until reset/start, depending on Finish Action.
 
 ### MQTT
@@ -118,6 +124,8 @@ smartpidM5/proofpro/{topic_id}/profiles/update/#
 ```
 
 `/status` is retained. Dynamic, power, and event topics are not retained.
+Retained status includes device-level `unit`, `watchdog_enabled`, and
+`watchdog_s`. See `docs/MQTT_SCHEMA.md` for the canonical schema.
 
 ---
 
@@ -163,7 +171,7 @@ smartpidM5/proofpro/{topic_id}/profiles/update/#
 | PT100 2-wire CH1 route | T2 confirmed; CH1 still needs the same wiring test |
 | NTC | Code path present, but no current NTC probe available for bench validation |
 | Relay cycle mode | Settings/UI present; needs a focused bench pass |
-| MQTT schema doc | Needs a final machine-readable version once the app wizard consumes it |
+| MQTT schema doc | Canonical human-readable schema is updated; Proof migration summary lives in `docs/PROOF_MQTT_SCHEMA_CHANGES_2026-05-27.md` |
 | Production release tag | Wait until watchdog and PT100 2-wire CH1 tests pass |
 
 ---
