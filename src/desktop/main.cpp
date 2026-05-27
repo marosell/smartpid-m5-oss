@@ -60,6 +60,7 @@ static void seedDesktopConfig() {
     cfg.pwr_acc_elements_enabled = true;
     cfg.pwr_dast = 170.0f;
     cfg.pwr_dfsp = 200.0f;
+    cfg.pwr_dfsp_source = 1;
     cfg.pwr_wdog_enabled = true;
     cfg.pwr_wdog_s = 30;
     cfg.pwr_dtsp = 170.0f;

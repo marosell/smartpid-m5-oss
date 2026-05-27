@@ -146,7 +146,8 @@ void OutputController::_updatePowerDirect(int chIdx, ChannelState& ch,
     }
 
     // 2. Finish temperature: mark End; optionally latch all outputs off.
-    if (ch.dFSP > 0.0f && !ch.finishEnd && ch.temp >= ch.dFSP) {
+    const bool finishTempSource = !_cfg || _cfg->pwr_dfsp_source == (uint8_t)chIdx;
+    if (finishTempSource && ch.dFSP > 0.0f && !ch.finishEnd && ch.temp >= ch.dFSP) {
         ch.finishEnd = true;
         ch.finishEndJustSet = true;
         freezePowerTimer(ch);

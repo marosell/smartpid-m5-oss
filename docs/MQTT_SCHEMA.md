@@ -22,6 +22,7 @@ Retained. Published on MQTT connect and in response to `{"status": true}`.
   "SSID": "Chaos",
   "client": "10.0.1.60",
   "unit": "F",
+  "finish_temp_source": "CH1",
   "watchdog_enabled": true,
   "watchdog_s": 30
 }
@@ -34,6 +35,9 @@ Retained. Published on MQTT connect and in response to `{"status": true}`.
 - Proof must not infer temperature unit per channel.
 - `watchdog_enabled` and `watchdog_s` are device-level.
 - Proof should display retained watchdog settings during onboarding.
+- `finish_temp_source` is device-level program configuration and identifies
+  which probe is evaluated for the finish-temperature END condition. Valid
+  values are `"CH1"` and `"CH2"`.
 
 ### `power/CH1` and `power/CH2`
 
@@ -54,6 +58,7 @@ power mode. Current default publish cadence is 6 seconds.
   "relay_mode": "off",
   "remote": true,
   "acc_elements_enabled": true,
+  "finish_temp_source": "CH1",
   "ended": false,
   "latched": false,
   "timer_remaining_s": 0,
@@ -82,6 +87,7 @@ Field notes:
   relay on the device, Proof should observe `relay_engaged=false` and should not
   re-engage automatically unless the operator/app explicitly chooses to resume.
 - `remote` reports whether MQTT output/program commands are accepted.
+- `finish_temp_source` reports the configured probe used for finish-by-temp.
 - `ended=true` is a device/program END state reflected on both channel payloads.
 - `latched=true` means outputs are latched safe/off until reset/start.
 - `timer_remaining_s` freezes when END occurs before the finish timer expires.
@@ -287,6 +293,7 @@ Accepted relay mode aliases:
   "CH1 dtSP": 170,
   "CH1 timer_s": 3600,
   "CH1 dFSP": 200,
+  "finish_temp_source": "CH1",
   "CH1 dEO": "end",
   "CH1 ramp_s": 0
 }
@@ -304,9 +311,20 @@ Field meanings:
 | `CHx dOUT` | acceleration output percent |
 | `CHx dtSP` | finish timer start temperature |
 | `CHx timer_s` | finish timer duration in seconds |
-| `CHx dFSP` | finish temperature; `0` disables finish-by-temp |
+| `CHx dFSP` | device-level finish temperature; `0` disables finish-by-temp |
+| `finish_temp_source` | source probe for finish-by-temp; `"CH1"` or `"CH2"` |
 | `CHx dEO` | finish action; `end`/`shutoff` latches END, `continue` does not |
 | `CHx ramp_s` | soft-start ramp seconds |
+
+Finish temperature behavior:
+
+- ProofPro has one finish temperature value and one finish-temperature source.
+- `finish_temp_source` selects which probe is evaluated against `dFSP`.
+- Only the selected probe can trigger `program_ended.reason="finish_temp"`.
+- The default source is `"CH1"` for backward compatibility.
+- Legacy `CH1 dFSP` and `CH2 dFSP` commands both update the same device-level
+  finish temperature. Proof should send one value plus `finish_temp_source`
+  rather than treating finish temperature as two independent channel settings.
 
 Deprecated compatibility field:
 
@@ -380,4 +398,3 @@ ProofPro workflow:
 {"CH1 maxpwm": 80}
 {"CH1 countdown": 120}
 ```
-

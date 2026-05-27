@@ -14,6 +14,7 @@
 //   {"CHx dAST": N}                         Accel phase end threshold temp
 //   {"CHx dOUT": N}                         DC OUT % during accel phase (0–100)
 //   {"CHx dFSP": N}                         Finish latch temperature threshold
+//   {"finish_temp_source": "CH1"/"CH2"}      Probe used for finish_temp END
 //   {"reset": true}                         Clear finish latch on all channels
 //   {"watchdog_enabled": bool}              Enable/disable device watchdog
 //   {"watchdog_s": N}                       Device watchdog timeout seconds
@@ -85,6 +86,7 @@ private:
     void _cmdSetDAST(int chIdx, float temp);       // {"CHx dAST": N}
     void _cmdSetDOut(int chIdx, int pct);          // {"CHx dOUT": N}
     void _cmdSetDFSP(int chIdx, float temp);       // {"CHx dFSP": N}
+    void _cmdSetFinishTempSource(const char* source); // {"finish_temp_source": "CH1"/"CH2"}
     void _cmdSetWatchdogEnabled(bool enabled);     // {"watchdog_enabled": bool}
     void _cmdSetWatchdogTimeout(int seconds);      // {"watchdog_s": N}
     void _cmdSetDtSP(int chIdx, float temp);       // {"CHx dtSP": N}

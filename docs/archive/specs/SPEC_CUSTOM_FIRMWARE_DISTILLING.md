@@ -160,6 +160,7 @@ and latches (`FF` — finishing flag). Does not auto-resume. Requires an explici
 
 **Parameters:**
 - `dFSP` — finishing setpoint; 0 = disabled
+- `finish_temp_source` — selected source probe for `dFSP`; `CH1` or `CH2`
 - `FF` — finishing flag; latched true when `dFSP` is crossed; cleared only by
   `{"reset": true}`
 
@@ -359,6 +360,7 @@ pwr_acc_mode       bool      false
 pwr_dast           float     0.0
 pwr_dout           uint8_t   100
 pwr_dfsp           float     0.0
+pwr_dfsp_source    uint8_t   1
 pwr_wdog_en        bool      false
 pwr_wdog_s         uint32_t  0
 pwr_dtsp           float     0.0

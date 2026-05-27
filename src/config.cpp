@@ -126,6 +126,8 @@ void Config::load() {
     pwr_dast        = prefs.getFloat("pwr_dast",     default170);
     pwr_dout        = prefs.getUChar("pwr_dout",     100);
     pwr_dfsp        = prefs.getFloat("pwr_dfsp",     default200);
+    pwr_dfsp_source = prefs.getUChar("pwr_dfsp_ch",  1);
+    if (pwr_dfsp_source < 1 || pwr_dfsp_source > 2) pwr_dfsp_source = 1;
     pwr_wdog_s      = prefs.getUInt("pwr_wdog_s",    30);
     if (pwr_wdog_s < 30 || pwr_wdog_s > 60) pwr_wdog_s = 30;
     pwr_wdog_enabled = prefs.getBool("pwr_wdog_en",  true);
@@ -151,6 +153,7 @@ void Config::load() {
         pwr_dout        = 100;
         pwr_dtsp        = default170;
         pwr_dfsp        = default200;
+        pwr_dfsp_source = 1;
         pwr_wdog_enabled = true;
         pwr_wdog_s      = 30;
         pwr_deo         = 1;
@@ -233,6 +236,7 @@ void Config::save() {
     prefs.putFloat("pwr_dast",     pwr_dast);
     prefs.putUChar("pwr_dout",     pwr_dout);
     prefs.putFloat("pwr_dfsp",     pwr_dfsp);
+    prefs.putUChar("pwr_dfsp_ch",  pwr_dfsp_source);
     prefs.putBool("pwr_wdog_en",   pwr_wdog_enabled);
     prefs.putUInt("pwr_wdog_s",    pwr_wdog_s);
     prefs.putFloat("pwr_dtsp",     pwr_dtsp);
@@ -294,6 +298,7 @@ void Config::savePowerParams() {
     prefs.putFloat("pwr_dast",     pwr_dast);
     prefs.putUChar("pwr_dout",     pwr_dout);
     prefs.putFloat("pwr_dfsp",     pwr_dfsp);
+    prefs.putUChar("pwr_dfsp_ch",  pwr_dfsp_source);
     prefs.putBool("pwr_wdog_en",   pwr_wdog_enabled);
     prefs.putUInt("pwr_wdog_s",    pwr_wdog_s);
     prefs.putFloat("pwr_dtsp",     pwr_dtsp);

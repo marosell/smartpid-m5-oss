@@ -100,6 +100,8 @@ DC outputs can be configured as `element` or `off`. Relays can be configured as
   with remaining time visible.
 - END publishes a device-level `program_ended` event with reason
   `finish_timer`, `finish_temp`, or `finish`.
+- Finish temperature is one device-level threshold; `finish_temp_source`
+  selects whether CH1 or CH2 is evaluated for finish-by-temp.
 - END should latch until reset/start, depending on Finish Action.
 
 ### MQTT
@@ -124,8 +126,9 @@ smartpidM5/proofpro/{topic_id}/profiles/update/#
 ```
 
 `/status` is retained. Dynamic, power, and event topics are not retained.
-Retained status includes device-level `unit`, `watchdog_enabled`, and
-`watchdog_s`. See `docs/MQTT_SCHEMA.md` for the canonical schema.
+Retained status includes device-level `unit`, `finish_temp_source`,
+`watchdog_enabled`, and `watchdog_s`. See `docs/MQTT_SCHEMA.md` for the
+canonical schema.
 
 ---
 

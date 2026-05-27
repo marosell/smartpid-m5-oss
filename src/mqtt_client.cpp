@@ -81,6 +81,7 @@ bool MQTTManager::publishStatus() {
     doc["SSID"]   = WiFi.SSID();
     doc["client"] = WiFi.localIP().toString();
     doc["unit"]   = _cfg->temp_unit;
+    doc["finish_temp_source"] = (_cfg->pwr_dfsp_source == 2) ? "CH2" : "CH1";
     doc["watchdog_enabled"] = _cfg->pwr_wdog_enabled;
     doc["watchdog_s"] = _cfg->pwr_wdog_s;
 

@@ -25,6 +25,7 @@ Final retained status shape:
   "SSID": "Chaos",
   "client": "10.0.1.60",
   "unit": "F",
+  "finish_temp_source": "CH1",
   "watchdog_enabled": true,
   "watchdog_s": 30
 }
@@ -34,6 +35,8 @@ Proof changes:
 
 - Read `unit`, `watchdog_enabled`, and `watchdog_s` from retained `status`
   during discovery/onboarding.
+- Read `finish_temp_source` from retained `status` as the current source probe
+  for the finish-temperature END condition.
 - Auto-fill and lock temperature unit from `status.unit`.
 - Do not ask the operator to choose a per-channel temperature unit when firmware
   provides retained `status.unit`.
@@ -143,6 +146,31 @@ Proof changes:
 - Rename any app-side reason currently called `timer` or `finish_time` to
   `finish_timer`.
 
+## 4a. Finish temperature source is explicit
+
+ProofPro has one finish temperature, but either channel probe can be the source
+that ends the run. The source is explicit:
+
+```json
+{
+  "finish_temp_source": "CH1"
+}
+```
+
+Valid values are `"CH1"` and `"CH2"`. Default is `"CH1"` for backward
+compatibility.
+
+Proof changes:
+
+- Model finish temperature as one device-level value.
+- Add a source-probe selector for finish temperature.
+- Send `finish_temp_source` with program settings when Proof configures
+  finish-by-temp.
+- Do not treat `CH1 dFSP` and `CH2 dFSP` as separate user-facing finish
+  temperatures.
+- Expect `program_ended.reason="finish_temp"` only when the selected source
+  probe reaches the configured finish temperature.
+
 ## 5. Finish timer replaces finish_time
 
 There is one elapsed-time finish mechanism: the finish timer.
@@ -181,6 +209,7 @@ Power telemetry includes:
   "relay": false,
   "relay_engaged": false,
   "relay_mode": "off",
+  "finish_temp_source": "CH1",
   "ended": false,
   "latched": false,
   "timer_remaining_s": 0,
@@ -198,6 +227,7 @@ Proof changes:
 - For `acc_element`, `relay_engaged=true` means the acceleration relay is
   allowed to run while acceleration is active.
 - Use `ended` / `latched` for device END state display.
+- Use `finish_temp_source` to display which probe can trigger finish-by-temp.
 - Use `timer_remaining_s` and `timer_frozen` to display finish timer state.
 
 ## 7. Relay modes and commands
@@ -304,10 +334,10 @@ authoritative device-level END event.
 - Clamp or validate watchdog timeout to `30..60`.
 - Update END handling to device-level `program_ended`.
 - Use `finish_timer`, `finish_temp`, and `finish` as final END reasons.
+- Add a device-level `finish_temp_source` setting with `"CH1"` / `"CH2"`.
 - Remove `finish_time` as a distinct app concept.
 - Treat `finish_time_s` as deprecated/legacy only.
 - Add/handle `manual_on_off` relay mode.
 - Use `relay_engaged` plus `relay` for managed relay display.
 - Do not auto-reengage managed relays after local disengage.
 - Do not assume a relay mode change turns the relay on.
-

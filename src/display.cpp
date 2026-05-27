@@ -2287,10 +2287,10 @@ static const int kPwrSetupCount = 7;
 // ── Process Parameters (P) item list (spec §8.5, new) ─────────────────────
 static const char* const kProcPItems[] = {
     "Accel Temp", "Accel Power", "Timer",
-    "Timer Start Temp", "Finish Temp", "Finish Action",
+    "Timer Start Temp", "Finish Temp", "Finish Probe", "Finish Action",
     "Exit"
 };
-static const int kProcPCount = 7;
+static const int kProcPCount = 8;
 
 // ────────────────────────────────────────────────────────────────────────────
 // _drawSetupHw — SETUP_MENU (top-level list) + SETUP_HW (hardware items)
@@ -3122,8 +3122,9 @@ void DisplayManager::_drawSetupProcessP() {
     if (c.pwr_dfsp > 0.0f) snprintf(vbufs[4], sizeof(vbufs[4]), "%.1f^%s", c.pwr_dfsp, c.temp_unit);
     else                   strlcpy(vbufs[4], "Off", sizeof(vbufs[4]));
     vals[4] = vbufs[4];
-    strlcpy(vbufs[5], c.pwr_deo ? "End" : "Continue", sizeof(vbufs[5])); vals[5] = vbufs[5];
-    // [6] Exit — no value
+    strlcpy(vbufs[5], c.pwr_dfsp_source == 2 ? "CH2" : "CH1", sizeof(vbufs[5])); vals[5] = vbufs[5];
+    strlcpy(vbufs[6], c.pwr_deo ? "End" : "Continue", sizeof(vbufs[6])); vals[6] = vbufs[6];
+    // [7] Exit — no value
 
     _drawMenuList(kProcPItems, vals, kProcPCount, _menuSel, _menuScroll);
 }
@@ -3236,7 +3237,19 @@ void DisplayManager::_handleSetupProcessP(UIEvent ev) {
                     };
                     _goTo(UIScreen::VALUE_ENTRY_DIALOG);
                     break;
-                case 5: { // Finish Action — action when a finish condition occurs
+                case 5: { // Finish Probe — source probe for finish temperature
+                    static const char* const opts[] = { "CH1", "CH2" };
+                    strlcpy(_listTitle, "Finish Probe", sizeof(_listTitle));
+                    _listOptions = opts; _listCount = 2;
+                    _listSel = (_cfg->pwr_dfsp_source == 2) ? 1 : 0;
+                    _listCallback = [](int8_t i){
+                        cfg.pwr_dfsp_source = (uint8_t)(i == 1 ? 2 : 1);
+                        cfg.savePowerParams();
+                    };
+                    _goTo(UIScreen::LIST_SELECT_DIALOG);
+                    break;
+                }
+                case 6: { // Finish Action — action when a finish condition occurs
                     static const char* const opts[] = { "Continue", "End" };
                     strlcpy(_listTitle, "Finish Action", sizeof(_listTitle));
                     _listOptions = opts; _listCount = 2;
@@ -3250,7 +3263,7 @@ void DisplayManager::_handleSetupProcessP(UIEvent ev) {
                     _goTo(UIScreen::LIST_SELECT_DIALOG);
                     break;
                 }
-                case 6: _goTo(UIScreen::SETUP_MENU); break; // Exit
+                case 7: _goTo(UIScreen::SETUP_MENU); break; // Exit
             }
             break;
         default: break;

@@ -49,13 +49,15 @@ Expected status shape:
   "SSID": "Chaos",
   "client": "10.0.1.60",
   "unit": "F",
+  "finish_temp_source": "CH1",
   "watchdog_enabled": true,
   "watchdog_s": 30
 }
 ```
 
 Retained `status` is the ProofPro onboarding source of truth. `unit`,
-`watchdog_enabled`, and `watchdog_s` are device-level settings.
+`finish_temp_source`, `watchdog_enabled`, and `watchdog_s` are device-level
+settings.
 
 Enable Remote on the device, then send the power start command:
 

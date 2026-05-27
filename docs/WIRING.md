@@ -215,7 +215,7 @@ behavior that should be retested on hardware before release.
 | 2026-05-26 | END-before-timer freeze behavior | Cleared: remaining time freezes when END occurs early |
 | 2026-05-27 | PT100 3-wire regression | Cleared; current calibration offsets remain documented above |
 | 2026-05-27 | MQTT Remote gating | Cleared; Remote gates MQTT start/output/program commands and persists across power cycle |
-| 2026-05-27 | MQTT schema cleanup | Retained status exposes device-level unit/watchdog config; END event is device-level `program_ended` with `finish_timer` / `finish_temp` / `finish` reason |
+| 2026-05-27 | MQTT schema cleanup | Retained status exposes device-level unit/watchdog config plus `finish_temp_source`; END event is device-level `program_ended` with `finish_timer` / `finish_temp` / `finish` reason |
 
 ## Must Test Next
 

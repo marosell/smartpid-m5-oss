@@ -17,6 +17,11 @@ static Config* gRuntimeCfg = nullptr;
 static uint32_t gLastMqttMsgMs = 0;
 static bool gWatchdogFired = false;
 
+static uint8_t finishTempSourceChannel() {
+    if (!gRuntimeCfg) return 1;
+    return (gRuntimeCfg->pwr_dfsp_source == 2) ? 2 : 1;
+}
+
 bool mqttRemoteEnabled() {
     return gMqttRemoteEnabled;
 }
@@ -93,8 +98,8 @@ static const char* finishReasonFor(const ChannelState* ch) {
 
 static const char* finishReasonForDevice(const ChannelState* ch1, const ChannelState* ch2) {
     if ((ch1 && ch1->timerExpired) || (ch2 && ch2->timerExpired)) return "finish_timer";
-    if ((ch1 && strcmp(finishReasonFor(ch1), "finish_temp") == 0) ||
-        (ch2 && strcmp(finishReasonFor(ch2), "finish_temp") == 0)) {
+    const ChannelState* finishSource = (finishTempSourceChannel() == 2) ? ch2 : ch1;
+    if (strcmp(finishReasonFor(finishSource), "finish_temp") == 0) {
         return "finish_temp";
     }
     return "finish";
@@ -123,12 +128,17 @@ static bool consumeDeviceProgramEnd(ChannelState* ch1, ChannelState* ch2, const 
     freezeTimerAtEnd(ch1);
     freezeTimerAtEnd(ch2);
     if (reasonOut) *reasonOut = finishReasonForDevice(ch1, ch2);
+    const bool anyLatched = (ch1 && ch1->finishLatch) || (ch2 && ch2->finishLatch);
 
     if (ch1) {
+        ch1->finishEnd = true;
+        if (anyLatched) ch1->finishLatch = true;
         ch1->finishEndJustSet = false;
         ch1->finishLatchJustSet = false;
     }
     if (ch2) {
+        ch2->finishEnd = true;
+        if (anyLatched) ch2->finishLatch = true;
         ch2->finishEndJustSet = false;
         ch2->finishLatchJustSet = false;
     }
@@ -195,6 +205,7 @@ void CommandHandler::handle(const uint8_t* payload, unsigned int len) {
             strcmp(key, "heartbeat") == 0 ||
             strcmp(key, "watchdog_s") == 0 ||
             strcmp(key, "watchdog_enabled") == 0 ||
+            strcmp(key, "finish_temp_source") == 0 ||
             strcmp(key, "CH1 watchdog_s") == 0 ||
             strcmp(key, "CH2 watchdog_s") == 0 ||
             strcmp(key, "CH1 watchdog_safe_pct") == 0 ||
@@ -367,6 +378,10 @@ void CommandHandler::handle(const uint8_t* payload, unsigned int len) {
     if (!doc["CH2 dFSP"].isNull()) {
         if (mqttRemoteEnabled()) _cmdSetDFSP(2, doc["CH2 dFSP"].as<float>());
         else log_w("[CMD] CH2 dFSP ignored — Remote is OFF");
+    }
+    if (!doc["finish_temp_source"].isNull()) {
+        if (mqttRemoteEnabled()) _cmdSetFinishTempSource(doc["finish_temp_source"].as<const char*>());
+        else log_w("[CMD] finish_temp_source ignored — Remote is OFF");
     }
 
     // Legacy per-channel watchdog aliases. They normalize to device-level config.
@@ -834,6 +849,22 @@ void CommandHandler::_cmdSetDFSP(int chIdx, float temp) {
     ch->dFSP = temp;
     _cfg->pwr_dfsp = temp;
     _cfg->savePowerParams();
+}
+
+void CommandHandler::_cmdSetFinishTempSource(const char* source) {
+    if (!source) return;
+    uint8_t ch = 0;
+    if (strcmp(source, "CH1") == 0 || strcmp(source, "ch1") == 0 || strcmp(source, "1") == 0) ch = 1;
+    else if (strcmp(source, "CH2") == 0 || strcmp(source, "ch2") == 0 || strcmp(source, "2") == 0) ch = 2;
+    else {
+        log_w("[CMD] finish_temp_source unknown: '%s'", source);
+        if (_tele) _tele->publishEventTyped("finish temp source rejected", "program_config_error", 0, "invalid_finish_temp_source");
+        return;
+    }
+    log_i("[CMD] finish_temp_source → CH%d", ch);
+    _cfg->pwr_dfsp_source = ch;
+    _cfg->savePowerParams();
+    if (_mqtt) _mqtt->publishStatus();
 }
 
 // ── _cmdSetWatchdogEnabled ────────────────────────────────────────────────────

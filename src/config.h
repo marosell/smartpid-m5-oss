@@ -166,6 +166,7 @@ struct Config {
     float    pwr_dast;          // accel end threshold temp (default 170F / 76.7C)
     uint8_t  pwr_dout;          // accel phase DC OUT % (default 100)
     float    pwr_dfsp;          // finish threshold (default 200F / 93.3C)
+    uint8_t  pwr_dfsp_source;   // finish temp source probe: 1=CH1, 2=CH2
     bool     pwr_wdog_enabled;  // device-level MQTT watchdog enable
     uint32_t pwr_wdog_s;        // device-level MQTT watchdog timeout seconds
     float    pwr_dtsp;          // dtSP timer start temp (default 170F / 76.7C)
