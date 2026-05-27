@@ -30,7 +30,7 @@ enum class ControlMode : uint8_t {
 // ── RelayMode ─────────────────────────────────────────────────────────────────
 // Controls how the relay output behaves in POWER_DIRECT mode.
 enum class RelayMode : uint8_t {
-    OFF           = 0,  // Relay always off; no autonomous relay activity
+    OFF           = 0,  // Relay disabled; always off
     ACC_SYNC      = 1,  // ON during accel phase, OFF when dAST threshold is crossed.
                         // One clean transition per run; no chatter.  Used for
                         // solenoid divert: route distillate back until heat-up done.
@@ -38,6 +38,7 @@ enum class RelayMode : uint8_t {
                         // Proof decides cut timing; firmware just executes.
     REFLUX_TIMER  = 3,  // Cycles ON/OFF at on_ms / cycle_ms ratio, independent of
                         // temperature.  Used for reflux ratio control.
+    LOCAL_ON_OFF  = 4,  // Operator toggles relay from the Power screen.
 };
 
 // ── String helpers ─────────────────────────────────────────────────────────────
@@ -79,7 +80,7 @@ struct ChannelState {
 
     // ── Relay state and mode ──────────────────────────────────────────────────
     // relay_state: actual GPIO output state as last written by output_control.
-    // relay_command: requested state for REMOTE mode only.
+    // relay_command: requested/engaged state for remote, local on/off, acc, and cycle modes.
     RelayMode relay_mode  = RelayMode::OFF;
     bool      relay_state = false;
     bool      relay_command = false;
@@ -101,7 +102,6 @@ struct ChannelState {
     // When temp crosses dFSP: all outputs off and latched until {"reset": true}.
     // 0.0f = feature disabled.
     float     dFSP             = 0.0f;
-    uint32_t  finish_time_s    = 0;     // elapsed finish time (0 = disabled)
     bool      finishLatch      = false;
     bool      finishLatchJustSet = false;   // pulse: output_control sets, cmdHandler clears
     bool      finishEnd        = false; // true when finish condition has occurred

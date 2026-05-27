@@ -6,7 +6,12 @@
 #include <ArduinoJson.h>
 
 CommandHandler cmdHandler;
+static constexpr uint32_t WATCHDOG_DEFAULT_S = 30;
+static constexpr uint32_t WATCHDOG_MIN_S = 30;
+static constexpr uint32_t WATCHDOG_MAX_S = 60;
+
 static bool gMqttRemoteEnabled = false;
+static bool gMqttRemoteActive = false;
 static bool gAccElementsEnabled = true;
 static Config* gRuntimeCfg = nullptr;
 static uint32_t gLastMqttMsgMs = 0;
@@ -16,11 +21,22 @@ bool mqttRemoteEnabled() {
     return gMqttRemoteEnabled;
 }
 
+bool mqttRemoteActive() {
+    return gMqttRemoteEnabled && gMqttRemoteActive;
+}
+
 void setMqttRemoteEnabled(bool enabled) {
     gMqttRemoteEnabled = enabled;
+    gMqttRemoteActive = false;
     gLastMqttMsgMs = millis();
     if (gRuntimeCfg) {
         gRuntimeCfg->remote_enabled = enabled;
+        if (enabled) {
+            gRuntimeCfg->pwr_wdog_enabled = true;
+            if (gRuntimeCfg->pwr_wdog_s < WATCHDOG_MIN_S || gRuntimeCfg->pwr_wdog_s > WATCHDOG_MAX_S) {
+                gRuntimeCfg->pwr_wdog_s = WATCHDOG_DEFAULT_S;
+            }
+        }
         gRuntimeCfg->save();
     }
 }
@@ -57,12 +73,30 @@ static void setDeviceWatchdogFired(ChannelState* ch1, ChannelState* ch2, bool fi
     }
 }
 
+static void noteRemoteActivity(ChannelState* ch1, ChannelState* ch2, TelemetryPublisher* tele) {
+    if (!gMqttRemoteEnabled) return;
+    gMqttRemoteActive = true;
+    gLastMqttMsgMs = millis();
+    if (gWatchdogFired) {
+        setDeviceWatchdogFired(ch1, ch2, false);
+        if (tele) tele->publishEventTyped("watchdog cleared", "watchdog_cleared");
+    }
+}
+
 static const char* finishReasonFor(const ChannelState* ch) {
     if (!ch) return "unknown";
-    if (ch->timerExpired) return "timer";
+    if (ch->timerExpired) return "finish_timer";
     if (tempInProcessRange(ch->temp, gRuntimeCfg ? gRuntimeCfg->temp_unit : "F") &&
         ch->dFSP > 0.0f && ch->temp >= ch->dFSP) return "finish_temp";
-    if (ch->finish_time_s > 0 && ch->countup >= ch->finish_time_s) return "finish_time";
+    return "finish";
+}
+
+static const char* finishReasonForDevice(const ChannelState* ch1, const ChannelState* ch2) {
+    if ((ch1 && ch1->timerExpired) || (ch2 && ch2->timerExpired)) return "finish_timer";
+    if ((ch1 && strcmp(finishReasonFor(ch1), "finish_temp") == 0) ||
+        (ch2 && strcmp(finishReasonFor(ch2), "finish_temp") == 0)) {
+        return "finish_temp";
+    }
     return "finish";
 }
 
@@ -82,6 +116,40 @@ static void freezeTimerAtEnd(ChannelState* ch) {
     if (ch->timerFrozenRemaining_s == 0) ch->timerExpired = true;
 }
 
+static bool consumeDeviceProgramEnd(ChannelState* ch1, ChannelState* ch2, const char** reasonOut) {
+    const bool pending = (ch1 && ch1->finishEndJustSet) || (ch2 && ch2->finishEndJustSet);
+    if (!pending) return false;
+
+    freezeTimerAtEnd(ch1);
+    freezeTimerAtEnd(ch2);
+    if (reasonOut) *reasonOut = finishReasonForDevice(ch1, ch2);
+
+    if (ch1) {
+        ch1->finishEndJustSet = false;
+        ch1->finishLatchJustSet = false;
+    }
+    if (ch2) {
+        ch2->finishEndJustSet = false;
+        ch2->finishLatchJustSet = false;
+    }
+    return true;
+}
+
+static void publishDeviceProgramEnd(TelemetryPublisher* tele, const char* reason) {
+    if (!tele) return;
+    tele->publishEventTyped("program ended", "program_ended", 0, reason);
+    log_i("[EVT] program ended (%s)", reason ? reason : "unknown");
+}
+
+static void startAccelProgramTimer(ChannelState* ch) {
+    if (!ch || !ch->programRunning || !ch->accelPhaseActive || ch->timer_duration_s == 0) return;
+    ch->timerTriggered = true;
+    ch->timerStartMs = millis();
+    ch->timerExpired = false;
+    ch->timerFrozen = false;
+    ch->timerFrozenRemaining_s = 0;
+}
+
 // ── begin ─────────────────────────────────────────────────────────────────────
 void CommandHandler::begin(Config& cfg, MQTTManager& mqtt,
                            TelemetryPublisher& tele,
@@ -94,6 +162,11 @@ void CommandHandler::begin(Config& cfg, MQTTManager& mqtt,
     _lastTickMs = millis();
     gRuntimeCfg = &cfg;
     gMqttRemoteEnabled = cfg.remote_enabled;
+    gMqttRemoteActive = false;
+    if (cfg.pwr_wdog_s < WATCHDOG_MIN_S || cfg.pwr_wdog_s > WATCHDOG_MAX_S) {
+        cfg.pwr_wdog_s = WATCHDOG_DEFAULT_S;
+    }
+    if (gMqttRemoteEnabled) cfg.pwr_wdog_enabled = true;
     gAccElementsEnabled = cfg.pwr_acc_elements_enabled;
     gLastMqttMsgMs = millis();
     gWatchdogFired = false;
@@ -113,21 +186,36 @@ void CommandHandler::handle(const uint8_t* payload, unsigned int len) {
         return;
     }
 
-    // ── Watchdog: stamp MQTT message timestamp ────────────────────────────────
-    // Any received MQTT command message resets the device-level watchdog.
-    {
-        unsigned long nowMs = millis();
-        gLastMqttMsgMs = nowMs;
-        if (gWatchdogFired) {
-            setDeviceWatchdogFired(_ch[0], _ch[1], false);
-            _tele->publishEventTyped("watchdog cleared", "watchdog_cleared");
+    JsonObject obj = doc.as<JsonObject>();
+    const bool heartbeatRequest = doc["heartbeat"].is<bool>() && doc["heartbeat"].as<bool>();
+    bool remoteSessionCommand = heartbeatRequest;
+    for (JsonPair kv : obj) {
+        const char* key = kv.key().c_str();
+        if (strcmp(key, "status") == 0 ||
+            strcmp(key, "heartbeat") == 0 ||
+            strcmp(key, "watchdog_s") == 0 ||
+            strcmp(key, "watchdog_enabled") == 0 ||
+            strcmp(key, "CH1 watchdog_s") == 0 ||
+            strcmp(key, "CH2 watchdog_s") == 0 ||
+            strcmp(key, "CH1 watchdog_safe_pct") == 0 ||
+            strcmp(key, "CH2 watchdog_safe_pct") == 0) {
+            continue;
         }
+        remoteSessionCommand = true;
+        break;
+    }
+    if (remoteSessionCommand) {
+        noteRemoteActivity(_ch[0], _ch[1], _tele);
     }
 
     // ── {"status": true} ──────────────────────────────────────────────────────
     if (doc["status"].is<bool>() && doc["status"].as<bool>()) {
         log_i("[CMD] status → re-publishing");
         _mqtt->publishStatus();
+    }
+
+    if (heartbeatRequest) {
+        log_d("[CMD] heartbeat");
     }
 
     // ── Device-level watchdog config ──────────────────────────────────────────
@@ -429,7 +517,8 @@ void CommandHandler::_cmdStartPower() {
         ch->distill_power_pct = preservedPower;
         ch->power_pct = 0;
         ch->relay_state = false;
-        ch->relay_command = false;
+        ch->relay_command = (ch->relay_mode == RelayMode::ACC_SYNC);
+        startAccelProgramTimer(ch);
     }
 
     _tele->publishEventTyped("start power", "program_started");
@@ -472,7 +561,6 @@ void CommandHandler::_applyPowerParams(int chIdx) {
     ch->dOUT              = _cfg->pwr_dout;
     ch->distill_power_pct = _cfg->pwr_distill_pct;
     ch->dFSP              = _cfg->pwr_dfsp;
-    ch->finish_time_s     = _cfg->pwr_finish_time_s;
     ch->dtSP              = _cfg->pwr_dtsp;
     ch->timer_duration_s  = _cfg->pwr_timer_s;
     ch->timer_dir         = _cfg->pwr_deo;
@@ -562,6 +650,9 @@ void CommandHandler::_cmdReset() {
         _ch[i]->timerFrozenRemaining_s = 0;
         _ch[i]->timerExpired     = false;
         _ch[i]->timerTriggered   = false;
+        _ch[i]->timer_duration_s = _cfg->pwr_timer_s;
+        _ch[i]->timer_dir        = _cfg->pwr_deo;
+        startAccelProgramTimer(_ch[i]);
     }
     _tele->publishEventTyped("reset", "program_reset");
 }
@@ -662,16 +753,15 @@ void CommandHandler::_cmdSetRelayMode(int chIdx, const char* modeStr) {
     else if (strcmp(modeStr, "acc_element") == 0 || strcmp(modeStr, "acc_sync") == 0) mode = RelayMode::ACC_SYNC;
     else if (strcmp(modeStr, "remote_other") == 0 || strcmp(modeStr, "remote") == 0) mode = RelayMode::REMOTE;
     else if (strcmp(modeStr, "cycle") == 0 || strcmp(modeStr, "reflux_timer") == 0) mode = RelayMode::REFLUX_TIMER;
+    else if (strcmp(modeStr, "manual_on_off") == 0 || strcmp(modeStr, "manual") == 0 || strcmp(modeStr, "on_off") == 0) mode = RelayMode::LOCAL_ON_OFF;
     else {
         log_w("[CMD] CH%d relay_mode unknown: '%s'", chIdx, modeStr);
         return;
     }
     log_i("[CMD] CH%d relay_mode → %s", chIdx, modeStr);
     ch->relay_mode = mode;
-    if (mode == RelayMode::OFF) {
-        ch->relay_command = false;
-        ch->relay_state = false;
-    }
+    ch->relay_command = false;
+    ch->relay_state = false;
     if (chIdx == 1) _cfg->pwr_relay1_mode = (uint8_t)mode;
     else            _cfg->pwr_relay2_mode = (uint8_t)mode;
     // Init reflux cycle timer if switching to reflux_timer
@@ -682,7 +772,7 @@ void CommandHandler::_cmdSetRelayMode(int chIdx, const char* modeStr) {
 }
 
 // ── _cmdSetRelay ──────────────────────────────────────────────────────────────
-// {"CHx relay": bool} — direct relay command, only effective in REMOTE mode.
+// {"CHx relay": bool} — mode-aware relay command.
 void CommandHandler::_cmdSetRelay(int chIdx, bool state) {
     ChannelState* ch = _channel(chIdx);
     if (!ch) return;
@@ -693,12 +783,26 @@ void CommandHandler::_cmdSetRelay(int chIdx, bool state) {
         log_w("[CMD] CH%d relay ignored — RL%d mode is Off", chIdx, chIdx);
         return;
     }
-    if (ch->relay_mode != RelayMode::REMOTE) {
-        log_d("[CMD] CH%d relay cmd ignored — relay_mode is not REMOTE", chIdx);
-        return;
+    switch (ch->relay_mode) {
+        case RelayMode::REMOTE:
+            log_i("[CMD] CH%d relay → %s", chIdx, state ? "ON" : "OFF");
+            ch->relay_command = state;
+            break;
+        case RelayMode::REFLUX_TIMER:
+            log_i("[CMD] CH%d cycle → %s", chIdx, state ? "engaged" : "disengaged");
+            ch->relay_command = state;
+            if (state) ch->refluxCycleStartMs = millis();
+            break;
+        case RelayMode::ACC_SYNC:
+            log_i("[CMD] CH%d acc_element → %s", chIdx, state ? "engaged" : "disengaged");
+            ch->relay_command = state;
+            break;
+        case RelayMode::LOCAL_ON_OFF:
+            log_d("[CMD] CH%d relay cmd ignored — relay_mode is local on/off", chIdx);
+            break;
+        case RelayMode::OFF:
+            break;
     }
-    log_i("[CMD] CH%d relay → %s", chIdx, state ? "ON" : "OFF");
-    ch->relay_command = state;
 }
 
 // ── _cmdSetDAST ───────────────────────────────────────────────────────────────
@@ -735,16 +839,17 @@ void CommandHandler::_cmdSetDFSP(int chIdx, float temp) {
 // ── _cmdSetWatchdogEnabled ────────────────────────────────────────────────────
 void CommandHandler::_cmdSetWatchdogEnabled(bool enabled) {
     log_i("[CMD] watchdog_enabled → %s", enabled ? "true" : "false");
-    if (enabled && _cfg->pwr_wdog_s == 0) {
-        _cfg->pwr_wdog_enabled = false;
-        _tele->publishEventTyped("watchdog config rejected", "watchdog_config_error", 0, "missing_watchdog_timeout");
-        _cfg->savePowerParams();
-        _mqtt->publishStatus();
+    if (!enabled && mqttRemoteEnabled()) {
+        _tele->publishWatchdogConfigError("watchdog_enabled_locked_remote_enabled", 0,
+                                          WATCHDOG_MIN_S, WATCHDOG_MAX_S);
         return;
     }
+    if (enabled && (_cfg->pwr_wdog_s < WATCHDOG_MIN_S || _cfg->pwr_wdog_s > WATCHDOG_MAX_S)) {
+        _cfg->pwr_wdog_s = WATCHDOG_DEFAULT_S;
+    }
     _cfg->pwr_wdog_enabled = enabled;
-    gLastMqttMsgMs = millis();
     if (!enabled) {
+        gMqttRemoteActive = false;
         setDeviceWatchdogFired(_ch[0], _ch[1], false);
     }
     _cfg->savePowerParams();
@@ -753,14 +858,16 @@ void CommandHandler::_cmdSetWatchdogEnabled(bool enabled) {
 
 // ── _cmdSetWatchdogTimeout ────────────────────────────────────────────────────
 void CommandHandler::_cmdSetWatchdogTimeout(int seconds) {
-    seconds = max(0, seconds);
     log_i("[CMD] watchdog_s → %d", seconds);
-    _cfg->pwr_wdog_s = (uint32_t)seconds;
-    if (seconds == 0) {
-        _cfg->pwr_wdog_enabled = false;
-        setDeviceWatchdogFired(_ch[0], _ch[1], false);
+    if (seconds < (int)WATCHDOG_MIN_S || seconds > (int)WATCHDOG_MAX_S) {
+        _tele->publishWatchdogConfigError("watchdog_s_out_of_range", seconds,
+                                          WATCHDOG_MIN_S, WATCHDOG_MAX_S);
+        log_w("[CMD] watchdog_s rejected — %d outside %lu..%lu",
+              seconds, (unsigned long)WATCHDOG_MIN_S, (unsigned long)WATCHDOG_MAX_S);
+        return;
     }
-    gLastMqttMsgMs = millis();
+    _cfg->pwr_wdog_s = (uint32_t)seconds;
+    _cfg->pwr_wdog_enabled = true;
     _cfg->savePowerParams();
     _mqtt->publishStatus();
 }
@@ -787,13 +894,8 @@ void CommandHandler::_cmdSetTimerDuration(int chIdx, int s) {
 }
 
 void CommandHandler::_cmdSetFinishTime(int chIdx, int seconds) {
-    ChannelState* ch = _channel(chIdx);
-    if (!ch) return;
-    seconds = max(0, seconds);
-    log_i("[CMD] CH%d finish_time_s → %d", chIdx, seconds);
-    ch->finish_time_s = (uint32_t)seconds;
-    _cfg->pwr_finish_time_s = (uint32_t)seconds;
-    _cfg->savePowerParams();
+    log_w("[CMD] CH%d finish_time_s is deprecated — normalizing to timer_s", chIdx);
+    _cmdSetTimerDuration(chIdx, seconds);
 }
 
 // ── _cmdSetTimerDir ───────────────────────────────────────────────────────────
@@ -867,16 +969,24 @@ void CommandHandler::tick() {
             setDeviceWatchdogFired(_ch[0], _ch[1], false);
             _tele->publishEventTyped("watchdog cleared", "watchdog_cleared");
         }
-    } else if (_cfg->pwr_wdog_enabled && _cfg->pwr_wdog_s > 0 && gLastMqttMsgMs > 0) {
+        gMqttRemoteActive = false;
+    } else if (mqttRemoteActive() && _cfg->pwr_wdog_enabled && gLastMqttMsgMs > 0) {
         unsigned long elapsed = now - gLastMqttMsgMs;
         bool timedOut = (elapsed > (unsigned long)_cfg->pwr_wdog_s * 1000UL);
         if (!gWatchdogFired && timedOut) {
             setDeviceWatchdogFired(_ch[0], _ch[1], true);
+            gMqttRemoteActive = false;
+            gLastMqttMsgMs = 0;
             _tele->publishWatchdogSafe(_cfg->pwr_wdog_s);
             _applyRuntimeOutputs();
             log_w("[EVT] watchdog safe state — no MQTT for %lus",
                   (unsigned long)_cfg->pwr_wdog_s);
         }
+    }
+
+    const char* deviceEndReason = nullptr;
+    if (consumeDeviceProgramEnd(_ch[0], _ch[1], &deviceEndReason)) {
+        publishDeviceProgramEnd(_tele, deviceEndReason);
     }
 
     for (int i = 0; i < 2; i++) {
@@ -926,35 +1036,10 @@ void CommandHandler::tick() {
             log_i("[EVT] %s — power → %u%%", evtBuf, ch->distill_power_pct);
         }
 
-        // Latch is reflected by the following program_ended event + power telemetry.
-        // Clear the pulse here so apps don't get a second ambiguous finish event.
-        if (ch->finishLatchJustSet) {
-            ch->finishLatchJustSet = false;
-        }
-
-        if (ch->finishEndJustSet) {
-            freezeTimerAtEnd(ch);
-            ch->finishEndJustSet = false;
-            char evtBuf[24];
-            snprintf(evtBuf, sizeof(evtBuf), "%s program ended", chName);
-            _tele->publishEventTyped(evtBuf, "program_ended", (int8_t)(i + 1), finishReasonFor(ch));
-            log_i("[EVT] %s", evtBuf);
-        }
-
-        if (ch->finish_time_s > 0 && !ch->finishEnd && ch->countup >= ch->finish_time_s) {
-            ch->finishEnd = true;
-            ch->finishEndJustSet = true;
-            freezeTimerAtEnd(ch);
-            if (ch->timer_dir == 1) {
-                ch->finishLatch = true;
-                ch->finishLatchJustSet = true;
-            }
-        }
-
-        // ── Temperature-triggered run timer (dtSP / dEO) ──────────────────
-        if (tempValid && ch->timer_duration_s > 0 && ch->dtSP > 0.0f) {
+        // ── Run timer (manual start or temperature-triggered dtSP / dEO) ──
+        if (ch->timer_duration_s > 0) {
             // Arm timer when temp first crosses dtSP
-            if (!ch->timerTriggered && ch->temp >= ch->dtSP) {
+            if (!ch->timerTriggered && tempValid && ch->dtSP > 0.0f && ch->temp >= ch->dtSP) {
                 ch->timerTriggered = true;
                 ch->timerStartMs   = now;
                 char evtBuf[24];
@@ -980,7 +1065,10 @@ void CommandHandler::tick() {
                             _ch[j]->timerExpired = true;
                             _ch[j]->timerFrozen = true;
                             _ch[j]->timerFrozenRemaining_s = 0;
-                            _ch[j]->programRunning = false;
+                        }
+                        const char* reason = nullptr;
+                        if (consumeDeviceProgramEnd(_ch[0], _ch[1], &reason)) {
+                            publishDeviceProgramEnd(_tele, reason);
                         }
                         _applyRuntimeOutputs();
                         return;

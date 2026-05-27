@@ -1,4 +1,0 @@
-[wokwi]
-version = 1
-firmware = '.pio/build/m5stack-grey/firmware.bin'
-elf = '.pio/build/m5stack-grey/firmware.elf'

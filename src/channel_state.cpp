@@ -28,6 +28,7 @@ const char* relayModeStr(RelayMode r) {
         case RelayMode::ACC_SYNC:     return "acc_element";
         case RelayMode::REMOTE:       return "remote_other";
         case RelayMode::REFLUX_TIMER: return "cycle";
+        case RelayMode::LOCAL_ON_OFF: return "manual_on_off";
     }
     return "off";
 }

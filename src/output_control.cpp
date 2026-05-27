@@ -258,9 +258,8 @@ void OutputController::_driveRelay(ChannelState& ch, int relayPin) {
             break;
 
         case RelayMode::ACC_SYNC:
-            // ON during acceleration phase, OFF once dAST is crossed.
-            // One clean transition per run — set it and forget it.
-            newState = ch.acc_elements_enabled && ch.accelPhaseActive;
+            // ON during acceleration phase while the acc_element relay is engaged.
+            newState = ch.relay_command && ch.acc_elements_enabled && ch.accelPhaseActive;
             break;
 
         case RelayMode::REMOTE:
@@ -268,9 +267,20 @@ void OutputController::_driveRelay(ChannelState& ch, int relayPin) {
             newState = ch.relay_command;
             break;
 
+        case RelayMode::LOCAL_ON_OFF:
+            // Operator request from the Power screen.
+            newState = ch.relay_command;
+            break;
+
         case RelayMode::REFLUX_TIMER: {
+            if (!ch.relay_command) {
+                newState = false;
+                break;
+            }
             // Cycle: ON for relay_on_ms, OFF for the rest of relay_cycle_ms.
             // Use += to advance cycle start, avoiding cumulative loop() jitter.
+            if (ch.relay_cycle_ms == 0) ch.relay_cycle_ms = 1;
+            if (ch.relay_on_ms > ch.relay_cycle_ms) ch.relay_on_ms = ch.relay_cycle_ms;
             unsigned long elapsed = millis() - ch.refluxCycleStartMs;
             if (elapsed >= ch.relay_cycle_ms) {
                 // Advance cycle start by one full period (prevents drift)

@@ -75,6 +75,17 @@ void TelemetryPublisher::_publishChannel(const char* chName, const ChannelState&
             : _cfg->pwr_dc2_enabled;
         doc["runmode"] = "power";
         doc["relay"]   = ch.relay_state;
+        switch (ch.relay_mode) {
+            case RelayMode::ACC_SYNC:
+            case RelayMode::REFLUX_TIMER:
+            case RelayMode::REMOTE:
+            case RelayMode::LOCAL_ON_OFF:
+                doc["relay_engaged"] = ch.relay_command;
+                break;
+            case RelayMode::OFF:
+                doc["relay_engaged"] = false;
+                break;
+        }
         doc["power"]   = ch.power_pct;  // current actual duty (post-ramp, post-accel)
         doc["dc_mode"] = dcEnabled ? "element" : "off";
         doc["relay_mode"] = relayModeStr(ch.relay_mode);
@@ -123,6 +134,7 @@ void TelemetryPublisher::publishEvent(const char* eventStr) {
 // Publishes to smartpidM5/proofpro/<id>/events/standard.
 // Payload always includes a human-readable "event"; custom firmware events
 // also include stable machine fields: "type", optional "channel", "reason".
+// ProofPro device-level events, such as program_ended, omit "channel".
 void TelemetryPublisher::publishEventTyped(const char* eventStr,
                                            const char* type,
                                            int8_t channel,
@@ -161,6 +173,28 @@ void TelemetryPublisher::publishWatchdogSafe(uint32_t watchdog_s) {
     _mqtt->publish(topic.c_str(), payload.c_str(), /*retained=*/false);
 
     log_i("[EVENT/STD] watchdog safe state");
+}
+
+void TelemetryPublisher::publishWatchdogConfigError(const char* reason, int value,
+                                                    uint32_t min_s, uint32_t max_s) {
+    if (!_mqtt->connected()) return;
+
+    JsonDocument doc;
+    doc["time"] = bootSeconds();
+    doc["type"] = "watchdog_config_error";
+    doc["event"] = "watchdog config rejected";
+    doc["reason"] = reason;
+    doc["value"] = value;
+    doc["min_s"] = min_s;
+    doc["max_s"] = max_s;
+
+    String payload;
+    serializeJson(doc, payload);
+
+    String topic = _mqtt->fullTopic("events/standard");
+    _mqtt->publish(topic.c_str(), payload.c_str(), /*retained=*/false);
+
+    log_i("[EVENT/STD] watchdog config rejected");
 }
 
 // ── publishEventAdv ───────────────────────────────────────────────────────────

@@ -39,6 +39,8 @@ public:
                            int8_t channel = 0,
                            const char* reason = nullptr);
     void publishWatchdogSafe(uint32_t watchdog_s);
+    void publishWatchdogConfigError(const char* reason, int value,
+                                    uint32_t min_s, uint32_t max_s);
 
     // Publish an event to events/advanced immediately.
     // Used for profile sequencer events: "profile", "ramp N", "soak N".

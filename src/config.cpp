@@ -126,12 +126,12 @@ void Config::load() {
     pwr_dast        = prefs.getFloat("pwr_dast",     default170);
     pwr_dout        = prefs.getUChar("pwr_dout",     100);
     pwr_dfsp        = prefs.getFloat("pwr_dfsp",     default200);
-    pwr_wdog_s      = prefs.getUInt("pwr_wdog_s",    0);
-    pwr_wdog_enabled = prefs.getBool("pwr_wdog_en",  pwr_wdog_s > 0);
+    pwr_wdog_s      = prefs.getUInt("pwr_wdog_s",    30);
+    if (pwr_wdog_s < 30 || pwr_wdog_s > 60) pwr_wdog_s = 30;
+    pwr_wdog_enabled = prefs.getBool("pwr_wdog_en",  true);
     pwr_dtsp        = prefs.getFloat("pwr_dtsp",     default170);
     pwr_timer_s     = prefs.getUInt("pwr_timer_s",   0);
     pwr_deo         = prefs.getUChar("pwr_deo",      1);
-    pwr_finish_time_s = prefs.getUInt("pwr_fin_s",   0);
     pwr_ramp_s      = prefs.getUInt("pwr_ramp_s",    0);
     pwr_distill_pct = prefs.getUChar("pwr_dist_pct", 100);
     pwr_dc1_enabled = prefs.getBool("pwr_dc1_en",    true);
@@ -151,6 +151,8 @@ void Config::load() {
         pwr_dout        = 100;
         pwr_dtsp        = default170;
         pwr_dfsp        = default200;
+        pwr_wdog_enabled = true;
+        pwr_wdog_s      = 30;
         pwr_deo         = 1;
 
         Preferences wprefs;
@@ -236,7 +238,6 @@ void Config::save() {
     prefs.putFloat("pwr_dtsp",     pwr_dtsp);
     prefs.putUInt("pwr_timer_s",   pwr_timer_s);
     prefs.putUChar("pwr_deo",      pwr_deo);
-    prefs.putUInt("pwr_fin_s",     pwr_finish_time_s);
     prefs.putUInt("pwr_ramp_s",    pwr_ramp_s);
     prefs.putUChar("pwr_dist_pct", pwr_distill_pct);
     prefs.putBool("pwr_dc1_en",    pwr_dc1_enabled);
@@ -298,7 +299,6 @@ void Config::savePowerParams() {
     prefs.putFloat("pwr_dtsp",     pwr_dtsp);
     prefs.putUInt("pwr_timer_s",   pwr_timer_s);
     prefs.putUChar("pwr_deo",      pwr_deo);
-    prefs.putUInt("pwr_fin_s",     pwr_finish_time_s);
     prefs.putUInt("pwr_ramp_s",    pwr_ramp_s);
     prefs.putUChar("pwr_dist_pct", pwr_distill_pct);
     prefs.putBool("pwr_dc1_en",    pwr_dc1_enabled);

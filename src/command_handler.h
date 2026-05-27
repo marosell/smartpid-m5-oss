@@ -10,7 +10,7 @@
 //   {"CHx power": N}                        DC OUT duty % target (0–100)
 //   {"CHx acc_mode": bool}                  Enable/disable acceleration phase
 //   {"CHx relay_mode": "off"/"acc_element"/"remote_other"/"cycle"}
-//   {"CHx relay": bool}                     Relay command (REMOTE mode only)
+//   {"CHx relay": bool}                     Relay command/engage by relay mode
 //   {"CHx dAST": N}                         Accel phase end threshold temp
 //   {"CHx dOUT": N}                         DC OUT % during accel phase (0–100)
 //   {"CHx dFSP": N}                         Finish latch temperature threshold
@@ -32,6 +32,7 @@
 #include "telemetry.h"
 
 bool mqttRemoteEnabled();
+bool mqttRemoteActive();
 void setMqttRemoteEnabled(bool enabled);
 bool accElementsEnabled();
 
@@ -89,7 +90,7 @@ private:
     void _cmdSetDtSP(int chIdx, float temp);       // {"CHx dtSP": N}
     void _cmdSetTimerDuration(int chIdx, int s);   // {"CHx timer_s": N}
     void _cmdSetTimerDir(int chIdx, const char* dir);  // {"CHx dEO": "continue"/"shutoff"}
-    void _cmdSetFinishTime(int chIdx, int seconds);
+    void _cmdSetFinishTime(int chIdx, int seconds); // deprecated alias for timer_s
     void _cmdSetRamp(int chIdx, int seconds);      // {"CHx ramp_s": N}
     void _cmdSetRelayOnMs(int chIdx, int ms);      // {"CHx on_ms": N}
     void _cmdSetRelayCycleMs(int chIdx, int ms);   // {"CHx cycle_ms": N}
