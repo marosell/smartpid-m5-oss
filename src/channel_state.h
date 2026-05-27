@@ -125,14 +125,6 @@ struct ChannelState {
     bool      timerFrozen      = false; // true when End freezes displayed remaining time
     uint32_t  timerFrozenRemaining_s = 0;
 
-    // ── Power ramp / soft start ────────────────────────────────────────────────
-    // On POWER_DIRECT start: if ramp_duration_s > 0, DC OUT ramps linearly from
-    // 0 to initial target over ramp_duration_s seconds.
-    // Ramp is cleared instantly when accel phase ends (transition to distill power).
-    uint32_t  ramp_duration_s  = 0;     // ramp time in seconds (0 = instant)
-    uint32_t  rampStartMs      = 0;     // millis() when ramp was started
-    bool      rampActive       = false; // currently ramping
-
     // ── Reflux timer relay ────────────────────────────────────────────────────
     // Only used when relay_mode == REFLUX_TIMER.
     // Relay is ON for relay_on_ms out of every relay_cycle_ms ms.
@@ -150,7 +142,7 @@ struct ChannelState {
 
     // Called when stop command received or on boot init.
     // Clears all transient state; preserves configuration fields
-    // (acc_mode, dAST, dOUT, dFSP, dtSP, timer_*, ramp_*,
+    // (acc_mode, dAST, dOUT, dFSP, dtSP, timer_*,
     //  relay_mode, relay_on_ms, relay_cycle_ms) so the operator doesn't have
     // to re-set them on every start.
     void stop() {
@@ -177,7 +169,6 @@ struct ChannelState {
         timerExpired         = false;
         timerFrozen          = false;
         timerFrozenRemaining_s = 0;
-        rampActive           = false;
     }
 
     // Effective PID output demand (standard mode only)

@@ -134,7 +134,6 @@ void Config::load() {
     pwr_dtsp        = prefs.getFloat("pwr_dtsp",     default170);
     pwr_timer_s     = prefs.getUInt("pwr_timer_s",   0);
     pwr_deo         = prefs.getUChar("pwr_deo",      1);
-    pwr_ramp_s      = prefs.getUInt("pwr_ramp_s",    0);
     pwr_distill_pct = prefs.getUChar("pwr_dist_pct", 100);
     pwr_dc1_enabled = prefs.getBool("pwr_dc1_en",    true);
     pwr_dc2_enabled = prefs.getBool("pwr_dc2_en",    true);
@@ -242,7 +241,6 @@ void Config::save() {
     prefs.putFloat("pwr_dtsp",     pwr_dtsp);
     prefs.putUInt("pwr_timer_s",   pwr_timer_s);
     prefs.putUChar("pwr_deo",      pwr_deo);
-    prefs.putUInt("pwr_ramp_s",    pwr_ramp_s);
     prefs.putUChar("pwr_dist_pct", pwr_distill_pct);
     prefs.putBool("pwr_dc1_en",    pwr_dc1_enabled);
     prefs.putBool("pwr_dc2_en",    pwr_dc2_enabled);
@@ -304,7 +302,6 @@ void Config::savePowerParams() {
     prefs.putFloat("pwr_dtsp",     pwr_dtsp);
     prefs.putUInt("pwr_timer_s",   pwr_timer_s);
     prefs.putUChar("pwr_deo",      pwr_deo);
-    prefs.putUInt("pwr_ramp_s",    pwr_ramp_s);
     prefs.putUChar("pwr_dist_pct", pwr_distill_pct);
     prefs.putBool("pwr_dc1_en",    pwr_dc1_enabled);
     prefs.putBool("pwr_dc2_en",    pwr_dc2_enabled);

@@ -24,8 +24,12 @@ Final retained status shape:
   "serial": "000C3BA7C0E8FC",
   "SSID": "Chaos",
   "client": "10.0.1.60",
+  "firmware": "proofpro",
+  "firmware_version": "0.1.0",
+  "schema_version": 1,
   "unit": "F",
-  "finish_temp_source": "CH1",
+  "remote_enabled": true,
+  "remote_state": "RDY",
   "watchdog_enabled": true,
   "watchdog_s": 30
 }
@@ -35,12 +39,58 @@ Proof changes:
 
 - Read `unit`, `watchdog_enabled`, and `watchdog_s` from retained `status`
   during discovery/onboarding.
-- Read `finish_temp_source` from retained `status` as the current source probe
-  for the finish-temperature END condition.
+- Read `firmware`, `firmware_version`, and `schema_version` to choose the
+  ProofPro integration path.
+- Read `remote_enabled` and `remote_state` for readiness/session display.
 - Auto-fill and lock temperature unit from `status.unit`.
 - Do not ask the operator to choose a per-channel temperature unit when firmware
   provides retained `status.unit`.
 - Treat watchdog config as device-level.
+
+## 1a. Retained config holds editable defaults
+
+ProofPro publishes retained config on:
+
+```text
+smartpidM5/proofpro/{topic_id}/config
+```
+
+Final retained config shape:
+
+```json
+{
+  "updated_at_ms": 123456,
+  "program": {
+    "acc_mode": true,
+    "accel_temp": 170,
+    "accel_power": 100,
+    "timer_start_temp": 170,
+    "timer_s": 3600,
+    "finish_temp": 200,
+    "finish_temp_source": "CH1",
+    "finish_action": "end"
+  },
+  "relays": {
+    "CH1": {
+      "mode": "cycle",
+      "on_ms": 1000,
+      "cycle_ms": 5000
+    },
+    "CH2": {
+      "mode": "off",
+      "on_ms": 1000,
+      "cycle_ms": 5000
+    }
+  }
+}
+```
+
+Proof changes:
+
+- Subscribe to retained `config` during onboarding/settings.
+- Use `config.program` for ProofPro program defaults.
+- Use `config.relays` for relay mode and cycle timing readback.
+- Treat `updated_at_ms` as firmware readback/debug metadata.
 
 ## 2. Temperature unit is device-level
 
@@ -92,6 +142,7 @@ Runtime rules:
   or RDY.
 - Watchdog trip forces DC1/DC2 to 0% and RL1/RL2 off.
 - Watchdog trip returns Remote from ON to RDY.
+- `remote_state` is the machine-readable session state Proof should display.
 
 Proof changes:
 
@@ -166,39 +217,39 @@ Proof changes:
 - Add a source-probe selector for finish temperature.
 - Send `finish_temp_source` with program settings when Proof configures
   finish-by-temp.
-- Do not treat `CH1 dFSP` and `CH2 dFSP` as separate user-facing finish
-  temperatures.
+- Do not use or expose `CH1 dFSP` / `CH2 dFSP`.
 - Expect `program_ended.reason="finish_temp"` only when the selected source
   probe reaches the configured finish temperature.
 
-## 5. Finish timer replaces finish_time
+## 5. Program commands are device-level
+
+All ProofPro program settings are device-level. Proof should send:
+
+```json
+{
+  "acc_mode": true,
+  "accel_temp": 170,
+  "accel_power": 100,
+  "timer_start_temp": 170,
+  "timer_s": 3600,
+  "finish_temp": 200,
+  "finish_temp_source": "CH1",
+  "finish_action": "end"
+}
+```
 
 There is one elapsed-time finish mechanism: the finish timer.
 
-Current program command:
-
-```json
-{
-  "CH1 timer_s": 3600
-}
-```
-
-Deprecated compatibility:
-
-```json
-{
-  "CH1 finish_time_s": 3600
-}
-```
-
-`finish_time_s` is accepted only as a legacy alias for `timer_s`; it does not
-create a separate END condition or a separate event reason.
-
 Proof changes:
 
+- Stop sending `CHx dAST`, `CHx dOUT`, `CHx dtSP`, `CHx timer_s`, `CHx dFSP`,
+  `CHx dEO`, `CHx finish_time_s`, or `CHx ramp_s`.
 - Use `timer_s` for the finish timer duration.
-- Do not model `finish_time_s` as a separate setting.
+- Use `timer_start_temp` for the temperature that starts the finish timer.
+- Use `finish_temp` for the one device-level finish temperature.
+- Use `finish_action` for `continue` / `end`.
 - Do not expect a `finish_time` end reason.
+- Remove ramp/soft-start from the ProofPro program model.
 
 ## 6. Power telemetry additions and semantics
 
@@ -287,9 +338,14 @@ Remote state shown on the device:
 
 Proof changes:
 
-- Enable Remote before sending start/output/program/relay commands.
+- Subscribe to `status`, `config`, `power/+`, and `events/+`.
+- Use `remote_state` for UI: `OFF` = remote disabled, `RDY` = ready, `ON` =
+  Proof controlling.
+- Enable Remote locally before sending start/output/program/relay commands.
 - Send heartbeat every 10 seconds while active Remote control is ongoing.
 - Expect watchdog armed/active only in Remote ON state.
+- Treat `{"start":"remote"}` as deprecated and start runs with
+  `{"start":"power"}`.
 
 ## 9. Events still channel-scoped for now
 
@@ -326,6 +382,11 @@ authoritative device-level END event.
 ## 10. Implementation checklist for Proof
 
 - Update onboarding to consume retained `status.unit`.
+- Update onboarding to consume retained `status.firmware`,
+  `status.firmware_version`, `status.schema_version`, `status.remote_enabled`,
+  and `status.remote_state`.
+- Update onboarding/settings to consume retained `config.program` and
+  `config.relays`.
 - Update onboarding/settings to consume retained `watchdog_enabled` and
   `watchdog_s`.
 - Remove per-channel unit selection for ProofPro.
@@ -335,8 +396,9 @@ authoritative device-level END event.
 - Update END handling to device-level `program_ended`.
 - Use `finish_timer`, `finish_temp`, and `finish` as final END reasons.
 - Add a device-level `finish_temp_source` setting with `"CH1"` / `"CH2"`.
+- Use only device-level program command keys.
 - Remove `finish_time` as a distinct app concept.
-- Treat `finish_time_s` as deprecated/legacy only.
+- Remove ramp/soft-start from ProofPro program settings.
 - Add/handle `manual_on_off` relay mode.
 - Use `relay_engaged` plus `relay` for managed relay display.
 - Do not auto-reengage managed relays after local disengage.

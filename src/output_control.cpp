@@ -3,7 +3,7 @@
 // Paths:
 //   STANDARD / ADVANCED: PID or On/Off hysteresis control
 //   POWER_DIRECT:        Fixed duty DC OUT + relay modes + acceleration phase
-//                        + finish latch + soft-start ramp + reflux timer
+//                        + finish latch + reflux timer
 //
 // Bench-confirmed timing:
 //   DC OUT 50% at 3500ms → ON ~1750ms, OFF ~1750ms
@@ -122,9 +122,9 @@ void OutputController::update(ChannelState& ch1, ChannelState& ch2) {
 //   2. Finish latch (dFSP) → outputs latched off; set pulse flag for event
 //   3. Not running/paused  → all off
 //   4. Acceleration phase  → DC OUT at dOUT%, relay per relay_mode (ACC_SYNC)
-//   5. Normal run          → DC OUT at distill_power_pct (with ramp), relay per relay_mode
+//   5. Normal run          → DC OUT at distill_power_pct, relay per relay_mode
 //
-// Writes ch.power_pct to reflect actual current duty (post-ramp, post-accel).
+// Writes ch.power_pct to reflect actual current duty (post-accel).
 void OutputController::_updatePowerDirect(int chIdx, ChannelState& ch,
                                            int dcOutPin, int relayPin,
                                            PwmState& pwmState) {
@@ -192,7 +192,6 @@ void OutputController::_updatePowerDirect(int chIdx, ChannelState& ch,
             // Atomic transition: accel phase ends, jump to distill power
             ch.accelPhaseActive    = false;
             ch.accelPhaseJustEnded = true;   // pulse: CommandHandler.tick() publishes event
-            ch.rampActive          = false;  // instant switch, no ramp
             targetPct              = ch.distill_power_pct;
             log_i("[OUT] CH%d accel phase end: temp=%.1f ≥ dAST=%.1f → %u%%",
                   chIdx, ch.temp, ch.dAST, targetPct);
@@ -205,20 +204,7 @@ void OutputController::_updatePowerDirect(int chIdx, ChannelState& ch,
     }
     if (!dcEnabled) targetPct = 0;
 
-    // Apply soft-start ramp if active
-    if (ch.rampActive) {
-        unsigned long elapsed = millis() - ch.rampStartMs;
-        unsigned long rampMs  = (unsigned long)ch.ramp_duration_s * 1000UL;
-        if (elapsed >= rampMs || rampMs == 0) {
-            ch.rampActive = false;
-            ch.power_pct  = targetPct;
-        } else {
-            // Linear ramp from 0 → targetPct
-            ch.power_pct = (uint8_t)((uint32_t)targetPct * elapsed / rampMs);
-        }
-    } else {
-        ch.power_pct = targetPct;
-    }
+    ch.power_pct = targetPct;
 
     // Drive DC OUT at computed duty
     pwmState.dutyCurrent = ch.power_pct;
@@ -240,9 +226,8 @@ void OutputController::_updatePowerDirect(int chIdx, ChannelState& ch,
         _driveRelay(ch, relayPin);
     }
 
-    log_d("[OUT] CH%d POWER: pct=%u%% (target=%u%% ramp=%s accel=%s) relay=%s",
+    log_d("[OUT] CH%d POWER: pct=%u%% (target=%u%% accel=%s) relay=%s",
           chIdx, ch.power_pct, targetPct,
-          ch.rampActive ? "Y" : "N",
           ch.accelPhaseActive ? "Y" : "N",
           ch.relay_state ? "ON" : "OFF");
 }

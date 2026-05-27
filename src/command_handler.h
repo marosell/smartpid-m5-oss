@@ -6,23 +6,21 @@
 //
 // New POWER_DIRECT commands (our extension):
 //   {"start": "power"}                      Start direct-power mode (both channels)
-//   {"start": "remote"}                     Start power mode with both relays remote_other
 //   {"CHx power": N}                        DC OUT duty % target (0–100)
-//   {"CHx acc_mode": bool}                  Enable/disable acceleration phase
+//   {"acc_mode": bool}                      Enable/disable acceleration phase
 //   {"CHx relay_mode": "off"/"acc_element"/"remote_other"/"cycle"}
 //   {"CHx relay": bool}                     Relay command/engage by relay mode
-//   {"CHx dAST": N}                         Accel phase end threshold temp
-//   {"CHx dOUT": N}                         DC OUT % during accel phase (0–100)
-//   {"CHx dFSP": N}                         Finish latch temperature threshold
+//   {"accel_temp": N}                       Accel phase end threshold temp
+//   {"accel_power": N}                      DC OUT % during accel phase (0–100)
+//   {"finish_temp": N}                      Finish latch temperature threshold
 //   {"finish_temp_source": "CH1"/"CH2"}      Probe used for finish_temp END
 //   {"reset": true}                         Clear finish latch on all channels
 //   {"watchdog_enabled": bool}              Enable/disable device watchdog
 //   {"watchdog_s": N}                       Device watchdog timeout seconds
-//   {"CHx dtSP": N}                         Temperature that arms the run timer
-//   {"CHx timer_s": N}                      Run timer duration in seconds
-//   {"CHx dEO": "continue"/"latch_off"}     Action on finish condition
+//   {"timer_start_temp": N}                 Temperature that arms the run timer
+//   {"timer_s": N}                          Run timer duration in seconds
+//   {"finish_action": "continue"/"end"}     Action on finish condition
 //   {"acc_elements": bool}                  Allow/suppress acc_element relays
-//   {"CHx ramp_s": N}                       Soft-start ramp duration in seconds
 //   {"CHx on_ms": N}                        Relay ON time per reflux cycle (ms)
 //   {"CHx cycle_ms": N}                     Relay total cycle time (ms)
 
@@ -77,23 +75,20 @@ private:
 
     // ── POWER_DIRECT commands ─────────────────────────────────────────────────
     void _cmdStartPower();
-    void _cmdStartRemote();
     void _cmdReset();                              // clear finish latch all channels
     void _cmdSetPower(int chIdx, int pct);         // {"CHx power": N}
-    void _cmdSetAccMode(int chIdx, bool enabled);  // {"CHx acc_mode": bool}
+    void _cmdSetAccMode(bool enabled);             // {"acc_mode": bool}
     void _cmdSetRelayMode(int chIdx, const char* modeStr);  // {"CHx relay_mode": ...}
     void _cmdSetRelay(int chIdx, bool state);      // {"CHx relay": bool}
-    void _cmdSetDAST(int chIdx, float temp);       // {"CHx dAST": N}
-    void _cmdSetDOut(int chIdx, int pct);          // {"CHx dOUT": N}
-    void _cmdSetDFSP(int chIdx, float temp);       // {"CHx dFSP": N}
+    void _cmdSetDAST(float temp);                  // {"accel_temp": N}
+    void _cmdSetDOut(int pct);                     // {"accel_power": N}
+    void _cmdSetDFSP(float temp);                  // {"finish_temp": N}
     void _cmdSetFinishTempSource(const char* source); // {"finish_temp_source": "CH1"/"CH2"}
     void _cmdSetWatchdogEnabled(bool enabled);     // {"watchdog_enabled": bool}
     void _cmdSetWatchdogTimeout(int seconds);      // {"watchdog_s": N}
-    void _cmdSetDtSP(int chIdx, float temp);       // {"CHx dtSP": N}
-    void _cmdSetTimerDuration(int chIdx, int s);   // {"CHx timer_s": N}
-    void _cmdSetTimerDir(int chIdx, const char* dir);  // {"CHx dEO": "continue"/"shutoff"}
-    void _cmdSetFinishTime(int chIdx, int seconds); // deprecated alias for timer_s
-    void _cmdSetRamp(int chIdx, int seconds);      // {"CHx ramp_s": N}
+    void _cmdSetDtSP(float temp);                  // {"timer_start_temp": N}
+    void _cmdSetTimerDuration(int s);              // {"timer_s": N}
+    void _cmdSetTimerDir(const char* dir);         // {"finish_action": "continue"/"end"}
     void _cmdSetRelayOnMs(int chIdx, int ms);      // {"CHx on_ms": N}
     void _cmdSetRelayCycleMs(int chIdx, int ms);   // {"CHx cycle_ms": N}
 };

@@ -21,8 +21,12 @@ Retained. Published on MQTT connect and in response to `{"status": true}`.
   "serial": "000C3BA7C0E8FC",
   "SSID": "Chaos",
   "client": "10.0.1.60",
+  "firmware": "proofpro",
+  "firmware_version": "0.1.0",
+  "schema_version": 1,
   "unit": "F",
-  "finish_temp_source": "CH1",
+  "remote_enabled": true,
+  "remote_state": "RDY",
   "watchdog_enabled": true,
   "watchdog_s": 30
 }
@@ -33,11 +37,50 @@ Retained. Published on MQTT connect and in response to `{"status": true}`.
 - `unit` is device-level and is always `"F"` or `"C"`.
 - Proof should auto-fill and lock temperature unit from retained `status.unit`.
 - Proof must not infer temperature unit per channel.
+- `remote_enabled` reports whether MQTT output/program commands are accepted.
+- `remote_state` is `"OFF"`, `"RDY"`, or `"ON"`.
+  - `OFF`: Remote disabled; remote commands are rejected.
+  - `RDY`: Remote enabled; firmware is ready to accept Proof commands.
+  - `ON`: active Proof session; heartbeat is expected and watchdog is active.
 - `watchdog_enabled` and `watchdog_s` are device-level.
 - Proof should display retained watchdog settings during onboarding.
-- `finish_temp_source` is device-level program configuration and identifies
-  which probe is evaluated for the finish-temperature END condition. Valid
-  values are `"CH1"` and `"CH2"`.
+- `firmware`, `firmware_version`, and `schema_version` identify the schema
+  Proof should use.
+
+### `config`
+
+Retained. Published on MQTT connect, in response to `{"status": true}`, and
+after accepted config writes.
+
+```json
+{
+  "updated_at_ms": 123456,
+  "program": {
+    "acc_mode": true,
+    "accel_temp": 170,
+    "accel_power": 100,
+    "timer_start_temp": 170,
+    "timer_s": 3600,
+    "finish_temp": 200,
+    "finish_temp_source": "CH1",
+    "finish_action": "end"
+  },
+  "relays": {
+    "CH1": {
+      "mode": "cycle",
+      "on_ms": 1000,
+      "cycle_ms": 5000
+    },
+    "CH2": {
+      "mode": "off",
+      "on_ms": 1000,
+      "cycle_ms": 5000
+    }
+  }
+}
+```
+
+`config` is the Proof readback source for editable/default settings.
 
 ### `power/CH1` and `power/CH2`
 
@@ -56,7 +99,8 @@ power mode. Current default publish cadence is 6 seconds.
   "power": 0,
   "dc_mode": "element",
   "relay_mode": "off",
-  "remote": true,
+  "remote_enabled": true,
+  "remote_state": "RDY",
   "acc_elements_enabled": true,
   "finish_temp_source": "CH1",
   "ended": false,
@@ -86,7 +130,7 @@ Field notes:
 - Local user disengage is authoritative. If an operator disengages a managed
   relay on the device, Proof should observe `relay_engaged=false` and should not
   re-engage automatically unless the operator/app explicitly chooses to resume.
-- `remote` reports whether MQTT output/program commands are accepted.
+- `remote_enabled` and `remote_state` mirror retained status for live UI.
 - `finish_temp_source` reports the configured probe used for finish-by-temp.
 - `ended=true` is a device/program END state reflected on both channel payloads.
 - `latched=true` means outputs are latched safe/off until reset/start.
@@ -156,6 +200,7 @@ Known event strings/types:
 | `watchdog cleared` | `watchdog_cleared` | device |
 | `watchdog config rejected` | `watchdog_config_error` | device |
 | `watchdog safe pct ignored` | `watchdog_config_deprecated` | device |
+| `command rejected` | `command_error` | device |
 
 Watchdog trip event:
 
@@ -179,6 +224,19 @@ Watchdog config rejection event:
   "value": 10,
   "min_s": 30,
   "max_s": 60
+}
+```
+
+General command rejection event:
+
+```json
+{
+  "time": 123,
+  "type": "command_error",
+  "event": "command rejected",
+  "command": "finish_temp_source",
+  "reason": "invalid_value",
+  "value": "CH3"
 }
 ```
 
@@ -206,14 +264,12 @@ All commands are JSON objects. Multiple keys may be sent in one payload.
 {"status": true}
 {"heartbeat": true}
 {"start": "power"}
-{"start": "remote"}
 {"stop": true}
 {"pause": true}
 {"pause": false}
 {"resume": true}
 {"reset": true}
 {"acc_elements": true}
-{"CH1 acc_mode": true}
 ```
 
 Remote gating:
@@ -228,6 +284,8 @@ Remote gating:
     remote command.
 - Proof sends `{"heartbeat": true}` every 10 seconds while actively controlling
   the device.
+- `{"start": "remote"}` is deprecated; Proof should use the explicit
+  `remote_enabled` / `remote_state` model and start runs with `{"start":"power"}`.
 
 ### DC output commands
 
@@ -288,33 +346,32 @@ Accepted relay mode aliases:
 
 ```json
 {
-  "CH1 dAST": 170,
-  "CH1 dOUT": 100,
-  "CH1 dtSP": 170,
-  "CH1 timer_s": 3600,
-  "CH1 dFSP": 200,
+  "acc_mode": true,
+  "accel_temp": 170,
+  "accel_power": 100,
+  "timer_start_temp": 170,
+  "timer_s": 3600,
+  "finish_temp": 200,
   "finish_temp_source": "CH1",
-  "CH1 dEO": "end",
-  "CH1 ramp_s": 0
+  "finish_action": "end"
 }
 ```
 
-Use `CH2` for channel 2. Program parameters are stored device-level in firmware;
-Proof should treat them as one ProofPro program configuration, not independent
-per-channel user-facing settings.
+Program parameters are device-level in ProofPro. Proof should treat them as one
+program configuration, not independent per-channel settings.
 
 Field meanings:
 
 | Key | Meaning |
 |---|---|
-| `CHx dAST` | acceleration end temperature |
-| `CHx dOUT` | acceleration output percent |
-| `CHx dtSP` | finish timer start temperature |
-| `CHx timer_s` | finish timer duration in seconds |
-| `CHx dFSP` | device-level finish temperature; `0` disables finish-by-temp |
+| `acc_mode` | acceleration phase enabled/disabled |
+| `accel_temp` | acceleration end temperature; `0` disables temperature transition |
+| `accel_power` | acceleration output percent |
+| `timer_start_temp` | finish timer start temperature |
+| `timer_s` | finish timer duration in seconds |
+| `finish_temp` | finish temperature; `0` disables finish-by-temp |
 | `finish_temp_source` | source probe for finish-by-temp; `"CH1"` or `"CH2"` |
-| `CHx dEO` | finish action; `end`/`shutoff` latches END, `continue` does not |
-| `CHx ramp_s` | soft-start ramp seconds |
+| `finish_action` | finish action; `end`/`shutoff` latches END, `continue` does not |
 
 Finish temperature behavior:
 
@@ -322,14 +379,8 @@ Finish temperature behavior:
 - `finish_temp_source` selects which probe is evaluated against `dFSP`.
 - Only the selected probe can trigger `program_ended.reason="finish_temp"`.
 - The default source is `"CH1"` for backward compatibility.
-- Legacy `CH1 dFSP` and `CH2 dFSP` commands both update the same device-level
-  finish temperature. Proof should send one value plus `finish_temp_source`
-  rather than treating finish temperature as two independent channel settings.
-
-Deprecated compatibility field:
-
-- `CHx finish_time_s` is accepted as a legacy alias for `CHx timer_s`; it does
-  not create a separate END condition or separate `program_ended.reason`.
+- There are no per-channel finish temperatures in ProofPro.
+- ProofPro has no soft-start/ramp program command.
 
 ### Watchdog commands
 

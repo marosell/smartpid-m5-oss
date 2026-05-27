@@ -3097,7 +3097,7 @@ void DisplayManager::_handleSetupPower(UIEvent ev) {
 // ────────────────────────────────────────────────────────────────────────────
 // _drawSetupProcessP — Process Parameters (P) screen (spec §8.5, new)
 // POWER_DIRECT mode parameters: power, accel phase, finish latch, watchdog,
-// timer, ramp.
+// timer.
 // ────────────────────────────────────────────────────────────────────────────
 void DisplayManager::_drawSetupProcessP() {
     if (!_cfg) return;

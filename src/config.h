@@ -172,7 +172,6 @@ struct Config {
     float    pwr_dtsp;          // dtSP timer start temp (default 170F / 76.7C)
     uint32_t pwr_timer_s;       // dtSP timer duration seconds (default 0)
     uint8_t  pwr_deo;           // 0=continue, 1=end/latch off on finish (default 1)
-    uint32_t pwr_ramp_s;        // soft-start ramp duration seconds (default 0 = instant)
     uint8_t  pwr_distill_pct;   // distillation target power % (default 100)
     bool     pwr_dc1_enabled;   // DC1 role: true=element, false=off
     bool     pwr_dc2_enabled;   // DC2 role: true=element, false=off

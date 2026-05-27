@@ -96,6 +96,9 @@ DC outputs can be configured as `element` or `off`. Relays can be configured as
   is reached.
 - Power-screen timer edits are runtime-only and never overwrite the programmed
   timer saved in Settings.
+- MQTT program commands are device-level (`accel_temp`, `accel_power`,
+  `timer_start_temp`, `timer_s`, `finish_temp`, `finish_temp_source`,
+  `finish_action`), not `CHx` settings.
 - If Finish Temp reaches END before the timer expires, the timer should freeze
   with remaining time visible.
 - END publishes a device-level `program_ended` event with reason
@@ -116,6 +119,7 @@ Key topics:
 
 ```text
 smartpidM5/proofpro/{topic_id}/status
+smartpidM5/proofpro/{topic_id}/config
 smartpidM5/proofpro/{topic_id}/dynamic/CH1
 smartpidM5/proofpro/{topic_id}/dynamic/CH2
 smartpidM5/proofpro/{topic_id}/power/CH1
@@ -125,10 +129,11 @@ smartpidM5/proofpro/{topic_id}/commands
 smartpidM5/proofpro/{topic_id}/profiles/update/#
 ```
 
-`/status` is retained. Dynamic, power, and event topics are not retained.
-Retained status includes device-level `unit`, `finish_temp_source`,
-`watchdog_enabled`, and `watchdog_s`. See `docs/MQTT_SCHEMA.md` for the
-canonical schema.
+`/status` and `/config` are retained. Dynamic, power, and event topics are not
+retained. Retained status includes identity, firmware/schema version,
+device-level `unit`, `remote_enabled`, `remote_state`, `watchdog_enabled`, and
+`watchdog_s`. Retained config includes program defaults and relay mode/timing.
+See `docs/MQTT_SCHEMA.md` for the canonical schema.
 
 ---
 

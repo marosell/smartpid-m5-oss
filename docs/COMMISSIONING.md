@@ -48,16 +48,20 @@ Expected status shape:
   "serial": "000C3BA7C0E8FC",
   "SSID": "Chaos",
   "client": "10.0.1.60",
+  "firmware": "proofpro",
+  "firmware_version": "0.1.0",
+  "schema_version": 1,
   "unit": "F",
-  "finish_temp_source": "CH1",
+  "remote_enabled": true,
+  "remote_state": "RDY",
   "watchdog_enabled": true,
   "watchdog_s": 30
 }
 ```
 
-Retained `status` is the ProofPro onboarding source of truth. `unit`,
-`finish_temp_source`, `watchdog_enabled`, and `watchdog_s` are device-level
-settings.
+Retained `status` is the ProofPro onboarding source of truth for identity,
+schema, unit, Remote readiness, and watchdog settings. Retained `config`
+contains editable/default program and relay settings.
 
 Enable Remote on the device, then send the power start command:
 

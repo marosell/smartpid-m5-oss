@@ -39,9 +39,10 @@ public:
     // Publish a message. Returns false if not connected.
     bool publish(const char* topic, const char* payload, bool retained = false);
 
-    // Publish the retained status message to smartpidM5/proofpro/<id>/status.
+    // Publish retained status/config readback messages.
     // Called automatically on connect; also dispatched by {"status": true} command.
     bool publishStatus();
+    bool publishConfig();
 
     // Register the callback that receives all incoming messages.
     // Replace with the Phase 2 command dispatcher.

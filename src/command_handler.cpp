@@ -196,33 +196,18 @@ void CommandHandler::handle(const uint8_t* payload, unsigned int len) {
         return;
     }
 
-    JsonObject obj = doc.as<JsonObject>();
     const bool heartbeatRequest = doc["heartbeat"].is<bool>() && doc["heartbeat"].as<bool>();
     bool remoteSessionCommand = heartbeatRequest;
-    for (JsonPair kv : obj) {
-        const char* key = kv.key().c_str();
-        if (strcmp(key, "status") == 0 ||
-            strcmp(key, "heartbeat") == 0 ||
-            strcmp(key, "watchdog_s") == 0 ||
-            strcmp(key, "watchdog_enabled") == 0 ||
-            strcmp(key, "finish_temp_source") == 0 ||
-            strcmp(key, "CH1 watchdog_s") == 0 ||
-            strcmp(key, "CH2 watchdog_s") == 0 ||
-            strcmp(key, "CH1 watchdog_safe_pct") == 0 ||
-            strcmp(key, "CH2 watchdog_safe_pct") == 0) {
-            continue;
-        }
-        remoteSessionCommand = true;
-        break;
-    }
     if (remoteSessionCommand) {
         noteRemoteActivity(_ch[0], _ch[1], _tele);
+        if (_mqtt) _mqtt->publishStatus();
     }
 
     // ── {"status": true} ──────────────────────────────────────────────────────
     if (doc["status"].is<bool>() && doc["status"].as<bool>()) {
         log_i("[CMD] status → re-publishing");
         _mqtt->publishStatus();
+        _mqtt->publishConfig();
     }
 
     if (heartbeatRequest) {
@@ -237,17 +222,20 @@ void CommandHandler::handle(const uint8_t* payload, unsigned int len) {
         _cmdSetWatchdogEnabled(doc["watchdog_enabled"].as<bool>());
     }
 
-    // ── {"start": "power"/"remote"} ──────────────────────────────────────────
+    // ── {"start": "power"} ───────────────────────────────────────────────────
     if (doc["start"].is<const char*>()) {
         const char* modeStr = doc["start"].as<const char*>();
         if (!mqttRemoteEnabled()) {
+            _tele->publishCommandError("start", "remote_off", modeStr);
             log_w("[CMD] start '%s' ignored — Remote is OFF", modeStr);
         } else if (strcmp(modeStr, "power") == 0) {
             _cmdStartPower();
         } else if (strcmp(modeStr, "remote") == 0) {
-            _cmdStartRemote();
+            _tele->publishCommandError("start", "deprecated", "remote");
+            log_w("[CMD] start 'remote' ignored — use start power with explicit remote_state");
         } else {
-            log_w("[CMD] start '%s' ignored — custom firmware supports power/remote", modeStr);
+            _tele->publishCommandError("start", "invalid_value", modeStr);
+            log_w("[CMD] start '%s' ignored — custom firmware supports power", modeStr);
         }
     }
 
@@ -275,12 +263,15 @@ void CommandHandler::handle(const uint8_t* payload, unsigned int len) {
 
     if (doc["acc_elements"].is<bool>()) {
         if (mqttRemoteEnabled()) {
+            noteRemoteActivity(_ch[0], _ch[1], _tele);
             setAccElementsEnabled(doc["acc_elements"].as<bool>());
             if (_ch[0]) _ch[0]->acc_elements_enabled = gAccElementsEnabled;
             if (_ch[1]) _ch[1]->acc_elements_enabled = gAccElementsEnabled;
             _tele->publishEventTyped(gAccElementsEnabled ? "acc elements enabled" : "acc elements disabled",
                                      gAccElementsEnabled ? "acc_elements_enabled" : "acc_elements_disabled");
+            _mqtt->publishConfig();
         } else {
+            _tele->publishCommandError("acc_elements", "remote_off");
             log_w("[CMD] acc_elements ignored — Remote is OFF");
         }
     }
@@ -328,18 +319,29 @@ void CommandHandler::handle(const uint8_t* payload, unsigned int len) {
         else log_w("[CMD] CH2 power ignored — Remote is OFF");
     }
 
-    // Acceleration phase toggle
-    if (doc["CH1 acc_mode"].is<bool>()) _cmdSetAccMode(1, doc["CH1 acc_mode"].as<bool>());
-    if (doc["CH2 acc_mode"].is<bool>()) _cmdSetAccMode(2, doc["CH2 acc_mode"].as<bool>());
+    // Device-level program settings
+    if (doc["acc_mode"].is<bool>()) {
+        if (mqttRemoteEnabled()) _cmdSetAccMode(doc["acc_mode"].as<bool>());
+        else {
+            _tele->publishCommandError("acc_mode", "remote_off");
+            log_w("[CMD] acc_mode ignored — Remote is OFF");
+        }
+    }
 
     // Relay mode
     if (!doc["CH1 relay_mode"].isNull()) {
         if (mqttRemoteEnabled()) _cmdSetRelayMode(1, doc["CH1 relay_mode"].as<const char*>());
-        else log_w("[CMD] CH1 relay_mode ignored — Remote is OFF");
+        else {
+            _tele->publishCommandError("CH1 relay_mode", "remote_off");
+            log_w("[CMD] CH1 relay_mode ignored — Remote is OFF");
+        }
     }
     if (!doc["CH2 relay_mode"].isNull()) {
         if (mqttRemoteEnabled()) _cmdSetRelayMode(2, doc["CH2 relay_mode"].as<const char*>());
-        else log_w("[CMD] CH2 relay_mode ignored — Remote is OFF");
+        else {
+            _tele->publishCommandError("CH2 relay_mode", "remote_off");
+            log_w("[CMD] CH2 relay_mode ignored — Remote is OFF");
+        }
     }
 
     // Relay state (REMOTE mode command)
@@ -352,36 +354,33 @@ void CommandHandler::handle(const uint8_t* payload, unsigned int len) {
         else log_w("[CMD] CH2 relay ignored — Remote is OFF");
     }
 
-    // Acceleration phase params
-    if (!doc["CH1 dAST"].isNull()) {
-        if (mqttRemoteEnabled()) _cmdSetDAST(1, doc["CH1 dAST"].as<float>());
-        else log_w("[CMD] CH1 dAST ignored — Remote is OFF");
+    if (!doc["accel_temp"].isNull()) {
+        if (mqttRemoteEnabled()) _cmdSetDAST(doc["accel_temp"].as<float>());
+        else {
+            _tele->publishCommandError("accel_temp", "remote_off");
+            log_w("[CMD] accel_temp ignored — Remote is OFF");
+        }
     }
-    if (!doc["CH2 dAST"].isNull()) {
-        if (mqttRemoteEnabled()) _cmdSetDAST(2, doc["CH2 dAST"].as<float>());
-        else log_w("[CMD] CH2 dAST ignored — Remote is OFF");
+    if (!doc["accel_power"].isNull()) {
+        if (mqttRemoteEnabled()) _cmdSetDOut(doc["accel_power"].as<int>());
+        else {
+            _tele->publishCommandError("accel_power", "remote_off");
+            log_w("[CMD] accel_power ignored — Remote is OFF");
+        }
     }
-    if (!doc["CH1 dOUT"].isNull()) {
-        if (mqttRemoteEnabled()) _cmdSetDOut(1, doc["CH1 dOUT"].as<int>());
-        else log_w("[CMD] CH1 dOUT ignored — Remote is OFF");
-    }
-    if (!doc["CH2 dOUT"].isNull()) {
-        if (mqttRemoteEnabled()) _cmdSetDOut(2, doc["CH2 dOUT"].as<int>());
-        else log_w("[CMD] CH2 dOUT ignored — Remote is OFF");
-    }
-
-    // Finish latch threshold
-    if (!doc["CH1 dFSP"].isNull()) {
-        if (mqttRemoteEnabled()) _cmdSetDFSP(1, doc["CH1 dFSP"].as<float>());
-        else log_w("[CMD] CH1 dFSP ignored — Remote is OFF");
-    }
-    if (!doc["CH2 dFSP"].isNull()) {
-        if (mqttRemoteEnabled()) _cmdSetDFSP(2, doc["CH2 dFSP"].as<float>());
-        else log_w("[CMD] CH2 dFSP ignored — Remote is OFF");
+    if (!doc["finish_temp"].isNull()) {
+        if (mqttRemoteEnabled()) _cmdSetDFSP(doc["finish_temp"].as<float>());
+        else {
+            _tele->publishCommandError("finish_temp", "remote_off");
+            log_w("[CMD] finish_temp ignored — Remote is OFF");
+        }
     }
     if (!doc["finish_temp_source"].isNull()) {
         if (mqttRemoteEnabled()) _cmdSetFinishTempSource(doc["finish_temp_source"].as<const char*>());
-        else log_w("[CMD] finish_temp_source ignored — Remote is OFF");
+        else {
+            _tele->publishCommandError("finish_temp_source", "remote_off");
+            log_w("[CMD] finish_temp_source ignored — Remote is OFF");
+        }
     }
 
     // Legacy per-channel watchdog aliases. They normalize to device-level config.
@@ -400,49 +399,45 @@ void CommandHandler::handle(const uint8_t* payload, unsigned int len) {
         log_w("[CMD] legacy watchdog_safe_pct ignored — device safe state is all outputs off");
     }
 
-    // Temperature-triggered timer
-    if (!doc["CH1 dtSP"].isNull()) {
-        if (mqttRemoteEnabled()) _cmdSetDtSP(1, doc["CH1 dtSP"].as<float>());
-        else log_w("[CMD] CH1 dtSP ignored — Remote is OFF");
+    if (!doc["timer_start_temp"].isNull()) {
+        if (mqttRemoteEnabled()) _cmdSetDtSP(doc["timer_start_temp"].as<float>());
+        else {
+            _tele->publishCommandError("timer_start_temp", "remote_off");
+            log_w("[CMD] timer_start_temp ignored — Remote is OFF");
+        }
     }
-    if (!doc["CH2 dtSP"].isNull()) {
-        if (mqttRemoteEnabled()) _cmdSetDtSP(2, doc["CH2 dtSP"].as<float>());
-        else log_w("[CMD] CH2 dtSP ignored — Remote is OFF");
+    if (!doc["timer_s"].isNull()) {
+        if (mqttRemoteEnabled()) _cmdSetTimerDuration(doc["timer_s"].as<int>());
+        else {
+            _tele->publishCommandError("timer_s", "remote_off");
+            log_w("[CMD] timer_s ignored — Remote is OFF");
+        }
     }
-    if (!doc["CH1 timer_s"].isNull()) {
-        if (mqttRemoteEnabled()) _cmdSetTimerDuration(1, doc["CH1 timer_s"].as<int>());
-        else log_w("[CMD] CH1 timer_s ignored — Remote is OFF");
+    if (!doc["finish_action"].isNull()) {
+        if (mqttRemoteEnabled()) _cmdSetTimerDir(doc["finish_action"].as<const char*>());
+        else {
+            _tele->publishCommandError("finish_action", "remote_off");
+            log_w("[CMD] finish_action ignored — Remote is OFF");
+        }
     }
-    if (!doc["CH2 timer_s"].isNull()) {
-        if (mqttRemoteEnabled()) _cmdSetTimerDuration(2, doc["CH2 timer_s"].as<int>());
-        else log_w("[CMD] CH2 timer_s ignored — Remote is OFF");
-    }
-    if (!doc["CH1 finish_time_s"].isNull()) {
-        if (mqttRemoteEnabled()) _cmdSetFinishTime(1, doc["CH1 finish_time_s"].as<int>());
-        else log_w("[CMD] CH1 finish_time_s ignored — Remote is OFF");
-    }
-    if (!doc["CH2 finish_time_s"].isNull()) {
-        if (mqttRemoteEnabled()) _cmdSetFinishTime(2, doc["CH2 finish_time_s"].as<int>());
-        else log_w("[CMD] CH2 finish_time_s ignored — Remote is OFF");
-    }
-    if (!doc["CH1 dEO"].isNull()) {
-        if (mqttRemoteEnabled()) _cmdSetTimerDir(1, doc["CH1 dEO"].as<const char*>());
-        else log_w("[CMD] CH1 dEO ignored — Remote is OFF");
-    }
-    if (!doc["CH2 dEO"].isNull()) {
-        if (mqttRemoteEnabled()) _cmdSetTimerDir(2, doc["CH2 dEO"].as<const char*>());
-        else log_w("[CMD] CH2 dEO ignored — Remote is OFF");
-    }
-
-    // Soft-start ramp
-    if (!doc["CH1 ramp_s"].isNull()) _cmdSetRamp(1, doc["CH1 ramp_s"].as<int>());
-    if (!doc["CH2 ramp_s"].isNull()) _cmdSetRamp(2, doc["CH2 ramp_s"].as<int>());
 
     // Reflux timer timing
-    if (!doc["CH1 on_ms"].isNull()) _cmdSetRelayOnMs(1, doc["CH1 on_ms"].as<int>());
-    if (!doc["CH2 on_ms"].isNull()) _cmdSetRelayOnMs(2, doc["CH2 on_ms"].as<int>());
-    if (!doc["CH1 cycle_ms"].isNull()) _cmdSetRelayCycleMs(1, doc["CH1 cycle_ms"].as<int>());
-    if (!doc["CH2 cycle_ms"].isNull()) _cmdSetRelayCycleMs(2, doc["CH2 cycle_ms"].as<int>());
+    if (!doc["CH1 on_ms"].isNull()) {
+        if (mqttRemoteEnabled()) _cmdSetRelayOnMs(1, doc["CH1 on_ms"].as<int>());
+        else _tele->publishCommandError("CH1 on_ms", "remote_off");
+    }
+    if (!doc["CH2 on_ms"].isNull()) {
+        if (mqttRemoteEnabled()) _cmdSetRelayOnMs(2, doc["CH2 on_ms"].as<int>());
+        else _tele->publishCommandError("CH2 on_ms", "remote_off");
+    }
+    if (!doc["CH1 cycle_ms"].isNull()) {
+        if (mqttRemoteEnabled()) _cmdSetRelayCycleMs(1, doc["CH1 cycle_ms"].as<int>());
+        else _tele->publishCommandError("CH1 cycle_ms", "remote_off");
+    }
+    if (!doc["CH2 cycle_ms"].isNull()) {
+        if (mqttRemoteEnabled()) _cmdSetRelayCycleMs(2, doc["CH2 cycle_ms"].as<int>());
+        else _tele->publishCommandError("CH2 cycle_ms", "remote_off");
+    }
 
     // After any command, drive outputs once so POWER_DIRECT relay/power changes
     // take effect without waiting for the next sample interval.
@@ -510,6 +505,7 @@ void CommandHandler::_cmdStart(const char* modeStr, int ch1Profile, int ch2Profi
 // Loads saved power params from config into channel state.
 void CommandHandler::_cmdStartPower() {
     log_i("[CMD] start: power");
+    noteRemoteActivity(_ch[0], _ch[1], _tele);
 
     for (int i = 0; i < 2; i++) {
         ChannelState* ch = _ch[i];
@@ -546,22 +542,6 @@ void CommandHandler::startPowerRun() {
     _cmdStartPower();
 }
 
-void CommandHandler::_cmdStartRemote() {
-    setMqttRemoteEnabled(true);
-    _cmdStartPower();
-    if (_cfg) {
-        if (_cfg->pwr_relay1_mode != (uint8_t)RelayMode::OFF) {
-            _cfg->pwr_relay1_mode = (uint8_t)RelayMode::REMOTE;
-            if (_ch[0]) _ch[0]->relay_mode = RelayMode::REMOTE;
-        }
-        if (_cfg->pwr_relay2_mode != (uint8_t)RelayMode::OFF) {
-            _cfg->pwr_relay2_mode = (uint8_t)RelayMode::REMOTE;
-            if (_ch[1]) _ch[1]->relay_mode = RelayMode::REMOTE;
-        }
-        _cfg->savePowerParams();
-    }
-}
-
 // ── _applyPowerParams ─────────────────────────────────────────────────────────
 // Load saved config power params into channel state.
 // Called from _cmdStartPower() and auto-resume.
@@ -579,7 +559,6 @@ void CommandHandler::_applyPowerParams(int chIdx) {
     ch->dtSP              = _cfg->pwr_dtsp;
     ch->timer_duration_s  = _cfg->pwr_timer_s;
     ch->timer_dir         = _cfg->pwr_deo;
-    ch->ramp_duration_s   = _cfg->pwr_ramp_s;
 
     // Relay config: CH1 uses rl1 settings, CH2 uses rl2 settings
     if (chIdx == 1) {
@@ -595,27 +574,20 @@ void CommandHandler::_applyPowerParams(int chIdx) {
     // Reset device watchdog timestamp so it doesn't fire immediately after start.
     gLastMqttMsgMs = millis();
 
-    // Init ramp if configured
-    if (ch->ramp_duration_s > 0) {
-        ch->rampActive  = true;
-        ch->rampStartMs = millis();
-    } else {
-        ch->rampActive = false;
-    }
-
     // Init reflux cycle start
     if (ch->relay_mode == RelayMode::REFLUX_TIMER) {
         ch->refluxCycleStartMs = millis();
     }
 
-    log_i("[CMD] CH%d power params applied: dist=%u%% acc=%s dAST=%.1f dOUT=%u%% ramp=%us",
+    log_i("[CMD] CH%d power params applied: dist=%u%% acc=%s dAST=%.1f dOUT=%u%%",
           chIdx, ch->distill_power_pct, ch->acc_mode ? "on" : "off",
-          ch->dAST, ch->dOUT, (unsigned)ch->ramp_duration_s);
+          ch->dAST, ch->dOUT);
 }
 
 // ── _cmdStop ──────────────────────────────────────────────────────────────────
 void CommandHandler::_cmdStop() {
     log_i("[CMD] stop");
+    gMqttRemoteActive = false;
     profiles.stop(0, *_ch[0]);
     profiles.stop(1, *_ch[1]);
     _ch[0]->stop();
@@ -624,6 +596,7 @@ void CommandHandler::_cmdStop() {
     _ch[1]->runmode = Runmode::MONITOR;
     _tele->publishEventTyped("stop", "program_stopped");
     _cfg->saveRunState(0, 0, false, false);
+    if (_mqtt) _mqtt->publishStatus();
 }
 
 // ── _cmdPause ─────────────────────────────────────────────────────────────────
@@ -656,6 +629,7 @@ void CommandHandler::_cmdResume() {
 // A separate {"start":"power"} is required to restart.
 void CommandHandler::_cmdReset() {
     log_i("[CMD] reset — clearing finish/end state");
+    gMqttRemoteActive = false;
     for (int i = 0; i < 2; i++) {
         _ch[i]->finishLatch      = false;
         _ch[i]->finishLatchJustSet = false;
@@ -670,6 +644,7 @@ void CommandHandler::_cmdReset() {
         startAccelProgramTimer(_ch[i]);
     }
     _tele->publishEventTyped("reset", "program_reset");
+    if (_mqtt) _mqtt->publishStatus();
 }
 
 // ── _cmdSetSP ─────────────────────────────────────────────────────────────────
@@ -725,6 +700,7 @@ void CommandHandler::_cmdSetPower(int chIdx, int pct) {
         return;
     }
     pct = constrain(pct, 0, 100);
+    noteRemoteActivity(_ch[0], _ch[1], _tele);
     log_i("[CMD] CH%d power → %d%%", chIdx, pct);
 
     ch->distill_power_pct = (uint8_t)pct;
@@ -735,19 +711,22 @@ void CommandHandler::_cmdSetPower(int chIdx, int pct) {
         ch->power_pct = (uint8_t)pct;
     }
     _cfg->savePowerParams();
+    if (_mqtt) _mqtt->publishConfig();
 }
 
 // ── _cmdSetAccMode ────────────────────────────────────────────────────────────
-void CommandHandler::_cmdSetAccMode(int chIdx, bool enabled) {
-    ChannelState* ch = _channel(chIdx);
-    if (!ch) return;
-    log_i("[CMD] CH%d acc_mode → %s", chIdx, enabled ? "on" : "off");
-    ch->acc_mode = enabled;
+void CommandHandler::_cmdSetAccMode(bool enabled) {
+    noteRemoteActivity(_ch[0], _ch[1], _tele);
+    log_i("[CMD] acc_mode → %s", enabled ? "on" : "off");
     _cfg->pwr_acc_mode = enabled;
-    // If turning off while in POWER_DIRECT and accel phase is active: end it now
-    if (!enabled && ch->accelPhaseActive) {
-        ch->accelPhaseActive    = false;
-        ch->accelPhaseJustEnded = true;
+    for (int i = 0; i < 2; i++) {
+        ChannelState* ch = _ch[i];
+        if (!ch) continue;
+        ch->acc_mode = enabled;
+        if (!enabled && ch->accelPhaseActive) {
+            ch->accelPhaseActive    = false;
+            ch->accelPhaseJustEnded = true;
+        }
     }
     _cfg->savePowerParams();
 }
@@ -760,6 +739,7 @@ void CommandHandler::_cmdSetRelayMode(int chIdx, const char* modeStr) {
         ? (_cfg->pwr_relay1_mode == (uint8_t)RelayMode::OFF)
         : (_cfg->pwr_relay2_mode == (uint8_t)RelayMode::OFF));
     if (relayDisabled) {
+        if (_tele) _tele->publishCommandError("relay_mode", "disabled_output");
         log_w("[CMD] CH%d relay_mode ignored — RL%d mode is Off", chIdx, chIdx);
         return;
     }
@@ -770,9 +750,11 @@ void CommandHandler::_cmdSetRelayMode(int chIdx, const char* modeStr) {
     else if (strcmp(modeStr, "cycle") == 0 || strcmp(modeStr, "reflux_timer") == 0) mode = RelayMode::REFLUX_TIMER;
     else if (strcmp(modeStr, "manual_on_off") == 0 || strcmp(modeStr, "manual") == 0 || strcmp(modeStr, "on_off") == 0) mode = RelayMode::LOCAL_ON_OFF;
     else {
+        if (_tele) _tele->publishCommandError("relay_mode", "invalid_value", modeStr);
         log_w("[CMD] CH%d relay_mode unknown: '%s'", chIdx, modeStr);
         return;
     }
+    noteRemoteActivity(_ch[0], _ch[1], _tele);
     log_i("[CMD] CH%d relay_mode → %s", chIdx, modeStr);
     ch->relay_mode = mode;
     ch->relay_command = false;
@@ -784,6 +766,7 @@ void CommandHandler::_cmdSetRelayMode(int chIdx, const char* modeStr) {
         ch->refluxCycleStartMs = millis();
     }
     _cfg->savePowerParams();
+    if (_mqtt) _mqtt->publishConfig();
 }
 
 // ── _cmdSetRelay ──────────────────────────────────────────────────────────────
@@ -795,24 +778,29 @@ void CommandHandler::_cmdSetRelay(int chIdx, bool state) {
         ? (_cfg->pwr_relay1_mode == (uint8_t)RelayMode::OFF)
         : (_cfg->pwr_relay2_mode == (uint8_t)RelayMode::OFF));
     if (relayDisabled) {
+        if (_tele) _tele->publishCommandError("relay", "disabled_output");
         log_w("[CMD] CH%d relay ignored — RL%d mode is Off", chIdx, chIdx);
         return;
     }
     switch (ch->relay_mode) {
         case RelayMode::REMOTE:
+            noteRemoteActivity(_ch[0], _ch[1], _tele);
             log_i("[CMD] CH%d relay → %s", chIdx, state ? "ON" : "OFF");
             ch->relay_command = state;
             break;
         case RelayMode::REFLUX_TIMER:
+            noteRemoteActivity(_ch[0], _ch[1], _tele);
             log_i("[CMD] CH%d cycle → %s", chIdx, state ? "engaged" : "disengaged");
             ch->relay_command = state;
             if (state) ch->refluxCycleStartMs = millis();
             break;
         case RelayMode::ACC_SYNC:
+            noteRemoteActivity(_ch[0], _ch[1], _tele);
             log_i("[CMD] CH%d acc_element → %s", chIdx, state ? "engaged" : "disengaged");
             ch->relay_command = state;
             break;
         case RelayMode::LOCAL_ON_OFF:
+            if (_tele) _tele->publishCommandError("relay", "mode_incompatible");
             log_d("[CMD] CH%d relay cmd ignored — relay_mode is local on/off", chIdx);
             break;
         case RelayMode::OFF:
@@ -821,34 +809,42 @@ void CommandHandler::_cmdSetRelay(int chIdx, bool state) {
 }
 
 // ── _cmdSetDAST ───────────────────────────────────────────────────────────────
-void CommandHandler::_cmdSetDAST(int chIdx, float temp) {
-    ChannelState* ch = _channel(chIdx);
-    if (!ch) return;
-    log_i("[CMD] CH%d dAST → %.1f %s", chIdx, temp, _cfg->temp_unit);
-    ch->dAST = temp;
+void CommandHandler::_cmdSetDAST(float temp) {
+    noteRemoteActivity(_ch[0], _ch[1], _tele);
+    log_i("[CMD] accel_temp → %.1f %s", temp, _cfg->temp_unit);
+    for (int i = 0; i < 2; i++) {
+        if (!_ch[i]) continue;
+        _ch[i]->dAST = temp;
+        if (temp <= 0.0f) _ch[i]->accelPhaseActive = false;
+    }
     _cfg->pwr_dast = temp;
     _cfg->savePowerParams();
+    if (_mqtt) _mqtt->publishConfig();
 }
 
 // ── _cmdSetDOut ───────────────────────────────────────────────────────────────
-void CommandHandler::_cmdSetDOut(int chIdx, int pct) {
-    ChannelState* ch = _channel(chIdx);
-    if (!ch) return;
+void CommandHandler::_cmdSetDOut(int pct) {
     pct = constrain(pct, 0, 100);
-    log_i("[CMD] CH%d dOUT → %d%%", chIdx, pct);
-    ch->dOUT = (uint8_t)pct;
+    noteRemoteActivity(_ch[0], _ch[1], _tele);
+    log_i("[CMD] accel_power → %d%%", pct);
+    for (int i = 0; i < 2; i++) {
+        if (_ch[i]) _ch[i]->dOUT = (uint8_t)pct;
+    }
     _cfg->pwr_dout = (uint8_t)pct;
     _cfg->savePowerParams();
+    if (_mqtt) _mqtt->publishConfig();
 }
 
 // ── _cmdSetDFSP ───────────────────────────────────────────────────────────────
-void CommandHandler::_cmdSetDFSP(int chIdx, float temp) {
-    ChannelState* ch = _channel(chIdx);
-    if (!ch) return;
-    log_i("[CMD] CH%d dFSP → %.1f %s", chIdx, temp, _cfg->temp_unit);
-    ch->dFSP = temp;
+void CommandHandler::_cmdSetDFSP(float temp) {
+    noteRemoteActivity(_ch[0], _ch[1], _tele);
+    log_i("[CMD] finish_temp → %.1f %s", temp, _cfg->temp_unit);
+    for (int i = 0; i < 2; i++) {
+        if (_ch[i]) _ch[i]->dFSP = temp;
+    }
     _cfg->pwr_dfsp = temp;
     _cfg->savePowerParams();
+    if (_mqtt) _mqtt->publishConfig();
 }
 
 void CommandHandler::_cmdSetFinishTempSource(const char* source) {
@@ -858,13 +854,14 @@ void CommandHandler::_cmdSetFinishTempSource(const char* source) {
     else if (strcmp(source, "CH2") == 0 || strcmp(source, "ch2") == 0 || strcmp(source, "2") == 0) ch = 2;
     else {
         log_w("[CMD] finish_temp_source unknown: '%s'", source);
-        if (_tele) _tele->publishEventTyped("finish temp source rejected", "program_config_error", 0, "invalid_finish_temp_source");
+        if (_tele) _tele->publishCommandError("finish_temp_source", "invalid_value", source);
         return;
     }
+    noteRemoteActivity(_ch[0], _ch[1], _tele);
     log_i("[CMD] finish_temp_source → CH%d", ch);
     _cfg->pwr_dfsp_source = ch;
     _cfg->savePowerParams();
-    if (_mqtt) _mqtt->publishStatus();
+    if (_mqtt) _mqtt->publishConfig();
 }
 
 // ── _cmdSetWatchdogEnabled ────────────────────────────────────────────────────
@@ -885,6 +882,7 @@ void CommandHandler::_cmdSetWatchdogEnabled(bool enabled) {
     }
     _cfg->savePowerParams();
     _mqtt->publishStatus();
+    _mqtt->publishConfig();
 }
 
 // ── _cmdSetWatchdogTimeout ────────────────────────────────────────────────────
@@ -904,57 +902,51 @@ void CommandHandler::_cmdSetWatchdogTimeout(int seconds) {
 }
 
 // ── _cmdSetDtSP ───────────────────────────────────────────────────────────────
-void CommandHandler::_cmdSetDtSP(int chIdx, float temp) {
-    ChannelState* ch = _channel(chIdx);
-    if (!ch) return;
-    log_i("[CMD] CH%d dtSP → %.1f %s", chIdx, temp, _cfg->temp_unit);
-    ch->dtSP = temp;
+void CommandHandler::_cmdSetDtSP(float temp) {
+    noteRemoteActivity(_ch[0], _ch[1], _tele);
+    log_i("[CMD] timer_start_temp → %.1f %s", temp, _cfg->temp_unit);
+    for (int i = 0; i < 2; i++) {
+        if (!_ch[i]) continue;
+        _ch[i]->dtSP = temp;
+        _ch[i]->timerTriggered = false;
+        _ch[i]->timerExpired = false;
+    }
     _cfg->pwr_dtsp = temp;
     _cfg->savePowerParams();
+    if (_mqtt) _mqtt->publishConfig();
 }
 
 // ── _cmdSetTimerDuration ──────────────────────────────────────────────────────
-void CommandHandler::_cmdSetTimerDuration(int chIdx, int s) {
-    ChannelState* ch = _channel(chIdx);
-    if (!ch) return;
+void CommandHandler::_cmdSetTimerDuration(int s) {
     s = max(0, s);
-    log_i("[CMD] CH%d timer_s → %d", chIdx, s);
-    ch->timer_duration_s = (uint32_t)s;
+    noteRemoteActivity(_ch[0], _ch[1], _tele);
+    log_i("[CMD] timer_s → %d", s);
+    for (int i = 0; i < 2; i++) {
+        if (_ch[i]) _ch[i]->timer_duration_s = (uint32_t)s;
+    }
     _cfg->pwr_timer_s = (uint32_t)s;
     _cfg->savePowerParams();
-}
-
-void CommandHandler::_cmdSetFinishTime(int chIdx, int seconds) {
-    log_w("[CMD] CH%d finish_time_s is deprecated — normalizing to timer_s", chIdx);
-    _cmdSetTimerDuration(chIdx, seconds);
+    if (_mqtt) _mqtt->publishConfig();
 }
 
 // ── _cmdSetTimerDir ───────────────────────────────────────────────────────────
-void CommandHandler::_cmdSetTimerDir(int chIdx, const char* dir) {
-    ChannelState* ch = _channel(chIdx);
-    if (!ch) return;
+void CommandHandler::_cmdSetTimerDir(const char* dir) {
     uint8_t val;
     if (strcmp(dir, "continue") == 0) val = 0;
-    else if (strcmp(dir, "end") == 0 || strcmp(dir, "shutoff") == 0 || strcmp(dir, "latch_off") == 0) val = 1;
+    else if (strcmp(dir, "end") == 0 || strcmp(dir, "shutoff") == 0) val = 1;
     else {
-        log_w("[CMD] CH%d dEO unknown: '%s'", chIdx, dir);
+        log_w("[CMD] finish_action unknown: '%s'", dir);
+        if (_tele) _tele->publishCommandError("finish_action", "invalid_value", dir);
         return;
     }
-    log_i("[CMD] CH%d dEO → %s", chIdx, dir);
-    ch->timer_dir = val;
+    noteRemoteActivity(_ch[0], _ch[1], _tele);
+    log_i("[CMD] finish_action → %s", dir);
+    for (int i = 0; i < 2; i++) {
+        if (_ch[i]) _ch[i]->timer_dir = val;
+    }
     _cfg->pwr_deo = val;
     _cfg->savePowerParams();
-}
-
-// ── _cmdSetRamp ───────────────────────────────────────────────────────────────
-void CommandHandler::_cmdSetRamp(int chIdx, int seconds) {
-    ChannelState* ch = _channel(chIdx);
-    if (!ch) return;
-    seconds = max(0, seconds);
-    log_i("[CMD] CH%d ramp_s → %d", chIdx, seconds);
-    ch->ramp_duration_s = (uint32_t)seconds;
-    _cfg->pwr_ramp_s = (uint32_t)seconds;
-    _cfg->savePowerParams();
+    if (_mqtt) _mqtt->publishConfig();
 }
 
 // ── _cmdSetRelayOnMs ──────────────────────────────────────────────────────────
@@ -962,11 +954,13 @@ void CommandHandler::_cmdSetRelayOnMs(int chIdx, int ms) {
     ChannelState* ch = _channel(chIdx);
     if (!ch) return;
     ms = max(1, ms);   // at least 1ms
+    noteRemoteActivity(_ch[0], _ch[1], _tele);
     log_i("[CMD] CH%d on_ms → %d", chIdx, ms);
     ch->relay_on_ms = (uint32_t)ms;
     if (chIdx == 1) _cfg->pwr_r1_on_ms = (uint32_t)ms;
     else            _cfg->pwr_r2_on_ms = (uint32_t)ms;
     _cfg->savePowerParams();
+    if (_mqtt) _mqtt->publishConfig();
 }
 
 // ── _cmdSetRelayCycleMs ───────────────────────────────────────────────────────
@@ -974,11 +968,13 @@ void CommandHandler::_cmdSetRelayCycleMs(int chIdx, int ms) {
     ChannelState* ch = _channel(chIdx);
     if (!ch) return;
     ms = max(1, ms);   // at least 1ms
+    noteRemoteActivity(_ch[0], _ch[1], _tele);
     log_i("[CMD] CH%d cycle_ms → %d", chIdx, ms);
     ch->relay_cycle_ms = (uint32_t)ms;
     if (chIdx == 1) _cfg->pwr_r1_cycle_ms = (uint32_t)ms;
     else            _cfg->pwr_r2_cycle_ms = (uint32_t)ms;
     _cfg->savePowerParams();
+    if (_mqtt) _mqtt->publishConfig();
 }
 
 // ── tick ──────────────────────────────────────────────────────────────────────
@@ -1009,6 +1005,7 @@ void CommandHandler::tick() {
             gMqttRemoteActive = false;
             gLastMqttMsgMs = 0;
             _tele->publishWatchdogSafe(_cfg->pwr_wdog_s);
+            if (_mqtt) _mqtt->publishStatus();
             _applyRuntimeOutputs();
             log_w("[EVT] watchdog safe state — no MQTT for %lus",
                   (unsigned long)_cfg->pwr_wdog_s);

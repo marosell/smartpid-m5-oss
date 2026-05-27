@@ -41,6 +41,9 @@ public:
     void publishWatchdogSafe(uint32_t watchdog_s);
     void publishWatchdogConfigError(const char* reason, int value,
                                     uint32_t min_s, uint32_t max_s);
+    void publishCommandError(const char* command,
+                             const char* reason,
+                             const char* value = nullptr);
 
     // Publish an event to events/advanced immediately.
     // Used for profile sequencer events: "profile", "ramp N", "soak N".

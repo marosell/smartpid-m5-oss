@@ -116,7 +116,7 @@ at the exact cutoff moment.
 not inferred from `dAST > 0`. The user can save threshold values (dAST, dOUT) and
 toggle acceleration on/off for a particular run without clearing them. Both the
 controller panel UI (Process Parameters (P) menu) and Proof can set this flag. A
-mid-run `{"CH1 acc_mode": false}` command while the acceleration phase is active cancels
+mid-run `{"acc_mode": false}` command while the acceleration phase is active cancels
 it immediately — equivalent to the threshold being crossed, but operator-triggered.
 Publishes `"acceleration cancelled"` event.
 
@@ -367,7 +367,6 @@ pwr_dtsp           float     0.0
 pwr_timer_s        uint32_t  0
 pwr_timer_dir      uint8_t   0       (0=up, 1=down)
 pwr_deo            uint8_t   0       (0=continue, 1=shutoff)
-pwr_ramp_s         uint16_t  0
 pwr_distill_pct    uint8_t   40
 pwr_relay1_mode    uint8_t   0       (RelayMode enum)
 pwr_relay2_mode    uint8_t   0

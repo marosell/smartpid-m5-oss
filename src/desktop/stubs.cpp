@@ -62,6 +62,7 @@ void MQTTManager::loop() {}
 bool MQTTManager::connected() { return true; }
 bool MQTTManager::publish(const char*, const char*, bool) { return true; }
 bool MQTTManager::publishStatus() { return true; }
+bool MQTTManager::publishConfig() { return true; }
 void MQTTManager::onMessage(MessageCallback) {}
 String MQTTManager::fullTopic(const char* suffix) const { return String("desktop/") + suffix; }
 

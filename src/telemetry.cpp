@@ -59,7 +59,7 @@ void TelemetryPublisher::loop(const ChannelState& ch1, const ChannelState& ch2) 
 //   Standard/Adv: { time, temp, unit, runmode, countdown, countup, SP, mode,
 //                   pwm, maxpwm, relay }
 //   Power:        { time, temp, unit, runmode:"power", relay, power, dc_mode }
-//                   power = current DC OUT duty % (reflects ramp, accel phase)
+//                   power = current DC OUT duty % (reflects accel phase)
 void TelemetryPublisher::_publishChannel(const char* chName, const ChannelState& ch) {
     JsonDocument doc;
 
@@ -86,10 +86,11 @@ void TelemetryPublisher::_publishChannel(const char* chName, const ChannelState&
                 doc["relay_engaged"] = false;
                 break;
         }
-        doc["power"]   = ch.power_pct;  // current actual duty (post-ramp, post-accel)
+        doc["power"]   = ch.power_pct;  // current actual duty (post-accel)
         doc["dc_mode"] = dcEnabled ? "element" : "off";
         doc["relay_mode"] = relayModeStr(ch.relay_mode);
-        doc["remote"] = mqttRemoteEnabled();
+        doc["remote_enabled"] = mqttRemoteEnabled();
+        doc["remote_state"] = !mqttRemoteEnabled() ? "OFF" : (mqttRemoteActive() ? "ON" : "RDY");
         doc["acc_elements_enabled"] = accElementsEnabled();
         doc["finish_temp_source"] = (_cfg->pwr_dfsp_source == 2) ? "CH2" : "CH1";
         doc["ended"] = ch.finishEnd;
@@ -196,6 +197,28 @@ void TelemetryPublisher::publishWatchdogConfigError(const char* reason, int valu
     _mqtt->publish(topic.c_str(), payload.c_str(), /*retained=*/false);
 
     log_i("[EVENT/STD] watchdog config rejected");
+}
+
+void TelemetryPublisher::publishCommandError(const char* command,
+                                             const char* reason,
+                                             const char* value) {
+    if (!_mqtt->connected()) return;
+
+    JsonDocument doc;
+    doc["time"] = bootSeconds();
+    doc["type"] = "command_error";
+    doc["event"] = "command rejected";
+    doc["command"] = command ? command : "";
+    doc["reason"] = reason ? reason : "";
+    if (value && value[0]) doc["value"] = value;
+
+    String payload;
+    serializeJson(doc, payload);
+
+    String topic = _mqtt->fullTopic("events/standard");
+    _mqtt->publish(topic.c_str(), payload.c_str(), /*retained=*/false);
+
+    log_i("[EVENT/STD] command rejected");
 }
 
 // ── publishEventAdv ───────────────────────────────────────────────────────────
