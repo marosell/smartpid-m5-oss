@@ -81,8 +81,9 @@ pio run -e desktop
 - `status`, `stop`, `pause`, `resume`, and `reset` are accepted regardless of
   Remote. `start`, output control, relay control, and program parameter writes
   require Remote enabled.
-- Watchdog is device-level. Retained status publishes `watchdog_enabled` and
-  `watchdog_s`; a trip forces DC1/DC2 to 0% and RL1/RL2 off.
+- Watchdog is device-level and only active while Remote is enabled. Retained
+  status publishes `watchdog_enabled` and `watchdog_s`; a trip forces DC1/DC2 to
+  0% and RL1/RL2 off.
 
 ## Source Layout
 

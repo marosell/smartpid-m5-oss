@@ -159,7 +159,7 @@ smartpidM5/proofpro/{topic_id}/profiles/update/#
 
 | Item | Why it remains |
 |---|---|
-| Watchdog behavior | Device-level config and all-off safe state implemented; needs bench validation |
+| Watchdog behavior | Remote-mode-only device-level config and all-off safe state implemented; needs bench validation |
 | PT100 2-wire CH1 route | T2 confirmed; CH1 still needs the same wiring test |
 | NTC | Code path present, but no current NTC probe available for bench validation |
 | Relay cycle mode | Settings/UI present; needs a focused bench pass |

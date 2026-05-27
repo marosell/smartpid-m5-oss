@@ -18,6 +18,7 @@ bool mqttRemoteEnabled() {
 
 void setMqttRemoteEnabled(bool enabled) {
     gMqttRemoteEnabled = enabled;
+    gLastMqttMsgMs = millis();
     if (gRuntimeCfg) {
         gRuntimeCfg->remote_enabled = enabled;
         gRuntimeCfg->save();
@@ -853,7 +854,7 @@ void CommandHandler::_cmdSetRelayCycleMs(int chIdx, int ms) {
 //   • Advance countup / decrement countdown (OEM + POWER_DIRECT)
 //   • Fire "timer expired" events (OEM countdown)
 //   • Fire "SP reached" events (STANDARD mode)
-//   • Check device-level MQTT watchdog
+//   • Check Remote-mode device-level MQTT watchdog
 //   • Check dtSP temperature timer (POWER_DIRECT mode)
 //   • Publish event pulses set by output_control (accel end, finish latch)
 void CommandHandler::tick() {
@@ -861,7 +862,12 @@ void CommandHandler::tick() {
     if (now - _lastTickMs < 1000UL) return;
     _lastTickMs = now;
 
-    if (_cfg->pwr_wdog_enabled && _cfg->pwr_wdog_s > 0 && gLastMqttMsgMs > 0) {
+    if (!mqttRemoteEnabled()) {
+        if (gWatchdogFired) {
+            setDeviceWatchdogFired(_ch[0], _ch[1], false);
+            _tele->publishEventTyped("watchdog cleared", "watchdog_cleared");
+        }
+    } else if (_cfg->pwr_wdog_enabled && _cfg->pwr_wdog_s > 0 && gLastMqttMsgMs > 0) {
         unsigned long elapsed = now - gLastMqttMsgMs;
         bool timedOut = (elapsed > (unsigned long)_cfg->pwr_wdog_s * 1000UL);
         if (!gWatchdogFired && timedOut) {

@@ -243,13 +243,16 @@ Watchdog behavior:
 
 - watchdog config is device-level, not per channel
 - `watchdog_enabled=false` disables/unarms the watchdog
-- `watchdog_enabled=true` arms it
+- `watchdog_enabled=true` arms it for Remote mode
 - `watchdog_s` is the device-level timeout in seconds
 - any received command updates the watchdog timestamp
-- no command traffic for `watchdog_s` seconds trips watchdog safe
+- no command traffic for `watchdog_s` seconds while Remote is enabled trips
+  watchdog safe
+- while Remote is disabled, watchdog config is retained but runtime watchdog
+  protection is inactive
+- disabling Remote clears any active watchdog safe state
 - watchdog trip forces DC OUT 1 = 0%, DC OUT 2 = 0%, RL1 off, and RL2 off
-- safe/off applies regardless of channel mode, relay mode, program state, or
-  Remote command state
+- safe/off applies regardless of channel mode, relay mode, or program state
 - there are no per-channel watchdog safe percentages
 - a later command clears watchdog safe state and emits `watchdog cleared`
 

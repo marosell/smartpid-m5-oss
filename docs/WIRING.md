@@ -218,7 +218,7 @@ behavior that should be retested on hardware before release.
 
 ## Must Test Next
 
-1. Device-level watchdog and all-off safe behavior.
+1. Remote-mode-only device-level watchdog and all-off safe behavior.
 2. PT100 2-wire T1 terminal pairing.
 3. Relay `cycle` mode.
 4. NTC route if an NTC probe becomes available.

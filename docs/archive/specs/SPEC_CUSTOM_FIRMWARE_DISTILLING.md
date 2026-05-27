@@ -1,9 +1,9 @@
 # Custom M5 PRO Firmware — Distilling Capabilities Spec
 
 **Status:** Archived design reference. Current implementation status is tracked
-in `docs/WORKPLAN.md`. Current watchdog behavior is device-level: retained
-status exposes `watchdog_enabled` / `watchdog_s`, and safe state forces DC1/DC2
-to 0% and RL1/RL2 off.
+in `docs/WORKPLAN.md`. Current watchdog behavior is device-level and only active
+while Remote is enabled: retained status exposes `watchdog_enabled` /
+`watchdog_s`, and safe state forces DC1/DC2 to 0% and RL1/RL2 off.
 **Preconditions:** All resolved — see `docs/WIRING.md`.
 **Hardware gate:** Phase 3 bench validation (USB flash + output wiring confirmation) is
 technically a prerequisite for production use. Implementation proceeds in parallel.
@@ -165,13 +165,15 @@ Maps directly to DSPR400 `dFSP / FF` behavior.
 
 ### 2.3 MQTT watchdog / safe state
 
-**Behavior:** if the device-level watchdog is enabled and the device has not received any
-MQTT command message from Proof for `watchdog_s` seconds, it forces the whole device to
-safe/off: DC OUT 1 = 0%, DC OUT 2 = 0%, RL1 off, and RL2 off. This applies regardless of
-channel mode, relay mode, program state, or remote command state.
+**Behavior:** if Remote is enabled, the device-level watchdog is enabled, and the device
+has not received any MQTT command message from Proof for `watchdog_s` seconds, it forces
+the whole device to safe/off: DC OUT 1 = 0%, DC OUT 2 = 0%, RL1 off, and RL2 off. This
+applies regardless of channel mode, relay mode, or program state. While Remote is
+disabled, watchdog config is retained but runtime watchdog protection is inactive.
 
 **Parameters:**
-- `watchdog_enabled` — false disables/unarms, true arms when `watchdog_s` is nonzero
+- `watchdog_enabled` — false disables/unarms, true arms for Remote mode when
+  `watchdog_s` is nonzero
 - `watchdog_s` — timeout in seconds
 
 There are no per-channel watchdog timers or per-channel watchdog safe percentages.
@@ -388,7 +390,7 @@ Steps 7–10 are capability expansion.
 | 2 | **Direct power mode** — `Runmode::POWER_DIRECT`; `{"start": "power"}`; `{"CHx power": N}`; SP commands ignored; telemetry `runmode: "power"` |
 | 3 | **Relay mode infrastructure + acceleration phase** — `RelayMode` enum (`off`, `acc_sync`, `remote`, `reflux_timer`); `acc_mode` bool; `dAST` / `dOUT` fields; device-enforced phase transition; relay pin respects mode |
 | 4 | **Remote relay mode** — `{"CHx relay_mode": "remote"}`; `{"CHx relay": true/false}`; DC OUT unaffected |
-| 5 | **MQTT watchdog / safe state** — device-level last-message timestamp; tick checks timeout; forces DC1/DC2 to 0% and RL1/RL2 off |
+| 5 | **MQTT watchdog / safe state** — Remote-mode-only device-level last-message timestamp; tick checks timeout; forces DC1/DC2 to 0% and RL1/RL2 off |
 | 6 | **Latching finishing temperature** — `dFSP`; `FF` latch; all outputs off and latched; `{"reset": true}` clears; won't auto-resume while latched |
 | 7 | **Temperature-triggered timer** — `dtSP`; `timer_duration_s`; `timer_direction`; `dEO`; fires event on expiry; latches on `shutoff` |
 | 8 | **Power ramp / soft start** — `ramp_duration_s`; output ramps 0 → target on start |
