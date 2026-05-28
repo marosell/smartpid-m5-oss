@@ -6,6 +6,7 @@
 #include "hardware_profile.h"
 #endif
 #include "display.h"
+#include "migration_installer.h"
 #include "output_control.h"
 #include "profiles.h"
 #include <ArduinoJson.h>
@@ -1218,23 +1219,21 @@ void CommandHandler::_cmdMigrationInstallOemLayout(const char* confirm,
         log_w("[CMD] install_oem_bootloader_layout rejected — confirmation required");
         return;
     }
-    if (!packageUrl || packageUrl[0] == '\0') {
-        if (_tele) _tele->publishCommandError("migration", "missing_package_url", "install_oem_bootloader_layout");
-        log_w("[CMD] install_oem_bootloader_layout rejected — missing package_url");
-        return;
-    }
-    if (!packageSha256 || strlen(packageSha256) != 64) {
-        if (_tele) _tele->publishCommandError("migration", "missing_package_sha256", "install_oem_bootloader_layout");
-        log_w("[CMD] install_oem_bootloader_layout rejected — missing package_sha256");
-        return;
-    }
+    if (_tele) _tele->publishMigrationPreflight("install_oem_bootloader_layout");
+    MigrationInstallRequest request;
+    request.packageUrl = packageUrl;
+    request.packageSha256 = packageSha256;
+    MigrationInstallResult result = migrationInstallOemLayout(request, _tele);
 
-    if (_tele) {
-        _tele->publishMigrationPreflight("install_oem_bootloader_layout");
-        _tele->publishCommandError("migration", "writes_not_enabled", "install_oem_bootloader_layout");
+    if (result == MigrationInstallResult::INVALID_REQUEST) {
+        if (_tele) _tele->publishCommandError("migration", "invalid_package", "install_oem_bootloader_layout");
+    } else if (result == MigrationInstallResult::UNSAFE_STATE) {
+        if (_tele) _tele->publishCommandError("migration", "unsafe_state", "install_oem_bootloader_layout");
+    } else if (result == MigrationInstallResult::WRITES_DISABLED) {
+        if (_tele) _tele->publishCommandError("migration", "writes_not_enabled", "install_oem_bootloader_layout");
     }
-    log_w("[CMD] install_oem_bootloader_layout rejected — writes disabled url=%s sha=%s",
-          packageUrl, packageSha256);
+    log_w("[CMD] install_oem_bootloader_layout rejected result=%d url=%s sha=%s",
+          (int)result, packageUrl ? packageUrl : "", packageSha256 ? packageSha256 : "");
 }
 
 void CommandHandler::_cmdBootHighApp1(const char* confirm) {

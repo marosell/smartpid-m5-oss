@@ -518,6 +518,38 @@ void TelemetryPublisher::publishMigrationPreflight(const char* reason,
     log_i("[EVENT/STD] migration preflight: %s", payload.c_str());
 }
 
+void TelemetryPublisher::publishMigrationInstallStatus(const char* phase,
+                                                       const char* status,
+                                                       const char* reason,
+                                                       const char* packageUrl,
+                                                       const char* packageSha256) {
+    if (!_mqtt->connected()) return;
+
+    JsonDocument doc;
+    doc["time"] = bootSeconds();
+    doc["type"] = "migration_install";
+    doc["event"] = "migration install";
+    doc["target"] = "oem_bootloader_layout";
+    doc["phase"] = phase ? phase : "unknown";
+    doc["status"] = status ? status : "unknown";
+    if (reason) doc["reason"] = reason;
+    if (packageUrl) doc["package_url"] = packageUrl;
+    if (packageSha256) doc["package_sha256"] = packageSha256;
+    doc["writes_enabled"] =
+#if defined(PROOFPRO_ENABLE_OEM_LAYOUT_INSTALL) && !defined(DESKTOP_BUILD)
+        true;
+#else
+        false;
+#endif
+
+    String payload;
+    serializeJson(doc, payload);
+
+    String topic = _mqtt->fullTopic("events/standard");
+    _mqtt->publish(topic.c_str(), payload.c_str(), /*retained=*/false);
+    log_i("[EVENT/STD] migration install: %s", payload.c_str());
+}
+
 // ── publishEventAdv ───────────────────────────────────────────────────────────
 // Publishes to smartpidM5/pro/<id>/events/advanced
 // Used for profile sequencer events: "profile", "ramp N", "soak N".

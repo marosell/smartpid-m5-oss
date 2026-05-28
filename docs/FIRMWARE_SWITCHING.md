@@ -363,7 +363,10 @@ The reserved install command shape is:
 ```
 
 Current firmware validates the confirmation string and package fields, then
-rejects the command with `writes_not_enabled`.
+publishes a `migration_install` status event and rejects the command with
+`writes_not_enabled`. The installer module is present, but destructive writes
+are compile-time disabled unless `PROOFPRO_ENABLE_OEM_LAYOUT_INSTALL` is added
+to the build and the writer is implemented.
 
 To prepare for a future conversion, ProofPro can be told to reboot into the high
 current-layout `app1` slot:
