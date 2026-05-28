@@ -338,12 +338,32 @@ static MigrationInstallResult validatePackageStream(const MigrationInstallReques
         http.end();
         return MigrationInstallResult::DOWNLOAD_FAILED;
     }
-    if (!readAndHash(*stream, manifestLen, packageCtx, nullptr, bytesDone, bytesTotal,
-                     telemetry, "manifest", request)) {
-        delete[] manifest;
-        mbedtls_sha256_free(&packageCtx);
-        http.end();
-        return MigrationInstallResult::DOWNLOAD_FAILED;
+    size_t manifestDone = 0;
+    uint32_t lastManifestEventMs = 0;
+    while (manifestDone < manifestLen) {
+        const size_t remaining = manifestLen - manifestDone;
+        const size_t chunk = remaining < 1024 ? remaining : 1024;
+        if (!readExact(*stream, reinterpret_cast<uint8_t*>(manifest + manifestDone), chunk)) {
+            delete[] manifest;
+            mbedtls_sha256_free(&packageCtx);
+            http.end();
+            return MigrationInstallResult::DOWNLOAD_FAILED;
+        }
+        mbedtls_sha256_update(&packageCtx,
+                              reinterpret_cast<const uint8_t*>(manifest + manifestDone),
+                              chunk);
+        manifestDone += chunk;
+        bytesDone += (uint32_t)chunk;
+        if (telemetry && (millis() - lastManifestEventMs > 1000 || manifestDone == manifestLen)) {
+            telemetry->publishMigrationInstallStatus("manifest",
+                                                     "validating",
+                                                     nullptr,
+                                                     request.packageUrl,
+                                                     request.packageSha256,
+                                                     bytesDone,
+                                                     bytesTotal);
+            lastManifestEventMs = millis();
+        }
     }
     manifest[manifestLen] = '\0';
 

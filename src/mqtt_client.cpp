@@ -6,6 +6,7 @@
 #include "command_handler.h"
 #include <WiFi.h>
 #include <ArduinoJson.h>
+#include <cstring>
 
 MQTTManager  mqttMgr;
 MQTTManager* MQTTManager::_instance = nullptr;
@@ -21,7 +22,7 @@ void MQTTManager::begin(Config& config) {
     _client.setClient(_wifiClient);
     _client.setServer(_cfg->mqtt_host, _cfg->mqtt_port);
     _client.setCallback(_pubsubCallback);
-    _client.setBufferSize(1024);    // large enough for profile messages
+    _client.setBufferSize(4096);    // large enough for retained config and migration diagnostics
     _client.setKeepAlive(60);       // 60s keepalive ping
     _client.setSocketTimeout(5);    // 5s socket timeout
 
@@ -164,7 +165,14 @@ bool MQTTManager::publishConfig() {
 // ── publish ───────────────────────────────────────────────────────────────────
 bool MQTTManager::publish(const char* topic, const char* payload, bool retained) {
     if (!_client.connected()) return false;
-    return _client.publish(topic, payload, retained);
+    bool ok = _client.publish(topic, payload, retained);
+    if (!ok) {
+        log_w("[MQTT] Publish failed: topic=%s retained=%s payload_len=%u",
+              topic ? topic : "",
+              retained ? "true" : "false",
+              payload ? (unsigned)strlen(payload) : 0);
+    }
+    return ok;
 }
 
 // ── connected ────────────────────────────────────────────────────────────────
