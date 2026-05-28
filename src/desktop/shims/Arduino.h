@@ -84,6 +84,12 @@ inline size_t strlcpy(char* dst, const char* src, size_t size) {
 }
 
 inline void configTime(long, int, const char*, const char* = nullptr) {}
+inline void configTzTime(const char* tz, const char*, const char* = nullptr, const char* = nullptr) {
+    if (tz) {
+        setenv("TZ", tz, 1);
+        tzset();
+    }
+}
 
 inline bool getLocalTime(struct tm* info, uint32_t = 5000) {
     time_t t = time(nullptr);

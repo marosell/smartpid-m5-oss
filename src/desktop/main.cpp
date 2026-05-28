@@ -50,8 +50,8 @@ static void seedDesktopConfig() {
     cfg.pwm_ms = 3500;
     cfg.ch1_probe_type = ProbeType::PT100_3W;
     cfg.ch2_probe_type = ProbeType::PT100_3W;
-    cfg.pwr_dc1_enabled = true;
-    cfg.pwr_dc2_enabled = true;
+    cfg.pwr_dc1_mode = (uint8_t)DcOutputMode::ELEMENT;
+    cfg.pwr_dc2_mode = (uint8_t)DcOutputMode::ELEMENT;
     cfg.pwr_relay1_mode = (uint8_t)RelayMode::REMOTE;
     cfg.pwr_relay2_mode = (uint8_t)RelayMode::OFF;
     cfg.pwr_distill_pct = 35;

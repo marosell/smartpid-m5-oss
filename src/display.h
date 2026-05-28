@@ -275,6 +275,7 @@ private:
     void _handleSetupProcess(UIEvent ev);  // handles SETUP_PROCESS
     void _handleSetupPower(UIEvent ev);    // handles SETUP_POWER
     void _handleSetupProcessP(UIEvent ev); // handles SETUP_PROCESS_P
+    void _handleSetupClock(UIEvent ev);    // handles SETUP_CLOCK
     void _handleProfileEdit(UIEvent ev);   // handles PROFILE_EDIT (24-item profile step editor)
 
     // ── Full-screen draw functions ────────────────────────────────────────────

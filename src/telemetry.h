@@ -48,6 +48,9 @@ public:
                                 int gpio0, int gpio2, int gpio4, int gpio5,
                                 int gpio12, int gpio13, int gpio15,
                                 int gpio16, int gpio26);
+    void publishControllerRebooted(const char* resetReason,
+                                   bool autoResumeEnabled,
+                                   bool autoResumePending);
     void publishOutputDiagnostics(const char* reason,
                                   const ChannelState& ch1,
                                   const ChannelState& ch2);

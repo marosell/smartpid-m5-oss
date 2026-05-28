@@ -1,6 +1,11 @@
 // command_handler.cpp — MQTT command parser and dispatcher
 
 #include "command_handler.h"
+#include "clock_sync.h"
+#ifndef DESKTOP_BUILD
+#include "hardware_profile.h"
+#endif
+#include "display.h"
 #include "output_control.h"
 #include "profiles.h"
 #include <ArduinoJson.h>
@@ -17,6 +22,15 @@ static Config* gRuntimeCfg = nullptr;
 static uint32_t gLastMqttMsgMs = 0;
 static bool gWatchdogFired = false;
 
+static void setMqttRemoteActiveInternal(bool active) {
+    if (gMqttRemoteActive != active) {
+        gMqttRemoteActive = active;
+        display.notifyMqttChanged();
+    } else {
+        gMqttRemoteActive = active;
+    }
+}
+
 static uint8_t finishTempSourceChannel() {
     if (!gRuntimeCfg) return 1;
     return (gRuntimeCfg->pwr_dfsp_source == 2) ? 2 : 1;
@@ -32,7 +46,7 @@ bool mqttRemoteActive() {
 
 void setMqttRemoteEnabled(bool enabled) {
     gMqttRemoteEnabled = enabled;
-    gMqttRemoteActive = false;
+    setMqttRemoteActiveInternal(false);
     gLastMqttMsgMs = millis();
     if (gRuntimeCfg) {
         gRuntimeCfg->remote_enabled = enabled;
@@ -44,6 +58,7 @@ void setMqttRemoteEnabled(bool enabled) {
         }
         gRuntimeCfg->save();
     }
+    display.notifyMqttChanged();
 }
 
 bool accElementsEnabled() {
@@ -80,7 +95,7 @@ static void setDeviceWatchdogFired(ChannelState* ch1, ChannelState* ch2, bool fi
 
 static void noteRemoteActivity(ChannelState* ch1, ChannelState* ch2, TelemetryPublisher* tele) {
     if (!gMqttRemoteEnabled) return;
-    gMqttRemoteActive = true;
+    setMqttRemoteActiveInternal(true);
     gLastMqttMsgMs = millis();
     if (gWatchdogFired) {
         setDeviceWatchdogFired(ch1, ch2, false);
@@ -145,24 +160,39 @@ static bool consumeDeviceProgramEnd(ChannelState* ch1, ChannelState* ch2, const 
     return true;
 }
 
-static void publishDeviceProgramEnd(TelemetryPublisher* tele, const char* reason) {
-    if (!tele) return;
-    tele->publishEventTyped("program ended", "program_ended", 0, reason);
-    log_i("[EVT] program ended (%s)", reason ? reason : "unknown");
+static bool playTestChirp() {
+#ifdef DESKTOP_BUILD
+    return false;
+#else
+    M5.Mic.end();
+    proofpro_hw::holdSpeakerQuiet();
+    delay(10);
+    proofpro_hw::configureSpeaker();
+    M5.Speaker.setVolume(0);
+    bool ok = M5.Speaker.begin();
+    delay(20);
+    M5.Speaker.setVolume(32);
+    ok = M5.Speaker.tone(1000, 120) && ok;
+    return ok;
+#endif
 }
 
-static void startAccelProgramTimer(ChannelState* ch) {
-    if (!ch || !ch->programRunning || !ch->accelPhaseActive || ch->timer_duration_s == 0) return;
-    ch->timerTriggered = true;
-    ch->timerStartMs = millis();
-    ch->timerExpired = false;
-    ch->timerFrozen = false;
-    ch->timerFrozenRemaining_s = 0;
+static void publishDeviceProgramEnd(TelemetryPublisher* tele, MQTTManager* mqtt, const char* reason) {
+    if (!tele) return;
+    setMqttRemoteActiveInternal(false);
+    tele->publishEventTyped("program ended", "program_ended", 0, reason);
+    if (mqtt) mqtt->publishStatus();
+    log_i("[EVT] program ended (%s)", reason ? reason : "unknown");
 }
 
 static RelayMode savedRelayModeFor(const Config* cfg, int chIdx) {
     if (!cfg) return RelayMode::OFF;
     return (RelayMode)((chIdx == 1) ? cfg->pwr_relay1_mode : cfg->pwr_relay2_mode);
+}
+
+static uint8_t savedDcModeFor(const Config* cfg, int chIdx) {
+    if (!cfg) return (uint8_t)DcOutputMode::OFF;
+    return (chIdx == 1) ? cfg->pwr_dc1_mode : cfg->pwr_dc2_mode;
 }
 
 static void syncRelayModeFromConfig(ChannelState* ch, const Config* cfg, int chIdx) {
@@ -241,6 +271,25 @@ void CommandHandler::handle(const uint8_t* payload, unsigned int len) {
         } else {
             _tele->publishCommandError("diagnostics", "invalid_value", diag);
         }
+    }
+
+    const bool chirpBool = doc["chirp"].is<bool>() && doc["chirp"].as<bool>();
+    const bool chirpAudio = doc["audio"].is<const char*>() &&
+                            strcmp(doc["audio"].as<const char*>(), "chirp") == 0;
+    if (chirpBool || chirpAudio) {
+        bool ok = playTestChirp();
+        _tele->publishEventTyped(ok ? "chirp" : "chirp failed",
+                                 ok ? "audio_chirp" : "audio_chirp_error");
+    }
+
+    // Safe clock/display config. Accepted regardless of Remote state so Proof
+    // can set timezone during onboarding/settings without output authority.
+    if (!doc["timezone_posix"].isNull()) {
+        _cmdSetClockTimezone(doc["timezone_label"].as<const char*>(),
+                             doc["timezone_posix"].as<const char*>());
+    }
+    if (!doc["clock_24h"].isNull()) {
+        _cmdSetClockFormat(doc["clock_24h"].as<bool>());
     }
 
     // ── Device-level watchdog config ──────────────────────────────────────────
@@ -397,6 +446,21 @@ void CommandHandler::handle(const uint8_t* payload, unsigned int len) {
             log_w("[CMD] accel_power ignored — Remote is OFF");
         }
     }
+    if (!doc["post_accel_power"].isNull()) {
+        if (mqttRemoteEnabled()) _cmdSetPostAccelPower(doc["post_accel_power"].as<int>());
+        else {
+            _tele->publishCommandError("post_accel_power", "remote_off");
+            log_w("[CMD] post_accel_power ignored — Remote is OFF");
+        }
+    }
+    if (!doc["DC1 dc_mode"].isNull()) {
+        if (mqttRemoteEnabled()) _cmdSetDcMode(1, doc["DC1 dc_mode"].as<const char*>());
+        else _tele->publishCommandError("DC1 dc_mode", "remote_off");
+    }
+    if (!doc["DC2 dc_mode"].isNull()) {
+        if (mqttRemoteEnabled()) _cmdSetDcMode(2, doc["DC2 dc_mode"].as<const char*>());
+        else _tele->publishCommandError("DC2 dc_mode", "remote_off");
+    }
     if (!doc["finish_temp"].isNull()) {
         if (mqttRemoteEnabled()) _cmdSetDFSP(doc["finish_temp"].as<float>());
         else {
@@ -538,7 +602,6 @@ void CommandHandler::_cmdStartPower() {
 
     for (int i = 0; i < 2; i++) {
         ChannelState* ch = _ch[i];
-        uint8_t preservedPower = ch->distill_power_pct;
         ch->runmode = Runmode::POWER_DIRECT;
         ch->paused  = false;
         ch->programRunning = true;
@@ -554,11 +617,9 @@ void CommandHandler::_cmdStartPower() {
         ch->timerFrozenRemaining_s = 0;
         ch->accelPhaseJustEnded = false;
         _applyPowerParams(i + 1);  // 1-based
-        ch->distill_power_pct = preservedPower;
         ch->power_pct = 0;
         ch->relay_state = false;
         ch->relay_command = (ch->relay_mode == RelayMode::ACC_SYNC);
-        startAccelProgramTimer(ch);
     }
 
     _tele->publishEventTyped("start power", "program_started");
@@ -580,10 +641,11 @@ void CommandHandler::_applyPowerParams(int chIdx) {
 
     ch->acc_mode          = _cfg->pwr_acc_mode;
     ch->acc_elements_enabled = _cfg->pwr_acc_elements_enabled;
-    ch->accelPhaseActive  = (_cfg->pwr_acc_mode && _cfg->pwr_dast > 0.0f);
+    const bool elementOutput = dcOutputIsElement(savedDcModeFor(_cfg, chIdx));
+    ch->accelPhaseActive  = (elementOutput && _cfg->pwr_acc_mode && _cfg->pwr_dast > 0.0f);
     ch->dAST              = _cfg->pwr_dast;
     ch->dOUT              = _cfg->pwr_dout;
-    ch->distill_power_pct = _cfg->pwr_distill_pct;
+    ch->distill_power_pct = elementOutput ? _cfg->pwr_distill_pct : 0;
     ch->dFSP              = _cfg->pwr_dfsp;
     ch->dtSP              = _cfg->pwr_dtsp;
     ch->timer_duration_s  = _cfg->pwr_timer_s;
@@ -616,7 +678,7 @@ void CommandHandler::_applyPowerParams(int chIdx) {
 // ── _cmdStop ──────────────────────────────────────────────────────────────────
 void CommandHandler::_cmdStop() {
     log_i("[CMD] stop");
-    gMqttRemoteActive = false;
+    setMqttRemoteActiveInternal(false);
     profiles.stop(0, *_ch[0]);
     profiles.stop(1, *_ch[1]);
     _ch[0]->stop();
@@ -658,7 +720,7 @@ void CommandHandler::_cmdResume() {
 // A separate {"start":"power"} is required to restart.
 void CommandHandler::_cmdReset() {
     log_i("[CMD] reset — clearing finish/end state");
-    gMqttRemoteActive = false;
+    setMqttRemoteActiveInternal(false);
     for (int i = 0; i < 2; i++) {
         _ch[i]->finishLatch      = false;
         _ch[i]->finishLatchJustSet = false;
@@ -670,7 +732,6 @@ void CommandHandler::_cmdReset() {
         _ch[i]->timerTriggered   = false;
         _ch[i]->timer_duration_s = _cfg->pwr_timer_s;
         _ch[i]->timer_dir        = _cfg->pwr_deo;
-        startAccelProgramTimer(_ch[i]);
     }
     _tele->publishEventTyped("reset", "program_reset");
     if (_mqtt) _mqtt->publishStatus();
@@ -716,14 +777,15 @@ void CommandHandler::_cmdSetCountdown(int chIdx, uint32_t seconds) {
 // ══ POWER_DIRECT command implementations ══════════════════════════════════════
 
 // ── _cmdSetPower ──────────────────────────────────────────────────────────────
-// {"CHx power": N} — sets distillation target power %.
+// {"CHx power": N} — sets live runtime target power %.
 // If currently in POWER_DIRECT and NOT in accel phase: takes effect immediately.
 // If in accel phase: stores for post-accel transition (accel phase continues at dOUT).
-// Always saves to NVS via savePowerParams().
+// Does not persist to NVS; post_accel_power is the saved program default.
 void CommandHandler::_cmdSetPower(int chIdx, int pct) {
     ChannelState* ch = _channel(chIdx);
     if (!ch) return;
-    bool dcEnabled = !_cfg || ((chIdx == 1) ? _cfg->pwr_dc1_enabled : _cfg->pwr_dc2_enabled);
+    const uint8_t dcMode = savedDcModeFor(_cfg, chIdx);
+    bool dcEnabled = !_cfg || dcOutputEnabled(dcMode);
     if (!dcEnabled) {
         log_w("[CMD] CH%d power ignored — DC%d mode is Off", chIdx, chIdx);
         return;
@@ -733,14 +795,11 @@ void CommandHandler::_cmdSetPower(int chIdx, int pct) {
     log_i("[CMD] CH%d power → %d%%", chIdx, pct);
 
     ch->distill_power_pct = (uint8_t)pct;
-    _cfg->pwr_distill_pct = (uint8_t)pct;
 
     // Immediate effect only if NOT currently in accel phase
     if (ch->runmode == Runmode::POWER_DIRECT && !ch->accelPhaseActive) {
         ch->power_pct = (uint8_t)pct;
     }
-    _cfg->savePowerParams();
-    if (_mqtt) _mqtt->publishConfig();
 }
 
 // ── _cmdSetAccMode ────────────────────────────────────────────────────────────
@@ -854,6 +913,56 @@ void CommandHandler::_cmdSetDOut(int pct) {
     if (_mqtt) _mqtt->publishConfig();
 }
 
+// ── _cmdSetPostAccelPower ────────────────────────────────────────────────────
+void CommandHandler::_cmdSetPostAccelPower(int pct) {
+    pct = constrain(pct, 0, 100);
+    noteRemoteActivity(_ch[0], _ch[1], _tele);
+    log_i("[CMD] post_accel_power → %d%%", pct);
+    _cfg->pwr_distill_pct = (uint8_t)pct;
+    for (int i = 0; i < 2; i++) {
+        ChannelState* ch = _ch[i];
+        if (!ch) continue;
+        if (!dcOutputIsElement(savedDcModeFor(_cfg, i + 1))) continue;
+        ch->distill_power_pct = (uint8_t)pct;
+        if (ch->runmode == Runmode::POWER_DIRECT && !ch->accelPhaseActive) {
+            ch->power_pct = (uint8_t)pct;
+        }
+    }
+    _cfg->savePowerParams();
+    if (_mqtt) _mqtt->publishConfig();
+}
+
+// ── _cmdSetDcMode ─────────────────────────────────────────────────────────────
+void CommandHandler::_cmdSetDcMode(int chIdx, const char* modeStr) {
+    if (!modeStr) return;
+    uint8_t mode = (uint8_t)DcOutputMode::OFF;
+    if (strcmp(modeStr, "element") == 0) {
+        mode = (uint8_t)DcOutputMode::ELEMENT;
+    } else if (strcmp(modeStr, "auxiliary") == 0 || strcmp(modeStr, "auxilary") == 0 || strcmp(modeStr, "aux") == 0) {
+        mode = (uint8_t)DcOutputMode::AUXILIARY;
+    } else if (strcmp(modeStr, "off") == 0 || strcmp(modeStr, "disabled") == 0) {
+        mode = (uint8_t)DcOutputMode::OFF;
+    } else {
+        if (_tele) _tele->publishCommandError("dc_mode", "invalid_value", modeStr);
+        log_w("[CMD] DC%d dc_mode unknown: '%s'", chIdx, modeStr);
+        return;
+    }
+
+    noteRemoteActivity(_ch[0], _ch[1], _tele);
+    log_i("[CMD] DC%d dc_mode → %s", chIdx, dcOutputModeStr((DcOutputMode)mode));
+
+    ChannelState* ch = _channel(chIdx);
+    if (ch) {
+        ch->power_pct = 0;
+        ch->accelPhaseActive = false;
+        ch->distill_power_pct = (mode == (uint8_t)DcOutputMode::ELEMENT) ? _cfg->pwr_distill_pct : 0;
+    }
+    if (chIdx == 1) _cfg->pwr_dc1_mode = mode;
+    else            _cfg->pwr_dc2_mode = mode;
+    _cfg->savePowerParams();
+    if (_mqtt) _mqtt->publishConfig();
+}
+
 // ── _cmdSetDFSP ───────────────────────────────────────────────────────────────
 void CommandHandler::_cmdSetDFSP(float temp) {
     noteRemoteActivity(_ch[0], _ch[1], _tele);
@@ -896,7 +1005,7 @@ void CommandHandler::_cmdSetWatchdogEnabled(bool enabled) {
     }
     _cfg->pwr_wdog_enabled = enabled;
     if (!enabled) {
-        gMqttRemoteActive = false;
+        setMqttRemoteActiveInternal(false);
         setDeviceWatchdogFired(_ch[0], _ch[1], false);
     }
     _cfg->savePowerParams();
@@ -996,6 +1105,26 @@ void CommandHandler::_cmdSetRelayCycleMs(int chIdx, int ms) {
     if (_mqtt) _mqtt->publishConfig();
 }
 
+void CommandHandler::_cmdSetClockTimezone(const char* label, const char* posix) {
+    if (!clockSetCustomTimezone(*_cfg, label, posix)) {
+        if (_tele) _tele->publishCommandError("timezone_posix", "invalid_value", posix ? posix : "");
+        log_w("[CMD] timezone_posix rejected");
+        return;
+    }
+    _cfg->save();
+    clockSyncBegin(*_cfg);
+    if (_mqtt) _mqtt->publishConfig();
+    log_i("[CMD] timezone → %s / %s", _cfg->clock_tz_label, _cfg->clock_tz_posix);
+}
+
+void CommandHandler::_cmdSetClockFormat(bool clock24h) {
+    _cfg->clock_24h = clock24h;
+    _cfg->save();
+    if (_mqtt) _mqtt->publishConfig();
+    display.notifyMqttChanged();
+    log_i("[CMD] clock_24h → %s", clock24h ? "true" : "false");
+}
+
 // ── tick ──────────────────────────────────────────────────────────────────────
 // Called from loop(). Fires once per second.
 // Responsibilities:
@@ -1015,13 +1144,13 @@ void CommandHandler::tick() {
             setDeviceWatchdogFired(_ch[0], _ch[1], false);
             _tele->publishEventTyped("watchdog cleared", "watchdog_cleared");
         }
-        gMqttRemoteActive = false;
+        setMqttRemoteActiveInternal(false);
     } else if (mqttRemoteActive() && _cfg->pwr_wdog_enabled && gLastMqttMsgMs > 0) {
         unsigned long elapsed = now - gLastMqttMsgMs;
         bool timedOut = (elapsed > (unsigned long)_cfg->pwr_wdog_s * 1000UL);
         if (!gWatchdogFired && timedOut) {
             setDeviceWatchdogFired(_ch[0], _ch[1], true);
-            gMqttRemoteActive = false;
+            setMqttRemoteActiveInternal(false);
             gLastMqttMsgMs = 0;
             _tele->publishWatchdogSafe(_cfg->pwr_wdog_s);
             if (_mqtt) _mqtt->publishStatus();
@@ -1033,7 +1162,7 @@ void CommandHandler::tick() {
 
     const char* deviceEndReason = nullptr;
     if (consumeDeviceProgramEnd(_ch[0], _ch[1], &deviceEndReason)) {
-        publishDeviceProgramEnd(_tele, deviceEndReason);
+        publishDeviceProgramEnd(_tele, _mqtt, deviceEndReason);
     }
 
     for (int i = 0; i < 2; i++) {
@@ -1115,7 +1244,7 @@ void CommandHandler::tick() {
                         }
                         const char* reason = nullptr;
                         if (consumeDeviceProgramEnd(_ch[0], _ch[1], &reason)) {
-                            publishDeviceProgramEnd(_tele, reason);
+                            publishDeviceProgramEnd(_tele, _mqtt, reason);
                         }
                         _applyRuntimeOutputs();
                         return;

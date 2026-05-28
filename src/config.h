@@ -14,6 +14,35 @@
 
 #define SMARTPID_NVS_NS "smartpid"        // our Preferences namespace
 
+enum class DcOutputMode : uint8_t {
+    OFF       = 0,
+    ELEMENT   = 1,
+    AUXILIARY = 2,
+};
+
+inline const char* dcOutputModeStr(DcOutputMode mode) {
+    switch (mode) {
+        case DcOutputMode::OFF:       return "off";
+        case DcOutputMode::ELEMENT:   return "element";
+        case DcOutputMode::AUXILIARY: return "auxiliary";
+    }
+    return "off";
+}
+
+inline DcOutputMode normalizeDcOutputMode(uint8_t raw) {
+    if (raw == (uint8_t)DcOutputMode::ELEMENT) return DcOutputMode::ELEMENT;
+    if (raw == (uint8_t)DcOutputMode::AUXILIARY) return DcOutputMode::AUXILIARY;
+    return DcOutputMode::OFF;
+}
+
+inline bool dcOutputEnabled(uint8_t raw) {
+    return normalizeDcOutputMode(raw) != DcOutputMode::OFF;
+}
+
+inline bool dcOutputIsElement(uint8_t raw) {
+    return normalizeDcOutputMode(raw) == DcOutputMode::ELEMENT;
+}
+
 // Probe-disconnected sentinel value — matches OEM behavior: publishes large
 // integer when probe is open-circuit or erroring (~9.17M°F observed on bench).
 // Proof side expects a large numeric, not null, for backwards compatibility.
@@ -126,6 +155,16 @@ struct Config {
     bool     button_beep;    // retained for NVS compatibility; UI does not enable beeps
     bool     remote_enabled; // persisted MQTT control permission
 
+    // ── Clock ────────────────────────────────────────────────────────────────
+    // Wall clock display uses NTP when WiFi is available. Proof may set an
+    // exact POSIX timezone string for worldwide timezone support.
+    uint8_t  clock_tz;          // clock_sync preset index; 255 = Proof/custom
+    bool     clock_ntp_enabled; // true = sync from NTP over WiFi
+    bool     clock_24h;         // false = 12-hour AM/PM, true = 24-hour
+    char     clock_ntp_host[32];
+    char     clock_tz_label[40]; // e.g. "America/New_York"
+    char     clock_tz_posix[64]; // e.g. "EST5EDT,M3.2.0,M11.1.0"
+
     // ── Auto-resume run state ─────────────────────────────────────────────────
     // Saved to NVS whenever a channel starts, stops, pauses, or resumes.
     // On boot with auto_resume=true, non-IDLE saved modes cause channels to
@@ -173,8 +212,8 @@ struct Config {
     uint32_t pwr_timer_s;       // dtSP timer duration seconds (default 0)
     uint8_t  pwr_deo;           // 0=continue, 1=end/latch off on finish (default 1)
     uint8_t  pwr_distill_pct;   // distillation target power % (default 100)
-    bool     pwr_dc1_enabled;   // DC1 role: true=element, false=off
-    bool     pwr_dc2_enabled;   // DC2 role: true=element, false=off
+    uint8_t  pwr_dc1_mode;      // DcOutputMode: off / element / auxiliary
+    uint8_t  pwr_dc2_mode;      // DcOutputMode: off / element / auxiliary
     uint8_t  pwr_relay1_mode;   // RelayMode for CH1 relay (RL1) (default 0 = OFF)
     uint8_t  pwr_relay2_mode;   // RelayMode for CH2 relay (RL2) (default 0 = OFF)
     uint32_t pwr_r1_on_ms;      // RL1 reflux ON time ms (default 1000)

@@ -17,6 +17,7 @@
 //   Font sizes via setTextDatum: 1=TC, 4=MC, 7=BC; setTextSize values 1,2,3,4,7
 
 #include "display.h"
+#include "clock_sync.h"
 #include "command_handler.h"
 #include "output_control.h"   // for output label strings
 #include <WiFi.h>
@@ -37,12 +38,6 @@ static const char* const kMainMenuItems[] = {
     "Power", "Settings", "WiFi / MQTT", "Info"
 };
 static const int kMainMenuCount = 4;
-
-static bool resumePreviousAvailable(const Config* cfg) {
-    if (!cfg || !cfg->auto_resume) return false;
-    return cfg->ch1_saved_runmode != (uint8_t)Runmode::IDLE ||
-           cfg->ch2_saved_runmode != (uint8_t)Runmode::IDLE;
-}
 
 // ── Context menu items (from spec §7.4 + screenshot IMG_2615) ─────────────
 static const char* const kCtxMenuItems[] = {
@@ -69,6 +64,19 @@ static const char* const kWifiMenuItems[] = {
     "SSID", "Password", "MQTT Broker Config.", "Exit"
 };
 static const int kWifiMenuCount = 7;
+
+static const char* const kClockItems[] = {
+    "Time Zone", "NTP Sync", "Format", "Sync Now", "Exit"
+};
+static const int kClockCount = 5;
+static const int kClockVisibleCount = 4;
+
+static const char* const kClockTzLabels[] = {
+    "Eastern", "Central", "Mountain", "Arizona", "Pacific",
+    "London", "Berlin", "India", "China", "Japan", "Sydney", "UTC"
+};
+
+static char gClockSyncStatus[20] = "";
 
 // ── Profile menu items (from spec §11) ────────────────────────────────────
 static const char* const kProfileMenuItems[] = {
@@ -160,15 +168,6 @@ static uint32_t timerRemainingSeconds(const ChannelState* ch) {
     return elapsed >= ch->timer_duration_s ? 0 : (ch->timer_duration_s - elapsed);
 }
 
-static void startAccelProgramTimer(ChannelState* ch) {
-    if (!ch || !ch->programRunning || !ch->accelPhaseActive || ch->timer_duration_s == 0) return;
-    ch->timerTriggered = true;
-    ch->timerStartMs = millis();
-    ch->timerExpired = false;
-    ch->timerFrozen = false;
-    ch->timerFrozenRemaining_s = 0;
-}
-
 static const char* powerRelayCondition(uint8_t mode) {
     switch ((RelayMode)mode) {
         case RelayMode::OFF:          return "OFF";
@@ -237,8 +236,8 @@ static void startPowerTimer(ChannelState* ch, uint32_t seconds) {
 
 static bool isPowerTileEnabled(uint8_t sel) {
     switch (sel) {
-        case 0: return cfg.pwr_dc1_enabled;
-        case 1: return cfg.pwr_dc2_enabled;
+        case 0: return dcOutputEnabled(cfg.pwr_dc1_mode);
+        case 1: return dcOutputEnabled(cfg.pwr_dc2_mode);
         case 2: return cfg.pwr_relay1_mode != (uint8_t)RelayMode::OFF;
         case 3: return cfg.pwr_relay2_mode != (uint8_t)RelayMode::OFF;
         default: return true;
@@ -295,22 +294,23 @@ static void resetPowerProgramState(ChannelState* ch) {
         ch->relay_command = false;
         ch->relay_state = false;
     }
-    ch->accelPhaseActive = ch->programRunning && cfg.pwr_acc_mode && cfg.pwr_dast > 0.0f;
-    startAccelProgramTimer(ch);
+    const bool elementOutput = (ch == gDisplayCh1)
+        ? dcOutputIsElement(cfg.pwr_dc1_mode)
+        : dcOutputIsElement(cfg.pwr_dc2_mode);
+    ch->accelPhaseActive = elementOutput && ch->programRunning && cfg.pwr_acc_mode && cfg.pwr_dast > 0.0f;
 }
 
 static void startPowerProgramFromTiles(ChannelState* ch1, ChannelState* ch2) {
-    uint8_t dc1 = ch1 ? ch1->distill_power_pct : cfg.pwr_distill_pct;
-    uint8_t dc2 = ch2 ? ch2->distill_power_pct : cfg.pwr_distill_pct;
     cmdHandler.startPowerRun();
     if (ch1) {
+        const bool elementOutput = dcOutputIsElement(cfg.pwr_dc1_mode);
         ch1->runmode = Runmode::POWER_DIRECT;
         ch1->paused = false;
         ch1->programRunning = true;
-        ch1->distill_power_pct = dc1;
+        ch1->distill_power_pct = elementOutput ? cfg.pwr_distill_pct : 0;
         ch1->acc_mode = cfg.pwr_acc_mode;
         ch1->acc_elements_enabled = cfg.pwr_acc_elements_enabled;
-        ch1->accelPhaseActive = cfg.pwr_acc_mode && cfg.pwr_dast > 0.0f;
+        ch1->accelPhaseActive = elementOutput && cfg.pwr_acc_mode && cfg.pwr_dast > 0.0f;
         ch1->dAST = cfg.pwr_dast;
         ch1->dOUT = cfg.pwr_dout;
         ch1->relay_mode = (RelayMode)cfg.pwr_relay1_mode;
@@ -320,16 +320,16 @@ static void startPowerProgramFromTiles(ChannelState* ch1, ChannelState* ch2) {
         if (ch1->relay_mode == RelayMode::REFLUX_TIMER) ch1->refluxCycleStartMs = millis();
         ch1->timer_duration_s = cfg.pwr_timer_s;
         ch1->timer_dir = cfg.pwr_deo;
-        startAccelProgramTimer(ch1);
     }
     if (ch2) {
+        const bool elementOutput = dcOutputIsElement(cfg.pwr_dc2_mode);
         ch2->runmode = Runmode::POWER_DIRECT;
         ch2->paused = false;
         ch2->programRunning = true;
-        ch2->distill_power_pct = dc2;
+        ch2->distill_power_pct = elementOutput ? cfg.pwr_distill_pct : 0;
         ch2->acc_mode = cfg.pwr_acc_mode;
         ch2->acc_elements_enabled = cfg.pwr_acc_elements_enabled;
-        ch2->accelPhaseActive = cfg.pwr_acc_mode && cfg.pwr_dast > 0.0f;
+        ch2->accelPhaseActive = elementOutput && cfg.pwr_acc_mode && cfg.pwr_dast > 0.0f;
         ch2->dAST = cfg.pwr_dast;
         ch2->dOUT = cfg.pwr_dout;
         ch2->relay_mode = (RelayMode)cfg.pwr_relay2_mode;
@@ -339,7 +339,6 @@ static void startPowerProgramFromTiles(ChannelState* ch1, ChannelState* ch2) {
         if (ch2->relay_mode == RelayMode::REFLUX_TIMER) ch2->refluxCycleStartMs = millis();
         ch2->timer_duration_s = cfg.pwr_timer_s;
         ch2->timer_dir = cfg.pwr_deo;
-        startAccelProgramTimer(ch2);
     }
     if (ch1 && ch2) {
         outputCtrl.update(*ch1, *ch2);
@@ -373,9 +372,6 @@ void DisplayManager::begin(Config& cfg, MQTTManager& mqtt) {
     _cfg  = &cfg;
     _mqtt = &mqtt;
     M5.BtnB.setHoldThresh(700);   // 700ms hold on BtnB = back
-
-    // Configure NTP for wall-clock display (non-blocking; falls back to --:--)
-    configTime(0, 0, "pool.ntp.org", "time.nist.gov");
 
     // Landscape mode, black background
     M5.Display.setRotation(1);
@@ -627,13 +623,13 @@ void DisplayManager::_dispatch(UIEvent ev) {
         case UIScreen::SETUP_PROCESS:          _handleSetupProcess(ev);  break;
         case UIScreen::SETUP_POWER:            _handleSetupPower(ev);    break;
         case UIScreen::SETUP_PROCESS_P:        _handleSetupProcessP(ev); break;
+        case UIScreen::SETUP_CLOCK:            _handleSetupClock(ev);    break;
         case UIScreen::WIFI_LOGGING:           _handleSetupHw(ev);       break;
         case UIScreen::PROFILE_MENU:           _handleSetupHw(ev);      break;
         case UIScreen::PROFILE_EDIT:           _handleProfileEdit(ev);  break;
         case UIScreen::ERROR_SCREEN:
             if (ev == UIEvent::BTN_B) _goTo(_prevScreen);
             break;
-        case UIScreen::SETUP_CLOCK:
         case UIScreen::MQTT_BROKER_CONFIG:
         case UIScreen::WIFI_STATUS:
         case UIScreen::WIFI_LOG_CONFIG:
@@ -743,7 +739,7 @@ void DisplayManager::_drawFooter(const char* lblA, const char* lblB, const char*
 // Drawn at x≈230–315, y=0–19 on COL_ACCENT background.
 // DECOMPILE-VERIFY: exact icon pixel data not extracted; using text symbols.
 void DisplayManager::_drawStatusIcons() {
-    char clk[8];
+    char clk[10];
     _fmtClock(clk, sizeof(clk));
 
     bool wifiOk  = (WiFi.status() == WL_CONNECTED);
@@ -931,19 +927,11 @@ void DisplayManager::_drawTogglePill(int x, int y, int w, int h, bool on) {
 void DisplayManager::_drawMainMenu() {
     _drawHeader("ProofPro");
     _drawNavFooter();
-    if (resumePreviousAvailable(_cfg)) {
-        static const char* const resumeItems[] = {
-            "<<Resume Previous>>", "Power", "Settings", "WiFi / MQTT", "Info"
-        };
-        _drawMenuList(resumeItems, nullptr, kMainMenuCount + 1, _menuSel, _menuScroll);
-    } else {
-        _drawMenuList(kMainMenuItems, nullptr, kMainMenuCount, _menuSel, _menuScroll);
-    }
+    _drawMenuList(kMainMenuItems, nullptr, kMainMenuCount, _menuSel, _menuScroll);
 }
 
 void DisplayManager::_handleMainMenu(UIEvent ev) {
-    const bool hasResume = resumePreviousAvailable(_cfg);
-    const int count = kMainMenuCount + (hasResume ? 1 : 0);
+    const int count = kMainMenuCount;
 
     switch (ev) {
         case UIEvent::BTN_A:
@@ -968,12 +956,7 @@ void DisplayManager::_handleMainMenu(UIEvent ev) {
             _needsFullRedraw = true;
             break;
         case UIEvent::BTN_B: {
-            if (hasResume && _menuSel == 0) {
-                cmdHandler.startPowerRun();
-                _goTo(UIScreen::POWER_STATUS);
-                break;
-            }
-            const int item = _menuSel - (hasResume ? 1 : 0);
+            const int item = _menuSel;
             switch (item) {
                 case 0: // Power
                     _goTo(UIScreen::POWER_STATUS);
@@ -1440,8 +1423,8 @@ void DisplayManager::_redrawPowerStatusValues() {
 
     const bool ended = _ch1->finishEnd || _ch2->finishEnd || _ch1->finishLatch || _ch2->finishLatch;
     const bool dcBlinkAccel = ((millis() / 700UL) % 2UL) == 1UL;
-    const bool dc1Enabled = _cfg->pwr_dc1_enabled;
-    const bool dc2Enabled = _cfg->pwr_dc2_enabled;
+    const bool dc1Enabled = dcOutputEnabled(_cfg->pwr_dc1_mode);
+    const bool dc2Enabled = dcOutputEnabled(_cfg->pwr_dc2_mode);
     const uint8_t dc1DisplayPct = !dc1Enabled ? 0
                                  : (ended ? _ch1->power_pct
                                  : (_ch1->accelPhaseActive && dcBlinkAccel ? _ch1->power_pct : _ch1->distill_power_pct));
@@ -1541,10 +1524,10 @@ void DisplayManager::_handlePowerStatus(UIEvent ev) {
             break;
         case UIEvent::BTN_B:
             if (_powerSel == 0) {
-                if (_cfg->pwr_dc1_enabled) _goTo(UIScreen::POWER_OUTPUT_EDIT);
+                if (dcOutputEnabled(_cfg->pwr_dc1_mode)) _goTo(UIScreen::POWER_OUTPUT_EDIT);
                 else _redrawPowerStatusValues();
             } else if (_powerSel == 1) {
-                if (_cfg->pwr_dc2_enabled) _goTo(UIScreen::POWER_OUTPUT_EDIT);
+                if (dcOutputEnabled(_cfg->pwr_dc2_mode)) _goTo(UIScreen::POWER_OUTPUT_EDIT);
                 else _redrawPowerStatusValues();
             } else if (_powerSel == 2 && _ch1) {
                 if (powerRelayToggleable(_cfg->pwr_relay1_mode)) {
@@ -1626,7 +1609,7 @@ void DisplayManager::_handlePowerStatus(UIEvent ev) {
 void DisplayManager::_drawPowerOutputEdit() {
     ChannelState* ch = (_powerSel == 0) ? _ch1 : _ch2;
     if (!ch || !_cfg) return;
-    const bool enabled = (_powerSel == 0) ? _cfg->pwr_dc1_enabled : _cfg->pwr_dc2_enabled;
+    const bool enabled = dcOutputEnabled((_powerSel == 0) ? _cfg->pwr_dc1_mode : _cfg->pwr_dc2_mode);
 
     _drawHeader(_powerSel == 0 ? "DC1 Power" : "DC2 Power");
     _drawFooter("-1", "OK", "+1");
@@ -1642,7 +1625,7 @@ void DisplayManager::_drawPowerOutputEdit() {
 void DisplayManager::_redrawPowerOutputEditValue() {
     ChannelState* ch = (_powerSel == 0) ? _ch1 : _ch2;
     if (!ch || !_cfg) return;
-    const bool enabled = (_powerSel == 0) ? _cfg->pwr_dc1_enabled : _cfg->pwr_dc2_enabled;
+    const bool enabled = dcOutputEnabled((_powerSel == 0) ? _cfg->pwr_dc1_mode : _cfg->pwr_dc2_mode);
 
     M5.Display.fillRect(34, 82, DISP_W - 68, 70, COL_BG);
     char buf[16];
@@ -1657,7 +1640,7 @@ void DisplayManager::_redrawPowerOutputEditValue() {
 void DisplayManager::_handlePowerOutputEdit(UIEvent ev) {
     ChannelState* ch = (_powerSel == 0) ? _ch1 : _ch2;
     if (!ch || !_cfg) return;
-    const bool enabled = (_powerSel == 0) ? _cfg->pwr_dc1_enabled : _cfg->pwr_dc2_enabled;
+    const bool enabled = dcOutputEnabled((_powerSel == 0) ? _cfg->pwr_dc1_mode : _cfg->pwr_dc2_mode);
 
     switch (ev) {
         case UIEvent::BTN_A:
@@ -2255,9 +2238,9 @@ static const char* const kProcItems[] = {
 static const int kProcCount = 7;
 
 static const char* const kDcModeOpts[] = {
-    "Off", "Element"
+    "Off", "Element", "Auxiliary"
 };
-static const int kDcModeCount = 2;
+static const int kDcModeCount = 3;
 
 // ── Relay mode option strings (POWER_DIRECT setup) ────────────────────────
 static const char* const kRelayModeOpts[] = {
@@ -2286,11 +2269,11 @@ static const int kPwrSetupCount = 7;
 
 // ── Process Parameters (P) item list (spec §8.5, new) ─────────────────────
 static const char* const kProcPItems[] = {
-    "Accel Temp", "Accel Power", "Timer",
+    "Accel Temp", "Accel Power", "Run Power", "Timer",
     "Timer Start Temp", "Finish Temp", "Finish Probe", "Finish Action",
     "Exit"
 };
-static const int kProcPCount = 8;
+static const int kProcPCount = 9;
 
 // ────────────────────────────────────────────────────────────────────────────
 // _drawSetupHw — SETUP_MENU (top-level list) + SETUP_HW (hardware items)
@@ -2356,8 +2339,8 @@ void DisplayManager::_drawSetupProcess() {
     uint8_t  mp1 = _ch1 ? _ch1->maxpwm   : 100;
     uint8_t  mp2 = _ch2 ? _ch2->maxpwm   : 100;
 
-    strlcpy(vbufs[0], c.pwr_dc1_enabled ? "Element" : "Off", sizeof(vbufs[0])); vals[0] = vbufs[0];
-    strlcpy(vbufs[1], c.pwr_dc2_enabled ? "Element" : "Off", sizeof(vbufs[1])); vals[1] = vbufs[1];
+    strlcpy(vbufs[0], dcOutputModeStr(normalizeDcOutputMode(c.pwr_dc1_mode)), sizeof(vbufs[0])); vals[0] = vbufs[0];
+    strlcpy(vbufs[1], dcOutputModeStr(normalizeDcOutputMode(c.pwr_dc2_mode)), sizeof(vbufs[1])); vals[1] = vbufs[1];
     snprintf(vbufs[2], sizeof(vbufs[2]), "%u%%", mp1); vals[2] = vbufs[2];
     snprintf(vbufs[3], sizeof(vbufs[3]), "%u%%", mp2); vals[3] = vbufs[3];
     snprintf(vbufs[4], sizeof(vbufs[4]), "%lu s", (unsigned long)c.pwr_wdog_s);
@@ -2615,6 +2598,96 @@ void DisplayManager::_handleSetupUnit(UIEvent ev) {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// _handleSetupClock — Time and Date setup
+// ────────────────────────────────────────────────────────────────────────────
+void DisplayManager::_handleSetupClock(UIEvent ev) {
+    switch (ev) {
+        case UIEvent::BTN_A:
+            if (_menuSel > 0) {
+                _menuSel--;
+                if (_menuSel < _menuScroll) _menuScroll = _menuSel;
+            } else {
+                _menuSel = kClockCount - 1;
+                _menuScroll = (kClockCount > kClockVisibleCount) ? kClockCount - kClockVisibleCount : 0;
+            }
+            _needsFullRedraw = true;
+            break;
+        case UIEvent::BTN_C:
+            if (_menuSel < kClockCount - 1) {
+                _menuSel++;
+                if (_menuSel >= _menuScroll + kClockVisibleCount)
+                    _menuScroll = _menuSel - kClockVisibleCount + 1;
+            } else {
+                _menuSel = 0;
+                _menuScroll = 0;
+            }
+            _needsFullRedraw = true;
+            break;
+        case UIEvent::BTN_B:
+            if (!_cfg) break;
+            _savedMenuSel = _menuSel;
+            _savedMenuScroll = _menuScroll;
+            switch (_menuSel) {
+                case 0:
+                    strlcpy(_listTitle, "Time Zone", sizeof(_listTitle));
+                    _listOptions = kClockTzLabels;
+                    _listCount = (int8_t)clockTimeZoneCount();
+                    _listSel = (_cfg->clock_tz == CLOCK_TZ_CUSTOM) ? 0 : (int8_t)normalizeClockTz(_cfg->clock_tz);
+                    _listCallback = [](int8_t i){
+                        clockSetPreset(cfg, (uint8_t)i);
+                        cfg.save();
+                        clockSyncBegin(cfg);
+                    };
+                    _goTo(UIScreen::LIST_SELECT_DIALOG);
+                    break;
+                case 1: {
+                    static const char* const opts[] = { "Off", "On" };
+                    strlcpy(_listTitle, "NTP Sync", sizeof(_listTitle));
+                    _listOptions = opts;
+                    _listCount = 2;
+                    _listSel = _cfg->clock_ntp_enabled ? 1 : 0;
+                    _listCallback = [](int8_t i){
+                        cfg.clock_ntp_enabled = (i == 1);
+                        cfg.save();
+                        clockSyncBegin(cfg);
+                    };
+                    _goTo(UIScreen::LIST_SELECT_DIALOG);
+                    break;
+                }
+                case 2: {
+                    static const char* const opts[] = { "12 Hour", "24 Hour" };
+                    strlcpy(_listTitle, "Clock Format", sizeof(_listTitle));
+                    _listOptions = opts;
+                    _listCount = 2;
+                    _listSel = _cfg->clock_24h ? 1 : 0;
+                    _listCallback = [](int8_t i){
+                        cfg.clock_24h = (i == 1);
+                        cfg.save();
+                    };
+                    _goTo(UIScreen::LIST_SELECT_DIALOG);
+                    break;
+                }
+                case 3:
+                    if (!_cfg->clock_ntp_enabled) {
+                        strlcpy(gClockSyncStatus, "NTP is Off", sizeof(gClockSyncStatus));
+                    } else if (clockSyncNow(*_cfg)) {
+                        strlcpy(gClockSyncStatus, "Clock synced", sizeof(gClockSyncStatus));
+                    } else {
+                        strlcpy(gClockSyncStatus, "Sync failed", sizeof(gClockSyncStatus));
+                    }
+                    _needsFullRedraw = true;
+                    break;
+                case 4:
+                    _goTo(UIScreen::SETUP_UNIT);
+                    break;
+            }
+            break;
+        default:
+            break;
+    }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // _handleSetupProcess — Process Parameters (spec §8.3)
 // ────────────────────────────────────────────────────────────────────────────
 void DisplayManager::_handleSetupProcess(UIEvent ev) {
@@ -2649,11 +2722,11 @@ void DisplayManager::_handleSetupProcess(UIEvent ev) {
                     strlcpy(_listTitle, "DC1 Mode", sizeof(_listTitle));
                     _listOptions = kDcModeOpts;
                     _listCount = kDcModeCount;
-                    _listSel = _cfg->pwr_dc1_enabled ? 1 : 0;
+                    _listSel = (int8_t)normalizeDcOutputMode(_cfg->pwr_dc1_mode);
                     _listCallback = [](int8_t i){
-                        cfg.pwr_dc1_enabled = (i == 1);
+                        cfg.pwr_dc1_mode = (uint8_t)normalizeDcOutputMode((uint8_t)i);
                         cfg.savePowerParams();
-                        if (!cfg.pwr_dc1_enabled && gDisplayCh1) {
+                        if (!dcOutputIsElement(cfg.pwr_dc1_mode) && gDisplayCh1) {
                             gDisplayCh1->power_pct = 0;
                             gDisplayCh1->accelPhaseActive = false;
                         }
@@ -2665,11 +2738,11 @@ void DisplayManager::_handleSetupProcess(UIEvent ev) {
                     strlcpy(_listTitle, "DC2 Mode", sizeof(_listTitle));
                     _listOptions = kDcModeOpts;
                     _listCount = kDcModeCount;
-                    _listSel = _cfg->pwr_dc2_enabled ? 1 : 0;
+                    _listSel = (int8_t)normalizeDcOutputMode(_cfg->pwr_dc2_mode);
                     _listCallback = [](int8_t i){
-                        cfg.pwr_dc2_enabled = (i == 1);
+                        cfg.pwr_dc2_mode = (uint8_t)normalizeDcOutputMode((uint8_t)i);
                         cfg.savePowerParams();
-                        if (!cfg.pwr_dc2_enabled && gDisplayCh2) {
+                        if (!dcOutputIsElement(cfg.pwr_dc2_mode) && gDisplayCh2) {
                             gDisplayCh2->power_pct = 0;
                             gDisplayCh2->accelPhaseActive = false;
                         }
@@ -2730,13 +2803,51 @@ void DisplayManager::_handleSetupProcess(UIEvent ev) {
 
 void DisplayManager::_drawSetupClock() {
     _drawHeader("Time and Date");
-    _drawFooter("", "back", "");
-    char buf[20];
-    _fmtClock(buf, sizeof(buf));
+    _drawNavFooter();
+
+    char timeBuf[16];
+    _fmtClock(timeBuf, sizeof(timeBuf));
+
+    char dateBuf[24] = "Waiting for NTP";
+    struct tm ti;
+    if (clockTimeIsSynced() && getLocalTime(&ti, 0)) {
+        strftime(dateBuf, sizeof(dateBuf), "%b %d, %Y", &ti);
+    }
+
     M5.Display.setTextDatum(lgfx::middle_center);
-    M5.Display.setTextSize(3);
+    M5.Display.setTextSize(2);
     M5.Display.setTextColor(COL_TEMP, COL_BG);
-    M5.Display.drawString(buf, CENTER_X, 100);
+    M5.Display.drawString(timeBuf, CENTER_X, 45);
+    M5.Display.setTextSize(1);
+    M5.Display.setTextColor(COL_TEXT, COL_BG);
+    M5.Display.drawString(dateBuf, CENTER_X, 64);
+    if (gClockSyncStatus[0]) {
+        M5.Display.setTextColor(COL_ACCENT, COL_BG);
+        M5.Display.drawString(gClockSyncStatus, CENTER_X, 80);
+    }
+
+    char vbufs[kClockCount][18];
+    const char* vals[kClockCount] = {};
+    strlcpy(vbufs[0], _cfg ? clockCurrentTimeZoneLabel(*_cfg) : clockTimeZoneLabel(CLOCK_TZ_EASTERN), sizeof(vbufs[0])); vals[0] = vbufs[0];
+    strlcpy(vbufs[1], (_cfg && _cfg->clock_ntp_enabled) ? "On" : "Off", sizeof(vbufs[1])); vals[1] = vbufs[1];
+    strlcpy(vbufs[2], (_cfg && _cfg->clock_24h) ? "24 Hour" : "12 Hour", sizeof(vbufs[2])); vals[2] = vbufs[2];
+    strlcpy(vbufs[3], clockTimeIsSynced() ? "Synced" : "Needed", sizeof(vbufs[3])); vals[3] = vbufs[3];
+    vals[4] = nullptr;
+
+    for (int i = 0; i < kClockVisibleCount && (_menuScroll + i) < kClockCount; i++) {
+        int idx = _menuScroll + i;
+        int y = 90 + i * MENU_ITEM_H;
+        bool isSelected = (idx == _menuSel);
+        M5.Display.fillRect(MARGIN_L, y, DISP_W - MARGIN_L * 2, MENU_ITEM_H - 2, COL_BG);
+        if (isSelected) _drawRedBorderBox(MARGIN_L, y, DISP_W - MARGIN_L * 2, MENU_ITEM_H - 2);
+        M5.Display.setTextSize(2);
+        drawDegreeText(kClockItems[idx], MARGIN_L + 6, y + (MENU_ITEM_H - 2) / 2, -1,
+                       isSelected ? COL_ACCENT : COL_TEXT, COL_BG);
+        if (vals[idx]) {
+            drawDegreeText(vals[idx], MARGIN_R - 4, y + (MENU_ITEM_H - 2) / 2, 1,
+                           COL_TEXT, COL_BG);
+        }
+    }
 }
 
 void DisplayManager::_drawWifiLogging() {
@@ -3113,18 +3224,19 @@ void DisplayManager::_drawSetupProcessP() {
     else                   strlcpy(vbufs[0], "Off", sizeof(vbufs[0]));
     vals[0] = vbufs[0];
     snprintf(vbufs[1], sizeof(vbufs[1]), "%u%%", c.pwr_dout); vals[1] = vbufs[1];
-    if (c.pwr_timer_s > 0) fmtHoursMinutes(vbufs[2], sizeof(vbufs[2]), c.pwr_timer_s);
-    else                   strlcpy(vbufs[2], "Off", sizeof(vbufs[2]));
-    vals[2] = vbufs[2];
-    if (c.pwr_dtsp > 0.0f) snprintf(vbufs[3], sizeof(vbufs[3]), "%.1f^%s", c.pwr_dtsp, c.temp_unit);
+    snprintf(vbufs[2], sizeof(vbufs[2]), "%u%%", c.pwr_distill_pct); vals[2] = vbufs[2];
+    if (c.pwr_timer_s > 0) fmtHoursMinutes(vbufs[3], sizeof(vbufs[3]), c.pwr_timer_s);
     else                   strlcpy(vbufs[3], "Off", sizeof(vbufs[3]));
     vals[3] = vbufs[3];
-    if (c.pwr_dfsp > 0.0f) snprintf(vbufs[4], sizeof(vbufs[4]), "%.1f^%s", c.pwr_dfsp, c.temp_unit);
+    if (c.pwr_dtsp > 0.0f) snprintf(vbufs[4], sizeof(vbufs[4]), "%.1f^%s", c.pwr_dtsp, c.temp_unit);
     else                   strlcpy(vbufs[4], "Off", sizeof(vbufs[4]));
     vals[4] = vbufs[4];
-    strlcpy(vbufs[5], c.pwr_dfsp_source == 2 ? "CH2" : "CH1", sizeof(vbufs[5])); vals[5] = vbufs[5];
-    strlcpy(vbufs[6], c.pwr_deo ? "End" : "Continue", sizeof(vbufs[6])); vals[6] = vbufs[6];
-    // [7] Exit — no value
+    if (c.pwr_dfsp > 0.0f) snprintf(vbufs[5], sizeof(vbufs[5]), "%.1f^%s", c.pwr_dfsp, c.temp_unit);
+    else                   strlcpy(vbufs[5], "Off", sizeof(vbufs[5]));
+    vals[5] = vbufs[5];
+    strlcpy(vbufs[6], c.pwr_dfsp_source == 2 ? "CH2" : "CH1", sizeof(vbufs[6])); vals[6] = vbufs[6];
+    strlcpy(vbufs[7], c.pwr_deo ? "End" : "Continue", sizeof(vbufs[7])); vals[7] = vbufs[7];
+    // [8] Exit — no value
 
     _drawMenuList(kProcPItems, vals, kProcPCount, _menuSel, _menuScroll);
 }
@@ -3192,7 +3304,30 @@ void DisplayManager::_handleSetupProcessP(UIEvent ev) {
                     };
                     _goTo(UIScreen::VALUE_ENTRY_DIALOG);
                     break;
-                case 2: // Timer — run timer duration in seconds (0=off)
+                case 2: // Run Power — post-accel DC OUT % for element outputs
+                    strlcpy(_editLabel, "Run Power", sizeof(_editLabel));
+                    strlcpy(_editUnit, "%", sizeof(_editUnit));
+                    _editValue = (float)_cfg->pwr_distill_pct;
+                    _editMin = 0.0f; _editMax = 100.0f; _editStep = 1.0f;
+                    _editCallback = [](float v){
+                        cfg.pwr_distill_pct = (uint8_t)v;
+                        cfg.savePowerParams();
+                        if (gDisplayCh1 && dcOutputIsElement(cfg.pwr_dc1_mode)) {
+                            gDisplayCh1->distill_power_pct = (uint8_t)v;
+                            if (gDisplayCh1->runmode == Runmode::POWER_DIRECT && !gDisplayCh1->accelPhaseActive) {
+                                gDisplayCh1->power_pct = (uint8_t)v;
+                            }
+                        }
+                        if (gDisplayCh2 && dcOutputIsElement(cfg.pwr_dc2_mode)) {
+                            gDisplayCh2->distill_power_pct = (uint8_t)v;
+                            if (gDisplayCh2->runmode == Runmode::POWER_DIRECT && !gDisplayCh2->accelPhaseActive) {
+                                gDisplayCh2->power_pct = (uint8_t)v;
+                            }
+                        }
+                    };
+                    _goTo(UIScreen::VALUE_ENTRY_DIALOG);
+                    break;
+                case 3: // Timer — run timer duration in seconds (0=off)
                     strlcpy(_editLabel, "Timer", sizeof(_editLabel));
                     strlcpy(_editUnit, "", sizeof(_editUnit));
                     gSetTimerFromPowerScreen = false;
@@ -3203,7 +3338,7 @@ void DisplayManager::_handleSetupProcessP(UIEvent ev) {
                     };
                     _goTo(UIScreen::SET_TIMER_DIALOG);
                     break;
-                case 3: // Timer Start Temp (dtSP) — temperature that starts the timer
+                case 4: // Timer Start Temp (dtSP) — temperature that starts the timer
                     strlcpy(_editLabel, "Timer Start Temp", sizeof(_editLabel));
                     fmtDegreeUnit(_editUnit, sizeof(_editUnit), _cfg->temp_unit);
                     _editValue = _cfg->pwr_dtsp;
@@ -3224,7 +3359,7 @@ void DisplayManager::_handleSetupProcessP(UIEvent ev) {
                     };
                     _goTo(UIScreen::VALUE_ENTRY_DIALOG);
                     break;
-                case 4: // Finish Temp (dFSP) — finish trigger temperature (0=off)
+                case 5: // Finish Temp (dFSP) — finish trigger temperature (0=off)
                     strlcpy(_editLabel, "Finish Temp", sizeof(_editLabel));
                     fmtDegreeUnit(_editUnit, sizeof(_editUnit), _cfg->temp_unit);
                     _editValue = _cfg->pwr_dfsp;
@@ -3237,7 +3372,7 @@ void DisplayManager::_handleSetupProcessP(UIEvent ev) {
                     };
                     _goTo(UIScreen::VALUE_ENTRY_DIALOG);
                     break;
-                case 5: { // Finish Probe — source probe for finish temperature
+                case 6: { // Finish Probe — source probe for finish temperature
                     static const char* const opts[] = { "CH1", "CH2" };
                     strlcpy(_listTitle, "Finish Probe", sizeof(_listTitle));
                     _listOptions = opts; _listCount = 2;
@@ -3249,7 +3384,7 @@ void DisplayManager::_handleSetupProcessP(UIEvent ev) {
                     _goTo(UIScreen::LIST_SELECT_DIALOG);
                     break;
                 }
-                case 6: { // Finish Action — action when a finish condition occurs
+                case 7: { // Finish Action — action when a finish condition occurs
                     static const char* const opts[] = { "Continue", "End" };
                     strlcpy(_listTitle, "Finish Action", sizeof(_listTitle));
                     _listOptions = opts; _listCount = 2;
@@ -3263,7 +3398,7 @@ void DisplayManager::_handleSetupProcessP(UIEvent ev) {
                     _goTo(UIScreen::LIST_SELECT_DIALOG);
                     break;
                 }
-                case 7: _goTo(UIScreen::SETUP_MENU); break; // Exit
+                case 8: _goTo(UIScreen::SETUP_MENU); break; // Exit
             }
             break;
         default: break;
@@ -3283,16 +3418,15 @@ void DisplayManager::_fmtElapsed(char* buf, size_t sz, uint32_t secs) {
 
 void DisplayManager::_fmtClock(char* buf, size_t sz) {
     struct tm ti;
-    if (getLocalTime(&ti, 0)) {
+    if (clockTimeIsSynced() && getLocalTime(&ti, 0)) {
+        if (cfg.clock_24h) {
+            snprintf(buf, sz, "%02d:%02d", ti.tm_hour, ti.tm_min);
+            return;
+        }
         int hour = ti.tm_hour % 12;
         if (hour == 0) hour = 12;
         snprintf(buf, sz, "%d:%02d%s", hour, ti.tm_min, ti.tm_hour >= 12 ? "PM" : "AM");
     } else {
-        uint32_t secs = millis() / 1000;
-        uint32_t hour24 = (secs / 3600) % 24;
-        uint32_t hour12 = hour24 % 12;
-        if (hour12 == 0) hour12 = 12;
-        snprintf(buf, sz, "%u:%02u%s", (unsigned)hour12, (unsigned)((secs % 3600) / 60),
-                 hour24 >= 12 ? "PM" : "AM");
+        snprintf(buf, sz, "--:--");
     }
 }

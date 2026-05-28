@@ -27,6 +27,7 @@ Retained. Published on MQTT connect and in response to `{"status": true}`.
   "unit": "F",
   "remote_enabled": true,
   "remote_state": "RDY",
+  "auto_resume_enabled": true,
   "watchdog_enabled": true,
   "watchdog_s": 30
 }
@@ -44,6 +45,12 @@ Retained. Published on MQTT connect and in response to `{"status": true}`.
   - `ON`: active Proof session; heartbeat is expected and watchdog is active.
 - `watchdog_enabled` and `watchdog_s` are device-level.
 - Proof should display retained watchdog settings during onboarding.
+- `auto_resume_enabled` reports the local controller Auto Resume setting.
+  Proof should treat this as discoverable device behavior, but should still
+  restore active Proof runs explicitly after reconnect/reboot by re-sending the
+  current program and `{"start":"power"}`. ProofPro does not expose a local
+  `Resume Previous` main-menu shortcut; stale saved run state must not be used
+  as the source of truth for an active Proof run.
 - `firmware`, `firmware_version`, and `schema_version` identify the schema
   Proof should use.
 
@@ -59,11 +66,28 @@ after accepted config writes.
     "acc_mode": true,
     "accel_temp": 170,
     "accel_power": 100,
+    "post_accel_power": 35,
     "timer_start_temp": 170,
     "timer_s": 3600,
     "finish_temp": 200,
     "finish_temp_source": "CH1",
     "finish_action": "end"
+  },
+  "dc_outputs": {
+    "DC1": {
+      "mode": "element"
+    },
+    "DC2": {
+      "mode": "auxiliary"
+    }
+  },
+  "clock": {
+    "timezone_label": "America/New_York",
+    "timezone_posix": "EST5EDT,M3.2.0,M11.1.0",
+    "ntp_enabled": true,
+    "ntp_host": "pool.ntp.org",
+    "clock_24h": false,
+    "synced": true
   },
   "relays": {
     "CH1": {
@@ -82,6 +106,17 @@ after accepted config writes.
 
 `config` is the Proof readback source for editable/default settings.
 
+Clock notes:
+
+- Proof may set timezone with flat command keys `timezone_label` and
+  `timezone_posix`.
+- `timezone_label` is a human/readback label. Proof should normally use an IANA
+  name such as `America/New_York`.
+- `timezone_posix` is the ESP32 POSIX timezone rule string. Do not send an IANA
+  timezone name as `timezone_posix`.
+- Firmware stores and reports timezone readback under retained `config.clock`.
+- After accepting a clock command, firmware republishes retained `config`.
+
 ### `power/CH1` and `power/CH2`
 
 Not retained. Published every configured sample interval while the channel is in
@@ -97,6 +132,7 @@ power mode. Current default publish cadence is 6 seconds.
   "relay": false,
   "relay_engaged": false,
   "power": 0,
+  "run_target_power": 30,
   "dc_mode": "element",
   "relay_mode": "off",
   "remote_enabled": true,
@@ -115,11 +151,20 @@ Field notes:
 - `unit` is required in every temperature-bearing telemetry payload and must
   match retained `status.unit`.
 - `temp_valid` is false when the temperature is outside the process range.
-- `dc_mode` is `element` or `off`.
+- `dc_mode` is `element`, `auxiliary`, or `off`.
+- `element` DC outputs participate in acceleration and `post_accel_power`.
+- `auxiliary` DC outputs are direct/manual outputs. They do not receive
+  acceleration power or post-accel power automatically and remain off unless
+  Proof or the operator explicitly commands them.
 - `relay_mode` is `off`, `manual_on_off`, `acc_element`, `remote_other`, or
   `cycle`.
-- `power` is actual driven DC output percent after accel, watchdog, END latch,
-  and DC enable/disable effects.
+- `power` is actual driven DC output percent after ACCEL, watchdog, END latch,
+  and DC enable/disable effects. During ACCEL, this is `accel_power` for
+  element outputs.
+- `run_target_power` is the live queued/target run percent for that DC output.
+  During ACCEL, it is the value that will take over after ACCEL completes. It
+  can differ from retained `config.program.post_accel_power` if Proof or the
+  operator has made a live runtime adjustment.
 - `relay` is the actual physical relay output state.
 - `relay_engaged` is the commanded/armed relay state for `remote_other`,
   `manual_on_off`, `acc_element`, and `cycle`; it is false for `off`.
@@ -187,6 +232,7 @@ Known event strings/types:
 |---|---|---|
 | `power lost` | `power_lost` | device |
 | `socket connected` | socket connect event | device |
+| `controller rebooted` | `controller_rebooted` | device |
 | `power restored` | reconnect/power restore event | device |
 | `start power` | `program_started` | device |
 | `stop` | `program_stopped` | device |
@@ -204,6 +250,8 @@ Known event strings/types:
 | `watchdog config rejected` | `watchdog_config_error` | device |
 | `watchdog safe pct ignored` | `watchdog_config_deprecated` | device |
 | `command rejected` | `command_error` | device |
+| `chirp` | `audio_chirp` | device |
+| `chirp failed` | `audio_chirp_error` | device |
 | `boot diagnostics` | `boot_diagnostics` | device |
 | `output diagnostics` | `output_diagnostics` | device |
 | `hardware warning` | `hardware_warning` | device |
@@ -247,6 +295,17 @@ General command rejection event:
 ```
 
 Boot/output diagnostic events:
+
+```json
+{
+  "time": 3,
+  "type": "controller_rebooted",
+  "event": "controller rebooted",
+  "reset_reason": "poweron",
+  "auto_resume_enabled": true,
+  "auto_resume_pending": true
+}
+```
 
 ```json
 {
@@ -332,12 +391,16 @@ Request live output diagnostics:
 {"resume": true}
 {"reset": true}
 {"acc_elements": true}
+{"chirp": true}
+{"audio": "chirp"}
 ```
 
 Remote gating:
 
 - `status`, `heartbeat`, `stop`, `pause`, `resume`, and `reset` are accepted
   regardless of Remote.
+- `chirp` / `audio:"chirp"` is accepted regardless of Remote and program END
+  state so Proof can test or play notifications from a safe/off condition.
 - `start`, output control, relay control, and program parameter writes require
   Remote enabled.
 - Remote has two runtime states after it is enabled:
@@ -354,10 +417,30 @@ Remote gating:
 ```json
 {"CH1 power": 35}
 {"CH2 power": 0}
+{"DC1 dc_mode": "element"}
+{"DC2 dc_mode": "auxiliary"}
 ```
 
 Power values are percent `0..100`. If DC1/DC2 is configured `off`, commands to
-that DC channel are ignored.
+that DC channel are ignored. `CHx power` can directly command an `auxiliary`
+DC output, but `post_accel_power` applies only to DC outputs with
+`dc_mode:"element"`.
+
+`CHx power` is live runtime state only. It sets the active target for that DC
+output and does not update retained config or the saved program default. During
+ACCEL, `CHx power` updates the queued post-accel target while `accel_power`
+continues to drive the element. Use `post_accel_power` to change the retained
+program default loaded at the start of the next run.
+
+DC output modes:
+
+| Mode | Meaning |
+|---|---|
+| `off` | Disabled, forced off |
+| `element` | Main programmed element; uses `accel_power` during ACCEL and `post_accel_power` during RUN |
+| `auxiliary` | Direct auxiliary output; excluded from automatic program power |
+
+Accepted aliases for `auxiliary`: `aux`, `auxilary`.
 
 ### Relay commands
 
@@ -413,6 +496,7 @@ Accepted relay mode aliases:
   "acc_mode": true,
   "accel_temp": 170,
   "accel_power": 100,
+  "post_accel_power": 35,
   "timer_start_temp": 170,
   "timer_s": 3600,
   "finish_temp": 200,
@@ -431,6 +515,7 @@ Field meanings:
 | `acc_mode` | acceleration phase enabled/disabled |
 | `accel_temp` | acceleration end temperature; `0` disables temperature transition |
 | `accel_power` | acceleration output percent |
+| `post_accel_power` | element output percent after acceleration completes; also used immediately when acceleration is disabled |
 | `timer_start_temp` | finish timer start temperature |
 | `timer_s` | finish timer duration in seconds |
 | `finish_temp` | finish temperature; `0` disables finish-by-temp |
@@ -445,6 +530,27 @@ Finish temperature behavior:
 - The default source is `"CH1"` for backward compatibility.
 - There are no per-channel finish temperatures in ProofPro.
 - ProofPro has no soft-start/ramp program command.
+
+### Clock commands
+
+Clock commands are accepted regardless of Remote state because they only affect
+display/timekeeping and cannot energize outputs.
+
+```json
+{
+  "timezone_label": "America/New_York",
+  "timezone_posix": "EST5EDT,M3.2.0,M11.1.0",
+  "clock_24h": false
+}
+```
+
+Field meanings:
+
+| Key | Meaning |
+|---|---|
+| `timezone_label` | Human/readback label; Proof should use the selected IANA name |
+| `timezone_posix` | POSIX timezone string used by ESP32 `TZ`; required for timezone updates |
+| `clock_24h` | Device display format; `false` = 12-hour AM/PM, `true` = 24-hour |
 
 ### Watchdog commands
 
@@ -479,6 +585,7 @@ Watchdog behavior:
   protection is inactive.
 - Disabling Remote clears any active watchdog safe state.
 - Watchdog trip returns Remote from ON to RDY.
+- Program END returns Remote from ON to RDY.
 - Watchdog trip forces DC OUT 1 = 0%, DC OUT 2 = 0%, RL1 off, and RL2 off.
 - Safe/off applies regardless of channel mode, relay mode, program state, or
   remote command state.

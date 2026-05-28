@@ -38,6 +38,7 @@
 #include <ArduinoJson.h>
 #include <Preferences.h>
 #include <esp_ota_ops.h>    // esp_ota_set_boot_partition — OTA boot-loop rollback
+#include "clock_sync.h"
 #include <esp_system.h>
 #ifndef DESKTOP_BUILD
 #include <esp_flash.h>
@@ -327,6 +328,7 @@ void setup() {
     bootTracePause("before_wifi");
     setupWiFi();
     log_i("WiFi connected: SSID=%s  IP=%s", WiFi.SSID().c_str(), WiFi.localIP().toString().c_str());
+    clockSyncBegin(cfg);
     bootTracePause("after_wifi");
 
     M5.Display.setCursor(10, 75);
@@ -429,6 +431,7 @@ void loop() {
     M5.update();
     handleSerialInput();
     mqttMgr.loop();
+    clockSyncLoop(cfg);
 
     // Phase 4: OTA
     otaMgr.loop();
@@ -484,6 +487,9 @@ void loop() {
             // "socket connected" event: OEM publishes this on every MQTT connect
             // (confirmed from decompile — fires before any other event on connect)
             telemetry.publishEventTyped("socket connected", "mqtt_connected");
+            telemetry.publishControllerRebooted(resetReasonString(gBootResetReason),
+                                                cfg.auto_resume,
+                                                gPendingAutoResume);
             if (!gBootDiagnosticsPublished) {
                 gBootDiagnosticsPublished = true;
                 telemetry.publishBootDiagnostics(resetReasonString(gBootResetReason),
@@ -1303,7 +1309,7 @@ static void applyOutputsNow() {
 
 static void serialSetDc1(int pct) {
     pct = constrain(pct, 0, 100);
-    if (!cfg.pwr_dc1_enabled) {
+    if (!dcOutputEnabled(cfg.pwr_dc1_mode)) {
         ch1.power_pct = 0;
         ch1.accelPhaseActive = false;
         applyOutputsNow();
@@ -1325,7 +1331,7 @@ static void serialSetDc1(int pct) {
 
 static void serialSetDc2(int pct) {
     pct = constrain(pct, 0, 100);
-    if (!cfg.pwr_dc2_enabled) {
+    if (!dcOutputEnabled(cfg.pwr_dc2_mode)) {
         ch2.power_pct = 0;
         ch2.accelPhaseActive = false;
         applyOutputsNow();

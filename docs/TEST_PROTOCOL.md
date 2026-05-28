@@ -1,29 +1,255 @@
 # ProofPro Bench Test Protocol
 
 Use this as the running checklist for the current ProofPro release candidate.
-Record failures with the exact screen state, MQTT payload, and physical output
-state when possible.
+Record failures with the exact screen state, MQTT payload, Proof screen state,
+DSPR400 setting, and physical output state when possible.
 
-Bench unit:
+## Bench Unit
 
-- Device IP: `10.0.1.60`
-- Topic ID: `791402d5ac0fe1`
-- MQTT root: `smartpidM5/proofpro/791402d5ac0fe1/`
-- Update path: OTA only for normal testing
+| Item | Value |
+|---|---|
+| Device IP | `10.0.1.60` |
+| Broker IP | `10.0.1.203` |
+| Broker credentials | `proof` / `proof` |
+| Topic ID | `791402d5ac0fe1` |
+| MQTT root | `smartpidM5/proofpro/791402d5ac0fe1/` |
+| Update path | OTA only for normal testing |
+| Starting water temp for this run plan | About `123F` |
+
+## Command Shortcuts
+
+Use these exact commands from a terminal if Proof does not expose a specific
+test control yet.
+
+Subscribe to all ProofPro traffic:
+
+```bash
+mosquitto_sub -h 10.0.1.203 -u proof -P proof \
+  -t 'smartpidM5/proofpro/791402d5ac0fe1/#' -v
+```
+
+Request retained status/config refresh:
+
+```bash
+mosquitto_pub -h 10.0.1.203 -u proof -P proof \
+  -t 'smartpidM5/proofpro/791402d5ac0fe1/commands' \
+  -m '{"status":true}'
+```
+
+Send heartbeat:
+
+```bash
+mosquitto_pub -h 10.0.1.203 -u proof -P proof \
+  -t 'smartpidM5/proofpro/791402d5ac0fe1/commands' \
+  -m '{"heartbeat":true}'
+```
+
+Start programmed power run:
+
+```bash
+mosquitto_pub -h 10.0.1.203 -u proof -P proof \
+  -t 'smartpidM5/proofpro/791402d5ac0fe1/commands' \
+  -m '{"start":"power"}'
+```
+
+Stop run:
+
+```bash
+mosquitto_pub -h 10.0.1.203 -u proof -P proof \
+  -t 'smartpidM5/proofpro/791402d5ac0fe1/commands' \
+  -m '{"stop":true}'
+```
+
+Reset END/watchdog state:
+
+```bash
+mosquitto_pub -h 10.0.1.203 -u proof -P proof \
+  -t 'smartpidM5/proofpro/791402d5ac0fe1/commands' \
+  -m '{"reset":true}'
+```
+
+Speaker chirp check:
+
+```bash
+mosquitto_pub -h 10.0.1.203 -u proof -P proof \
+  -t 'smartpidM5/proofpro/791402d5ac0fe1/commands' \
+  -m '{"chirp":true}'
+```
+
+## ProofPro / DSPR400 Nomenclature
+
+| Concept | ProofPro MQTT / Proof UI | DSPR400-style name | Notes |
+|---|---|---|---|
+| Acceleration enabled | `acc_mode` | Accel mode | Device-level, not per channel |
+| Acceleration end temp | `accel_temp` | `dAST` | When reached, status should change `ACCEL -> RUN` |
+| Acceleration output power | `accel_power` | `dOUT` | DC output percent during ACCEL |
+| Post-accel output power | `post_accel_power` | Distill/run power | Element DC output percent after ACCEL completes |
+| Main DC output | `dc_outputs.DCx.mode:"element"` | Element output | Receives `accel_power` and `post_accel_power` |
+| Auxiliary DC output | `dc_outputs.DCx.mode:"auxiliary"` | Auxiliary element | Direct/manual output; excluded from automatic program power |
+| Timer start temperature | `timer_start_temp` | `dtSP` | Temperature that starts the finish timer |
+| Finish timer length | `timer_s` | Timer | Device-level finish timer duration |
+| Finish temperature | `finish_temp` | `dFSP` | One threshold, not CH1/CH2 independent values |
+| Finish temp probe | `finish_temp_source` | Finish source | `"CH1"` or `"CH2"`; only this probe can end by temp |
+| Finish action | `finish_action` | `dEO` / finish behavior | Canonical values: `end`, `continue`, `shutoff` if supported by UI |
+| Disabled relay | `relay_mode:"off"` | Off/Disabled | Forced off, not commandable |
+| Manual relay | `relay_mode:"manual_on_off"` | On/Off | Local UI control only |
+| Accel relay | `relay_mode:"acc_element"` | AccElement | May be operator-disengaged |
+| Proof relay | `relay_mode:"remote_other"` | Remote/Other | Proof direct relay control |
+| Cycle relay | `relay_mode:"cycle"` | Cycle/Reflux timer | Uses `on_ms` and `cycle_ms` |
+| Cycle on time | `CHx on_ms` | Cycle on time | Relay ON portion in ms |
+| Cycle total time | `CHx cycle_ms` | Cycle period | Full ON+OFF cycle in ms |
+| Remote ready | `remote_state:"RDY"` | Remote ready | Commands accepted, watchdog not active yet |
+| Remote active | `remote_state:"ON"` | Remote on | Proof is controlling; heartbeat expected |
+| Program ended | `program_ended.reason` | END condition | Reasons: `finish_timer`, `finish_temp`, `finish` |
+
+## Dynamic Heat-Up Test Matrix
+
+These runs are designed for a boiler starting near `123F`. Use increasing
+targets so each run exercises more than one feature before the water approaches
+boiling.
+
+| Run | Starting Temp | ProofPro Program Settings | DSPR400 Settings To Match | Primary Checks |
+|---|---:|---|---|---|
+| A. Remote relay smoke test | Any | Relay CH2 `remote_other`; no heat required | Set relay/output mode to remote/manual test equivalent | Proof can toggle relay from `RDY`; telemetry mode matches retained config |
+| B. Accel transition | 123-145F | `acc_mode:true`, `accel_temp:140`, `accel_power:100`, `post_accel_power:35`, `timer_start_temp:140`, `timer_s:120`, `finish_action:"continue"` | Accel enabled; `dAST=140F`; `dOUT=100`; run power `35%`; Timer start `dtSP=140F`; Timer `2:00`; finish continue | Status starts `ACCEL`, then changes to `RUN`; DC power changes to post-accel power; AccElement relay turns off at `dAST`; timer starts |
+| C. Timer END | 145-165F | `acc_mode:true`, `accel_temp:155`, `accel_power:100`, `post_accel_power:35`, `timer_start_temp:155`, `timer_s:60`, `finish_action:"end"` | `dAST=155F`; `dOUT=100`; run power `35%`; `dtSP=155F`; Timer `1:00`; END on timer | `program_ended.reason:"finish_timer"`; DC1/DC2 0; RL1/RL2 off; Remote `ON -> RDY` |
+| D. Finish temp source CH1 | 165-185F | `finish_temp:175`, `finish_temp_source:"CH1"`, `timer_s:300`, `finish_action:"end"` | `dFSP=175F`; finish source CH1; timer longer than expected | CH1 alone can trigger `program_ended.reason:"finish_temp"` |
+| E. Finish temp source CH2 | 175-200F | `finish_temp:190`, `finish_temp_source:"CH2"`, `timer_s:300`, `finish_action:"end"` | `dFSP=190F`; finish source CH2; timer longer than expected | CH2 alone can trigger `program_ended.reason:"finish_temp"` |
+| F. Cycle relay | Any stable temp | CH1 or CH2 `relay_mode:"cycle"`, `on_ms:1000`, `cycle_ms:5000`, then `CHx relay:true` | Cycle/reflux relay; ON 1 sec, total 5 sec | `relay_engaged:true`; physical `relay` blinks; local disengage stays off |
+| G. Watchdog | Any safe state | Remote enabled, `watchdog_s:30`; stop Proof heartbeat | Watchdog/remote safety if available | After >30s without heartbeat: DC1/DC2 0, RL1/RL2 off, `watchdog_safe`, Remote `RDY` |
+| H. Reboot restore | Any safe state | Active Proof run, Auto Resume ON | Auto Resume ON | Device publishes `controller_rebooted`; Proof re-sends program and `start:"power"` |
+
+## Program Command Payloads
+
+Run B, Accel transition:
+
+```bash
+mosquitto_pub -h 10.0.1.203 -u proof -P proof \
+  -t 'smartpidM5/proofpro/791402d5ac0fe1/commands' \
+  -m '{"acc_mode":true,"accel_temp":140,"accel_power":100,"post_accel_power":35,"timer_start_temp":140,"timer_s":120,"finish_action":"continue","CH1 relay_mode":"acc_element","CH2 relay_mode":"off"}'
+```
+
+```bash
+mosquitto_pub -h 10.0.1.203 -u proof -P proof \
+  -t 'smartpidM5/proofpro/791402d5ac0fe1/commands' \
+  -m '{"start":"power"}'
+```
+
+Run C, Timer END:
+
+```bash
+mosquitto_pub -h 10.0.1.203 -u proof -P proof \
+  -t 'smartpidM5/proofpro/791402d5ac0fe1/commands' \
+  -m '{"acc_mode":true,"accel_temp":155,"accel_power":100,"post_accel_power":35,"timer_start_temp":155,"timer_s":60,"finish_action":"end","CH1 relay_mode":"acc_element","CH2 relay_mode":"remote_other"}'
+```
+
+```bash
+mosquitto_pub -h 10.0.1.203 -u proof -P proof \
+  -t 'smartpidM5/proofpro/791402d5ac0fe1/commands' \
+  -m '{"start":"power"}'
+```
+
+Run D, Finish temp from CH1:
+
+```bash
+mosquitto_pub -h 10.0.1.203 -u proof -P proof \
+  -t 'smartpidM5/proofpro/791402d5ac0fe1/commands' \
+  -m '{"acc_mode":false,"timer_s":300,"finish_temp":175,"finish_temp_source":"CH1","finish_action":"end"}'
+```
+
+```bash
+mosquitto_pub -h 10.0.1.203 -u proof -P proof \
+  -t 'smartpidM5/proofpro/791402d5ac0fe1/commands' \
+  -m '{"start":"power"}'
+```
+
+Run E, Finish temp from CH2:
+
+```bash
+mosquitto_pub -h 10.0.1.203 -u proof -P proof \
+  -t 'smartpidM5/proofpro/791402d5ac0fe1/commands' \
+  -m '{"acc_mode":false,"timer_s":300,"finish_temp":190,"finish_temp_source":"CH2","finish_action":"end"}'
+```
+
+```bash
+mosquitto_pub -h 10.0.1.203 -u proof -P proof \
+  -t 'smartpidM5/proofpro/791402d5ac0fe1/commands' \
+  -m '{"start":"power"}'
+```
+
+Cycle relay test, CH1:
+
+```bash
+mosquitto_pub -h 10.0.1.203 -u proof -P proof \
+  -t 'smartpidM5/proofpro/791402d5ac0fe1/commands' \
+  -m '{"CH1 relay_mode":"cycle","CH1 on_ms":1000,"CH1 cycle_ms":5000}'
+```
+
+```bash
+mosquitto_pub -h 10.0.1.203 -u proof -P proof \
+  -t 'smartpidM5/proofpro/791402d5ac0fe1/commands' \
+  -m '{"CH1 relay":true}'
+```
+
+```bash
+mosquitto_pub -h 10.0.1.203 -u proof -P proof \
+  -t 'smartpidM5/proofpro/791402d5ac0fe1/commands' \
+  -m '{"CH1 relay":false}'
+```
+
+Remote relay test, CH2:
+
+```bash
+mosquitto_pub -h 10.0.1.203 -u proof -P proof \
+  -t 'smartpidM5/proofpro/791402d5ac0fe1/commands' \
+  -m '{"CH2 relay_mode":"remote_other"}'
+```
+
+```bash
+mosquitto_pub -h 10.0.1.203 -u proof -P proof \
+  -t 'smartpidM5/proofpro/791402d5ac0fe1/commands' \
+  -m '{"CH2 relay":true}'
+```
+
+```bash
+mosquitto_pub -h 10.0.1.203 -u proof -P proof \
+  -t 'smartpidM5/proofpro/791402d5ac0fe1/commands' \
+  -m '{"CH2 relay":false}'
+```
+
+Watchdog setup:
+
+```bash
+mosquitto_pub -h 10.0.1.203 -u proof -P proof \
+  -t 'smartpidM5/proofpro/791402d5ac0fe1/commands' \
+  -m '{"watchdog_enabled":true,"watchdog_s":30}'
+```
+
+DC output role setup:
+
+```bash
+mosquitto_pub -h 10.0.1.203 -u proof -P proof \
+  -t 'smartpidM5/proofpro/791402d5ac0fe1/commands' \
+  -m '{"DC1 dc_mode":"element","DC2 dc_mode":"auxiliary"}'
+```
+
+Auxiliary DC direct command:
+
+```bash
+mosquitto_pub -h 10.0.1.203 -u proof -P proof \
+  -t 'smartpidM5/proofpro/791402d5ac0fe1/commands' \
+  -m '{"CH2 power":25}'
+```
 
 ## 0. Safety and Setup
 
 - [ ] Confirm no hazardous load is connected to DC1 during bench firmware work.
 - [ ] Confirm OTA is used for firmware updates.
 - [ ] Do not USB-flash with a heater or hazardous load connected to DC1.
-- [ ] Subscribe to status, config, power, and events:
-
-```bash
-mosquitto_sub -h 10.0.1.203 -t 'smartpidM5/proofpro/791402d5ac0fe1/#' -v
-```
-
+- [ ] Subscribe to status, config, power, and events.
 - [ ] Open Proof and confirm the device appears online.
 - [ ] On the device, start from the Power screen.
+- [ ] Confirm Remote is enabled on the device before testing Proof commands.
 
 ## 1. Retained Status and Config
 
@@ -33,6 +259,7 @@ mosquitto_sub -h 10.0.1.203 -t 'smartpidM5/proofpro/791402d5ac0fe1/#' -v
 - [ ] Confirm retained `status.remote_state` is `OFF`, `RDY`, or `ON`.
 - [ ] Confirm retained `status.watchdog_enabled` and `watchdog_s` are present.
 - [ ] Confirm retained `config.program` is present.
+- [ ] Confirm retained `config.dc_outputs.DC1.mode` and `config.dc_outputs.DC2.mode` are present.
 - [ ] Confirm retained `config.relays.CH1` and `config.relays.CH2` are present.
 - [ ] In Proof onboarding/settings, confirm unit is auto-filled from status.
 - [ ] In Proof settings, confirm program defaults come from retained config.
@@ -93,6 +320,8 @@ Pass criteria:
 - [ ] Configure acceleration enabled.
 - [ ] Set `accel_temp` below a reachable test temperature.
 - [ ] Set `accel_power` to a visibly different value than run power.
+- [ ] Set `post_accel_power` to the expected RUN output percent.
+- [ ] If a DC output is auxiliary, confirm it stays off during ACCEL/RUN unless directly commanded.
 - [ ] Set at least one relay to `acc_element` if testing AccElement.
 - [ ] Start programmed run.
 - [ ] Confirm status shows `ACCEL`.
@@ -103,6 +332,7 @@ Pass criteria:
 - [ ] Confirm DC tile stops accel blinking and shows steady selected run percent.
 - [ ] Confirm AccElement relay turns off.
 - [ ] Confirm telemetry publishes `accel_complete`.
+- [ ] Confirm only `element` DC outputs change to `post_accel_power`.
 
 Pass criteria:
 
@@ -119,6 +349,7 @@ Pass criteria:
 - [ ] Confirm DC1/DC2 go 0.
 - [ ] Confirm RL1/RL2 are off.
 - [ ] Confirm `events/standard` publishes `program_ended` with `reason:"finish_timer"`.
+- [ ] Confirm Remote changes from `ON` to `RDY`.
 - [ ] Press Reset.
 - [ ] Confirm END clears and the program does not start by itself.
 
@@ -156,6 +387,24 @@ Pass criteria:
 - [ ] Watchdog only arms during active Remote ON session.
 - [ ] Watchdog trip forces whole-device safe/off.
 - [ ] Watchdog can be cleared by later accepted remote traffic.
+
+## 6a. Controller Reboot and Proof Restore
+
+- [ ] Set Auto Resume ON locally.
+- [ ] Start an active Proof run.
+- [ ] Reboot the controller.
+- [ ] Confirm retained `status.auto_resume_enabled:true`.
+- [ ] Confirm `events/standard` publishes `controller_rebooted` with `reset_reason`.
+- [ ] Confirm Proof detects the reboot/reconnect.
+- [ ] Confirm Proof re-sends the active program payload.
+- [ ] Confirm Proof re-sends `{"start":"power"}` and intended power/relay state.
+- [ ] Confirm the controller returns to the intended active run state.
+
+Pass criteria:
+
+- [ ] Auto Resume is discoverable from MQTT.
+- [ ] Proof does not rely on delayed firmware Auto Resume as the only restore path.
+- [ ] Controller reboot does not leave the power controller idle during an active Proof run.
 
 ## 7. Cycle Relay Mode
 
@@ -202,11 +451,14 @@ Pass criteria:
 - [ ] Extract beep durations and gaps.
 - [ ] Implement synthesized tone sequence in firmware.
 - [ ] Confirm speaker plays notification without boot pop or persistent whine.
+- [ ] From END state, send `{"chirp":true}` or `{"audio":"chirp"}`.
+- [ ] Confirm `audio_chirp` event publishes and the test chirp plays.
 
 Pass criteria:
 
 - [ ] End notification is generated from tone frequency/duration values.
 - [ ] No onboard microphone dependency exists.
+- [ ] Test chirp is accepted even when Remote is `RDY` and program state is `END`.
 
 ## Release Decision
 

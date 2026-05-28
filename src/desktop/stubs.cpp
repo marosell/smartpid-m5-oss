@@ -74,12 +74,12 @@ void OutputController::begin(Config&) {}
 void OutputController::forceAllOff() {}
 void OutputController::driveOutputPin(int, bool) {}
 void OutputController::update(ChannelState& ch1, ChannelState& ch2) {
-    auto powerState = [](ChannelState& ch, bool dcEnabled) -> uint8_t {
-        if (!ch.isRunning() || ch.paused || ch.finishLatch || ch.watchdogFired || !dcEnabled) return 0;
+    auto powerState = [](ChannelState& ch, uint8_t dcMode) -> uint8_t {
+        if (!ch.isRunning() || ch.paused || ch.finishLatch || ch.watchdogFired || !dcOutputEnabled(dcMode)) return 0;
         return (ch.acc_mode && ch.accelPhaseActive) ? ch.dOUT : ch.distill_power_pct;
     };
-    ch1.power_pct = powerState(ch1, cfg.pwr_dc1_enabled);
-    ch2.power_pct = powerState(ch2, cfg.pwr_dc2_enabled);
+    ch1.power_pct = powerState(ch1, cfg.pwr_dc1_mode);
+    ch2.power_pct = powerState(ch2, cfg.pwr_dc2_mode);
     auto relayState = [](ChannelState& ch) -> bool {
         if (!ch.isRunning() || ch.paused || ch.finishLatch || ch.watchdogFired) return false;
         switch (ch.relay_mode) {

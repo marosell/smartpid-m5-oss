@@ -85,8 +85,8 @@ explicitly about OEM backups, decompile research, or firmware switching.
 | RL1 | 26 | 2 | RL1 | digital relay |
 | RL2 | 16 | 3 | RL2 | digital relay |
 
-DC outputs can be configured as `element` or `off`. Relays can be configured as
-`off`, `manual_on_off`, `acc_element`, `remote_other`, or `cycle`.
+DC outputs can be configured as `element`, `auxiliary`, or `off`. Relays can be
+configured as `off`, `manual_on_off`, `acc_element`, `remote_other`, or `cycle`.
 
 ### Program logic
 
@@ -94,24 +94,42 @@ DC outputs can be configured as `element` or `off`. Relays can be configured as
 - `MAN/RUN` toggles manual vs program run.
 - `RST` resets the program state but should not start a program by itself.
 - Acceleration is a temporary override of element output power.
+- Auxiliary DC outputs are excluded from acceleration and post-accel program
+  power; they stay off unless directly commanded.
 - During acceleration, DC tiles blink between the user/MQTT-selected percent and
   the acceleration percent.
 - When acceleration ends, the device leaves accel as one program phase, DC
-  outputs return to their selected percent, AccElement relays drop out, and the
-  status tile changes from `ACCEL` to `RUN`.
+  outputs configured as `element` return to `post_accel_power`, AccElement
+  relays drop out, and the status tile changes from `ACCEL` to `RUN`.
 - Timer is entered as hours/minutes and displays as `HH:MM:SS` while running.
-- In programmed Accel, the finish timer starts when status enters `ACCEL`.
-- In non-Accel programmed runs, the finish timer starts when Timer Start Temp
-  is reached.
+- The programmed finish timer starts only when the runtime temperature reaches
+  Timer Start Temp (`timer_start_temp` / `dtSP`), including while the device is
+  still in `ACCEL`.
 - Power-screen timer edits are runtime-only and never overwrite the programmed
   timer saved in Settings.
 - MQTT program commands are device-level (`accel_temp`, `accel_power`,
-  `timer_start_temp`, `timer_s`, `finish_temp`, `finish_temp_source`,
-  `finish_action`), not `CHx` settings.
+  `post_accel_power`, `timer_start_temp`, `timer_s`, `finish_temp`,
+  `finish_temp_source`, `finish_action`), not `CHx` settings.
+- Local Programming menu labels `post_accel_power` as `Run Power`, because it
+  is the normal element output after acceleration completes.
 - If Finish Temp reaches END before the timer expires, the timer should freeze
   with remaining time visible.
 - END publishes a device-level `program_ended` event with reason
   `finish_timer`, `finish_temp`, or `finish`.
+- Program END returns Remote from `ON` to `RDY`; Proof can still send safe
+  commands such as reset/status/chirp from END.
+- Controller reboot publishes `controller_rebooted` with `reset_reason`,
+  `auto_resume_enabled`, and `auto_resume_pending`; Proof should restore active
+  Proof runs by re-sending the current program and `{"start":"power"}`.
+- Removed the local `<<Resume Previous>>` main-menu shortcut. Reboot/run
+  restoration is now treated as a Proof-owned flow driven by reboot events,
+  retained config, and explicit start/runtime commands.
+- Clock setup now uses WiFi NTP as the primary time source. The UI stores
+  timezone, NTP on/off, and 12/24-hour display format; the header shows `--:--`
+  until the wall clock is synced instead of showing boot-relative fake time.
+- Proof can set exact worldwide timezone rules by sending `timezone_label` and
+  `timezone_posix`; firmware stores them and reports readback under retained
+  `config.clock`.
 - Finish temperature is one device-level threshold; `finish_temp_source`
   selects whether CH1 or CH2 is evaluated for finish-by-temp.
 - END should latch until reset/start, depending on Finish Action.
@@ -155,6 +173,8 @@ as the authority for actual relay output state.
   pops/noise.
 - Run-ending audio should be implemented as a generated tone sequence once the
   desired DSPR400 beep pattern is recorded and measured from the MacBook.
+- A temporary test chirp command is available over MQTT as `{"chirp":true}` or
+  `{"audio":"chirp"}` and is accepted regardless of Remote/END state.
 
 ---
 

@@ -100,6 +100,15 @@ void Config::load() {
     auto_resume   = prefs.getBool("auto_resume",  false);
     button_beep   = prefs.getBool("btn_beep",     false);
     remote_enabled = prefs.getBool("remote_en",    false);
+    clock_tz = prefs.getUChar("clock_tz", 0);
+    clock_ntp_enabled = prefs.getBool("clock_ntp", true);
+    clock_24h = prefs.getBool("clock_24h", false);
+    prefs.getString("clock_ntp_host", clock_ntp_host, sizeof(clock_ntp_host));
+    if (strlen(clock_ntp_host) == 0) {
+        strlcpy(clock_ntp_host, "pool.ntp.org", sizeof(clock_ntp_host));
+    }
+    prefs.getString("clock_tz_label", clock_tz_label, sizeof(clock_tz_label));
+    prefs.getString("clock_tz_posix", clock_tz_posix, sizeof(clock_tz_posix));
 
     // PID Auto-Tune
     // OEM struct-initialises OutputStep to 100 (decompile line 34313: puVar1[0x64]=100).
@@ -135,8 +144,14 @@ void Config::load() {
     pwr_timer_s     = prefs.getUInt("pwr_timer_s",   0);
     pwr_deo         = prefs.getUChar("pwr_deo",      1);
     pwr_distill_pct = prefs.getUChar("pwr_dist_pct", 100);
-    pwr_dc1_enabled = prefs.getBool("pwr_dc1_en",    true);
-    pwr_dc2_enabled = prefs.getBool("pwr_dc2_en",    true);
+    pwr_dc1_mode    = prefs.isKey("pwr_dc1_mode")
+        ? prefs.getUChar("pwr_dc1_mode", (uint8_t)DcOutputMode::ELEMENT)
+        : (prefs.getBool("pwr_dc1_en", true) ? (uint8_t)DcOutputMode::ELEMENT : (uint8_t)DcOutputMode::OFF);
+    pwr_dc2_mode    = prefs.isKey("pwr_dc2_mode")
+        ? prefs.getUChar("pwr_dc2_mode", (uint8_t)DcOutputMode::ELEMENT)
+        : (prefs.getBool("pwr_dc2_en", true) ? (uint8_t)DcOutputMode::ELEMENT : (uint8_t)DcOutputMode::OFF);
+    pwr_dc1_mode = (uint8_t)normalizeDcOutputMode(pwr_dc1_mode);
+    pwr_dc2_mode = (uint8_t)normalizeDcOutputMode(pwr_dc2_mode);
     pwr_relay1_mode = prefs.getUChar("pwr_rl1_mode", 0);
     pwr_relay2_mode = prefs.getUChar("pwr_rl2_mode", 0);
     pwr_r1_on_ms    = prefs.getUInt("pwr_r1_on",     1000);
@@ -220,6 +235,12 @@ void Config::save() {
     prefs.putBool("auto_resume",   auto_resume);
     prefs.putBool("btn_beep",      button_beep);
     prefs.putBool("remote_en",     remote_enabled);
+    prefs.putUChar("clock_tz",     clock_tz);
+    prefs.putBool("clock_ntp",     clock_ntp_enabled);
+    prefs.putBool("clock_24h",     clock_24h);
+    prefs.putString("clock_ntp_host", clock_ntp_host);
+    prefs.putString("clock_tz_label", clock_tz_label);
+    prefs.putString("clock_tz_posix", clock_tz_posix);
 
     prefs.putUChar("log_mode",     log_mode);    // uint8_t enum 0–4
     prefs.putUShort("log_samp_s",  log_sample_s);
@@ -242,8 +263,8 @@ void Config::save() {
     prefs.putUInt("pwr_timer_s",   pwr_timer_s);
     prefs.putUChar("pwr_deo",      pwr_deo);
     prefs.putUChar("pwr_dist_pct", pwr_distill_pct);
-    prefs.putBool("pwr_dc1_en",    pwr_dc1_enabled);
-    prefs.putBool("pwr_dc2_en",    pwr_dc2_enabled);
+    prefs.putUChar("pwr_dc1_mode", pwr_dc1_mode);
+    prefs.putUChar("pwr_dc2_mode", pwr_dc2_mode);
     prefs.putUChar("pwr_rl1_mode", pwr_relay1_mode);
     prefs.putUChar("pwr_rl2_mode", pwr_relay2_mode);
     prefs.putUInt("pwr_r1_on",     pwr_r1_on_ms);
@@ -303,8 +324,8 @@ void Config::savePowerParams() {
     prefs.putUInt("pwr_timer_s",   pwr_timer_s);
     prefs.putUChar("pwr_deo",      pwr_deo);
     prefs.putUChar("pwr_dist_pct", pwr_distill_pct);
-    prefs.putBool("pwr_dc1_en",    pwr_dc1_enabled);
-    prefs.putBool("pwr_dc2_en",    pwr_dc2_enabled);
+    prefs.putUChar("pwr_dc1_mode", pwr_dc1_mode);
+    prefs.putUChar("pwr_dc2_mode", pwr_dc2_mode);
     prefs.putUChar("pwr_rl1_mode", pwr_relay1_mode);
     prefs.putUChar("pwr_rl2_mode", pwr_relay2_mode);
     prefs.putUInt("pwr_r1_on",     pwr_r1_on_ms);

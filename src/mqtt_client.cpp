@@ -1,6 +1,7 @@
 // mqtt_client.cpp — MQTT connection manager
 
 #include "mqtt_client.h"
+#include "clock_sync.h"
 #include "channel_state.h"
 #include "command_handler.h"
 #include <WiFi.h>
@@ -92,6 +93,7 @@ bool MQTTManager::publishStatus() {
     doc["unit"]   = _cfg->temp_unit;
     doc["remote_enabled"] = mqttRemoteEnabled();
     doc["remote_state"] = !mqttRemoteEnabled() ? "OFF" : (mqttRemoteActive() ? "ON" : "RDY");
+    doc["auto_resume_enabled"] = _cfg->auto_resume;
     doc["watchdog_enabled"] = _cfg->pwr_wdog_enabled;
     doc["watchdog_s"] = _cfg->pwr_wdog_s;
 
@@ -117,11 +119,26 @@ bool MQTTManager::publishConfig() {
     program["acc_mode"] = _cfg->pwr_acc_mode;
     program["accel_temp"] = _cfg->pwr_dast;
     program["accel_power"] = _cfg->pwr_dout;
+    program["post_accel_power"] = _cfg->pwr_distill_pct;
     program["timer_start_temp"] = _cfg->pwr_dtsp;
     program["timer_s"] = _cfg->pwr_timer_s;
     program["finish_temp"] = _cfg->pwr_dfsp;
     program["finish_temp_source"] = (_cfg->pwr_dfsp_source == 2) ? "CH2" : "CH1";
     program["finish_action"] = _cfg->pwr_deo ? "end" : "continue";
+
+    JsonObject dcOutputs = doc["dc_outputs"].to<JsonObject>();
+    JsonObject dc1 = dcOutputs["DC1"].to<JsonObject>();
+    dc1["mode"] = dcOutputModeStr(normalizeDcOutputMode(_cfg->pwr_dc1_mode));
+    JsonObject dc2 = dcOutputs["DC2"].to<JsonObject>();
+    dc2["mode"] = dcOutputModeStr(normalizeDcOutputMode(_cfg->pwr_dc2_mode));
+
+    JsonObject clock = doc["clock"].to<JsonObject>();
+    clock["timezone_label"] = clockCurrentTimeZoneLabel(*_cfg);
+    clock["timezone_posix"] = clockCurrentTimeZonePosix(*_cfg);
+    clock["ntp_enabled"] = _cfg->clock_ntp_enabled;
+    clock["ntp_host"] = _cfg->clock_ntp_host;
+    clock["clock_24h"] = _cfg->clock_24h;
+    clock["synced"] = clockTimeIsSynced();
 
     JsonObject relays = doc["relays"].to<JsonObject>();
     JsonObject rl1 = relays["CH1"].to<JsonObject>();

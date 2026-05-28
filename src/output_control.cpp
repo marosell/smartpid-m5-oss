@@ -179,7 +179,7 @@ void OutputController::update(ChannelState& ch1, ChannelState& ch2) {
 void OutputController::_updatePowerDirect(int chIdx, ChannelState& ch,
                                            int dcOutPin, int relayPin,
                                            PwmState& pwmState) {
-    const bool dcEnabled = (chIdx == 1) ? _cfg->pwr_dc1_enabled : _cfg->pwr_dc2_enabled;
+    const bool dcEnabled = dcOutputEnabled((chIdx == 1) ? _cfg->pwr_dc1_mode : _cfg->pwr_dc2_mode);
 
     // 1. Probe invalid/sentinel: force all off, do NOT set finish latch
     if (!tempInProcessRange(ch.temp, _cfg->temp_unit)) {

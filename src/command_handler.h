@@ -12,6 +12,8 @@
 //   {"CHx relay": bool}                     Relay command/engage by relay mode
 //   {"accel_temp": N}                       Accel phase end threshold temp
 //   {"accel_power": N}                      DC OUT % during accel phase (0–100)
+//   {"post_accel_power": N}                 DC OUT % after accel phase (0–100)
+//   {"DCx dc_mode": "off"/"element"/"auxiliary"}  DC output role
 //   {"finish_temp": N}                      Finish latch temperature threshold
 //   {"finish_temp_source": "CH1"/"CH2"}      Probe used for finish_temp END
 //   {"reset": true}                         Clear finish latch on all channels
@@ -23,6 +25,8 @@
 //   {"acc_elements": bool}                  Allow/suppress acc_element relays
 //   {"CHx on_ms": N}                        Relay ON time per reflux cycle (ms)
 //   {"CHx cycle_ms": N}                     Relay total cycle time (ms)
+//   {"timezone_label": "...", "timezone_posix": "..."}  Safe clock config
+//   {"clock_24h": bool}                     Device display clock format
 
 #include <Arduino.h>
 #include "config.h"
@@ -82,6 +86,8 @@ private:
     void _cmdSetRelay(int chIdx, bool state);      // {"CHx relay": bool}
     void _cmdSetDAST(float temp);                  // {"accel_temp": N}
     void _cmdSetDOut(int pct);                     // {"accel_power": N}
+    void _cmdSetPostAccelPower(int pct);           // {"post_accel_power": N}
+    void _cmdSetDcMode(int chIdx, const char* modeStr); // {"DCx dc_mode": ...}
     void _cmdSetDFSP(float temp);                  // {"finish_temp": N}
     void _cmdSetFinishTempSource(const char* source); // {"finish_temp_source": "CH1"/"CH2"}
     void _cmdSetWatchdogEnabled(bool enabled);     // {"watchdog_enabled": bool}
@@ -91,6 +97,8 @@ private:
     void _cmdSetTimerDir(const char* dir);         // {"finish_action": "continue"/"end"}
     void _cmdSetRelayOnMs(int chIdx, int ms);      // {"CHx on_ms": N}
     void _cmdSetRelayCycleMs(int chIdx, int ms);   // {"CHx cycle_ms": N}
+    void _cmdSetClockTimezone(const char* label, const char* posix);
+    void _cmdSetClockFormat(bool clock24h);
 };
 
 extern CommandHandler cmdHandler;

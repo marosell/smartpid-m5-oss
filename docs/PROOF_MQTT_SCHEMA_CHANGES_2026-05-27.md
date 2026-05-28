@@ -30,6 +30,7 @@ Final retained status shape:
   "unit": "F",
   "remote_enabled": true,
   "remote_state": "RDY",
+  "auto_resume_enabled": true,
   "watchdog_enabled": true,
   "watchdog_s": 30
 }
@@ -42,6 +43,13 @@ Proof changes:
 - Read `firmware`, `firmware_version`, and `schema_version` to choose the
   ProofPro integration path.
 - Read `remote_enabled` and `remote_state` for readiness/session display.
+- Read `auto_resume_enabled`, but do not rely on firmware Auto Resume alone.
+  After a ProofPro reboot during an active Proof run, Proof should re-publish
+  the active program and issue `{"start":"power"}` plus intended output/relay
+  state.
+- Do not expect or depend on a local ProofPro `Resume Previous` main-menu
+  action. The firmware no longer exposes that shortcut because it could restart
+  from stale saved run state rather than Proof's current run model.
 - Auto-fill and lock temperature unit from `status.unit`.
 - Do not ask the operator to choose a per-channel temperature unit when firmware
   provides retained `status.unit`.
@@ -64,11 +72,28 @@ Final retained config shape:
     "acc_mode": true,
     "accel_temp": 170,
     "accel_power": 100,
+    "post_accel_power": 35,
     "timer_start_temp": 170,
     "timer_s": 3600,
     "finish_temp": 200,
     "finish_temp_source": "CH1",
     "finish_action": "end"
+  },
+  "dc_outputs": {
+    "DC1": {
+      "mode": "element"
+    },
+    "DC2": {
+      "mode": "auxiliary"
+    }
+  },
+  "clock": {
+    "timezone_label": "America/New_York",
+    "timezone_posix": "EST5EDT,M3.2.0,M11.1.0",
+    "ntp_enabled": true,
+    "ntp_host": "pool.ntp.org",
+    "clock_24h": false,
+    "synced": true
   },
   "relays": {
     "CH1": {
@@ -230,6 +255,7 @@ All ProofPro program settings are device-level. Proof should send:
   "acc_mode": true,
   "accel_temp": 170,
   "accel_power": 100,
+  "post_accel_power": 35,
   "timer_start_temp": 170,
   "timer_s": 3600,
   "finish_temp": 200,
@@ -245,6 +271,10 @@ Proof changes:
 - Stop sending `CHx dAST`, `CHx dOUT`, `CHx dtSP`, `CHx timer_s`, `CHx dFSP`,
   `CHx dEO`, `CHx finish_time_s`, or `CHx ramp_s`.
 - Use `timer_s` for the finish timer duration.
+- Use `post_accel_power` for the normal run/output power after acceleration
+  completes. It applies only to DC outputs whose retained mode is `element`.
+- Treat `CHx power` as live runtime state only. It must not overwrite
+  `post_accel_power` or any saved ProofPro program default.
 - Use `timer_start_temp` for the temperature that starts the finish timer.
 - Use `finish_temp` for the one device-level finish temperature.
 - Use `finish_action` for `continue` / `end`.
@@ -271,6 +301,10 @@ Power telemetry includes:
 Proof changes:
 
 - Use `relay` for actual physical relay state.
+- Use `dc_mode` / retained `config.dc_outputs` to distinguish `element`,
+  `auxiliary`, and `off` DC outputs.
+- Treat `auxiliary` DC outputs as direct/manual outputs. They do not receive
+  `accel_power` or `post_accel_power` automatically.
 - Use `relay_engaged` for commanded/armed state in `remote_other`,
   `manual_on_off`, `acc_element`, and `cycle`.
 - For `cycle`, `relay_engaged=true` means cycling is armed even when `relay` is
@@ -284,6 +318,40 @@ Proof changes:
 - Use `ended` / `latched` for device END state display.
 - Use `finish_temp_source` to display which probe can trigger finish-by-temp.
 - Use `timer_remaining_s` and `timer_frozen` to display finish timer state.
+
+## 6a. Clock/timezone config
+
+ProofPro retained config includes:
+
+```json
+{
+  "clock": {
+    "timezone_label": "America/New_York",
+    "timezone_posix": "EST5EDT,M3.2.0,M11.1.0",
+    "ntp_enabled": true,
+    "ntp_host": "pool.ntp.org",
+    "clock_24h": false,
+    "synced": true
+  }
+}
+```
+
+Proof should send flat firmware command keys:
+
+```json
+{
+  "timezone_label": "America/New_York",
+  "timezone_posix": "EST5EDT,M3.2.0,M11.1.0",
+  "clock_24h": false
+}
+```
+
+Proof may keep internal registry keys like `site.timezone_label` and
+`site.timezone_posix`, but the MQTT command payload uses the flat keys above.
+Firmware accepts clock config regardless of Remote state and republishes
+retained `config` after accepting it.
+
+`timezone_posix` must be a POSIX TZ string, not an IANA name.
 
 ## 7. Relay modes and commands
 
@@ -365,6 +433,17 @@ Current examples:
 
 ```json
 {
+  "time": 3,
+  "event": "controller rebooted",
+  "type": "controller_rebooted",
+  "reset_reason": "poweron",
+  "auto_resume_enabled": true,
+  "auto_resume_pending": true
+}
+```
+
+```json
+{
   "time": 123,
   "event": "CH1 timer started",
   "type": "timer_started",
@@ -392,7 +471,7 @@ authoritative device-level END event.
   `status.firmware_version`, `status.schema_version`, `status.remote_enabled`,
   and `status.remote_state`.
 - Update onboarding/settings to consume retained `config.program` and
-  `config.relays`.
+  `config.dc_outputs` / `config.relays`.
 - Update onboarding/settings to consume retained `watchdog_enabled` and
   `watchdog_s`.
 - Remove per-channel unit selection for ProofPro.
@@ -403,6 +482,11 @@ authoritative device-level END event.
 - Use `finish_timer`, `finish_temp`, and `finish` as final END reasons.
 - Add a device-level `finish_temp_source` setting with `"CH1"` / `"CH2"`.
 - Use only device-level program command keys.
+- Add support for DC output mode `auxiliary`.
+- Restore active Proof runs after `controller_rebooted` / reconnect by
+  re-sending current program and `{"start":"power"}`.
+- Add ProofPro timezone settings and send flat `timezone_label`,
+  `timezone_posix`, and optional `clock_24h` command keys.
 - Remove `finish_time` as a distinct app concept.
 - Remove ramp/soft-start from ProofPro program settings.
 - Add/handle `manual_on_off` relay mode.

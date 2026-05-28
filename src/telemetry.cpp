@@ -60,8 +60,9 @@ void TelemetryPublisher::loop(const ChannelState& ch1, const ChannelState& ch2) 
 //   Monitor:      { time, temp, unit, runmode }
 //   Standard/Adv: { time, temp, unit, runmode, countdown, countup, SP, mode,
 //                   pwm, maxpwm, relay }
-//   Power:        { time, temp, unit, runmode:"power", relay, power, dc_mode }
-//                   power = current DC OUT duty % (reflects accel phase)
+//   Power:        { time, temp, unit, runmode:"power", relay, power, run_target_power, dc_mode }
+//                   power = current physical DC OUT duty % (reflects accel phase)
+//                   run_target_power = queued/live target after ACCEL completes
 void TelemetryPublisher::_publishChannel(const char* chName, const ChannelState& ch) {
     JsonDocument doc;
 
@@ -72,9 +73,9 @@ void TelemetryPublisher::_publishChannel(const char* chName, const ChannelState&
 
     if (ch.runmode == Runmode::POWER_DIRECT) {
         // Power mode: unique payload with power field, no PID fields
-        const bool dcEnabled = (strcmp(chName, "CH1") == 0)
-            ? _cfg->pwr_dc1_enabled
-            : _cfg->pwr_dc2_enabled;
+        const uint8_t dcMode = (strcmp(chName, "CH1") == 0)
+            ? _cfg->pwr_dc1_mode
+            : _cfg->pwr_dc2_mode;
         doc["runmode"] = "power";
         doc["relay"]   = ch.relay_state;
         switch (ch.relay_mode) {
@@ -88,8 +89,9 @@ void TelemetryPublisher::_publishChannel(const char* chName, const ChannelState&
                 doc["relay_engaged"] = false;
                 break;
         }
-        doc["power"]   = ch.power_pct;  // current actual duty (post-accel)
-        doc["dc_mode"] = dcEnabled ? "element" : "off";
+        doc["power"]   = ch.power_pct;  // current physical duty after ACCEL/watchdog/END
+        doc["run_target_power"] = ch.distill_power_pct;
+        doc["dc_mode"] = dcOutputModeStr(normalizeDcOutputMode(dcMode));
         doc["relay_mode"] = relayModeStr(ch.relay_mode);
         doc["remote_enabled"] = mqttRemoteEnabled();
         doc["remote_state"] = !mqttRemoteEnabled() ? "OFF" : (mqttRemoteActive() ? "ON" : "RDY");
@@ -267,6 +269,27 @@ void TelemetryPublisher::publishBootDiagnostics(const char* resetReason,
         _mqtt->publish(topic.c_str(), warnPayload.c_str(), /*retained=*/false);
         log_w("[EVENT/STD] GPIO12 high at boot");
     }
+}
+
+void TelemetryPublisher::publishControllerRebooted(const char* resetReason,
+                                                   bool autoResumeEnabled,
+                                                   bool autoResumePending) {
+    if (!_mqtt->connected()) return;
+
+    JsonDocument doc;
+    doc["time"] = bootSeconds();
+    doc["type"] = "controller_rebooted";
+    doc["event"] = "controller rebooted";
+    doc["reset_reason"] = resetReason ? resetReason : "unknown";
+    doc["auto_resume_enabled"] = autoResumeEnabled;
+    doc["auto_resume_pending"] = autoResumePending;
+
+    String payload;
+    serializeJson(doc, payload);
+
+    String topic = _mqtt->fullTopic("events/standard");
+    _mqtt->publish(topic.c_str(), payload.c_str(), /*retained=*/false);
+    log_i("[EVENT/STD] controller rebooted: %s", payload.c_str());
 }
 
 void TelemetryPublisher::publishOutputDiagnostics(const char* reason,
