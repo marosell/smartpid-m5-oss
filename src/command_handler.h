@@ -5,7 +5,8 @@
 // config plus channel state.
 //
 // New POWER_DIRECT commands (our extension):
-//   {"start": "power"}                      Start direct-power mode (both channels)
+//   {"program_running": bool}               Start/leave programmed power run
+//   {"start": "power"}                      Legacy alias for program_running=true
 //   {"CHx power": N}                        DC OUT duty % target (0–100)
 //   {"acc_mode": bool}                      Enable/disable acceleration phase
 //   {"CHx relay_mode": "off"/"acc_element"/"remote_other"/"cycle"}
@@ -79,6 +80,7 @@ private:
 
     // ── POWER_DIRECT commands ─────────────────────────────────────────────────
     void _cmdStartPower();
+    void _cmdSetProgramRunning(bool running);
     void _cmdReset();                              // clear finish latch all channels
     void _cmdSetPower(int chIdx, int pct);         // {"CHx power": N}
     void _cmdSetAccMode(bool enabled);             // {"acc_mode": bool}

@@ -10,7 +10,7 @@
 MQTTManager  mqttMgr;
 MQTTManager* MQTTManager::_instance = nullptr;
 static constexpr const char* PROOFPRO_FIRMWARE = "proofpro";
-static constexpr const char* PROOFPRO_FIRMWARE_VERSION = "0.1.0";
+static constexpr const char* PROOFPRO_FIRMWARE_VERSION = "0.2.0";
 static constexpr uint8_t PROOFPRO_SCHEMA_VERSION = 1;
 
 // ── begin ─────────────────────────────────────────────────────────────────────

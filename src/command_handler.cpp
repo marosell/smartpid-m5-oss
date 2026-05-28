@@ -300,6 +300,16 @@ void CommandHandler::handle(const uint8_t* payload, unsigned int len) {
         _cmdSetWatchdogEnabled(doc["watchdog_enabled"].as<bool>());
     }
 
+    // ── {"program_running": true/false} ─────────────────────────────────────
+    if (doc["program_running"].is<bool>()) {
+        if (!mqttRemoteEnabled()) {
+            _tele->publishCommandError("program_running", "remote_off");
+            log_w("[CMD] program_running ignored — Remote is OFF");
+        } else {
+            _cmdSetProgramRunning(doc["program_running"].as<bool>());
+        }
+    }
+
     // ── {"start": "power"} ───────────────────────────────────────────────────
     if (doc["start"].is<const char*>()) {
         const char* modeStr = doc["start"].as<const char*>();
@@ -623,13 +633,48 @@ void CommandHandler::_cmdStartPower() {
     }
 
     _tele->publishEventTyped("start power", "program_started");
-    _cfg->saveRunState((uint8_t)Runmode::POWER_DIRECT,
-                       (uint8_t)Runmode::POWER_DIRECT,
-                       false, false);
+    _cfg->saveRunState(0, 0, false, false);
 }
 
 void CommandHandler::startPowerRun() {
     _cmdStartPower();
+}
+
+void CommandHandler::_cmdSetProgramRunning(bool running) {
+    if (running) {
+        _cmdStartPower();
+        return;
+    }
+
+    log_i("[CMD] program_running → false");
+    noteRemoteActivity(_ch[0], _ch[1], _tele);
+    profiles.stop(0, *_ch[0]);
+    profiles.stop(1, *_ch[1]);
+    for (int i = 0; i < 2; i++) {
+        ChannelState* ch = _ch[i];
+        if (!ch) continue;
+        ch->runmode = Runmode::POWER_DIRECT;
+        ch->paused = false;
+        ch->programRunning = false;
+        ch->finishEnd = false;
+        ch->finishEndJustSet = false;
+        ch->finishLatch = false;
+        ch->finishLatchJustSet = false;
+        ch->timerTriggered = false;
+        ch->timerExpired = false;
+        ch->timerFrozen = false;
+        ch->timerFrozenRemaining_s = 0;
+        ch->accelPhaseActive = false;
+        ch->accelPhaseJustEnded = false;
+        if (ch->relay_mode == RelayMode::ACC_SYNC) {
+            ch->relay_command = false;
+            ch->relay_state = false;
+        }
+    }
+    _tele->publishEventTyped("program manual", "program_manual");
+    _cfg->saveRunState((uint8_t)Runmode::POWER_DIRECT,
+                       (uint8_t)Runmode::POWER_DIRECT,
+                       false, false);
 }
 
 // ── _applyPowerParams ─────────────────────────────────────────────────────────
@@ -717,7 +762,7 @@ void CommandHandler::_cmdResume() {
 // ── _cmdReset ────────────────────────────────────────────────────────────────
 // Clear finish latch on all channels.  The run remains stopped (finishLatch was
 // set by output_control when dFSP was crossed, which forced all outputs off).
-// A separate {"start":"power"} is required to restart.
+// A separate {"program_running":true} is required to restart.
 void CommandHandler::_cmdReset() {
     log_i("[CMD] reset — clearing finish/end state");
     setMqttRemoteActiveInternal(false);

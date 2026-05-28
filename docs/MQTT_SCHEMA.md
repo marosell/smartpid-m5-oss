@@ -22,7 +22,7 @@ Retained. Published on MQTT connect and in response to `{"status": true}`.
   "SSID": "Chaos",
   "client": "10.0.1.60",
   "firmware": "proofpro",
-  "firmware_version": "0.1.0",
+  "firmware_version": "0.2.0",
   "schema_version": 1,
   "unit": "F",
   "remote_enabled": true,
@@ -48,7 +48,7 @@ Retained. Published on MQTT connect and in response to `{"status": true}`.
 - `auto_resume_enabled` reports the local controller Auto Resume setting.
   Proof should treat this as discoverable device behavior, but should still
   restore active Proof runs explicitly after reconnect/reboot by re-sending the
-  current program and `{"start":"power"}`. ProofPro does not expose a local
+  current program and `{"program_running":true}`. ProofPro does not expose a local
   `Resume Previous` main-menu shortcut; stale saved run state must not be used
   as the source of truth for an active Proof run.
 - `firmware`, `firmware_version`, and `schema_version` identify the schema
@@ -137,6 +137,7 @@ power mode. Current default publish cadence is 6 seconds.
   "relay_mode": "off",
   "remote_enabled": true,
   "remote_state": "RDY",
+  "program_running": true,
   "acc_elements_enabled": true,
   "finish_temp_source": "CH1",
   "ended": false,
@@ -179,6 +180,8 @@ Field notes:
   relay on the device, Proof should observe `relay_engaged=false` and should not
   re-engage automatically unless the operator/app explicitly chooses to resume.
 - `remote_enabled` and `remote_state` mirror retained status for live UI.
+- `program_running` is true when this channel is under ProofPro programmed
+  ACCEL/RUN/END logic and false when it is in manual/live power mode.
 - `finish_temp_source` reports the configured probe used for finish-by-temp.
 - `ended=true` is a device/program END state reflected on both channel payloads.
 - `latched=true` means outputs are latched safe/off until reset/start.
@@ -384,6 +387,8 @@ Request live output diagnostics:
 ```json
 {"status": true}
 {"heartbeat": true}
+{"program_running": true}
+{"program_running": false}
 {"start": "power"}
 {"stop": true}
 {"pause": true}
@@ -401,8 +406,8 @@ Remote gating:
   regardless of Remote.
 - `chirp` / `audio:"chirp"` is accepted regardless of Remote and program END
   state so Proof can test or play notifications from a safe/off condition.
-- `start`, output control, relay control, and program parameter writes require
-  Remote enabled.
+- `program_running`, `start`, output control, relay control, and program
+  parameter writes require Remote enabled.
 - Remote has two runtime states after it is enabled:
   - `RDY`: firmware can accept Proof commands.
   - `ON`: Proof has started an active remote session by sending heartbeat or a
@@ -410,7 +415,19 @@ Remote gating:
 - Proof sends `{"heartbeat": true}` every 10 seconds while actively controlling
   the device.
 - `{"start": "remote"}` is deprecated; Proof should use the explicit
-  `remote_enabled` / `remote_state` model and start runs with `{"start":"power"}`.
+  `remote_enabled` / `remote_state` model and start runs with `{"program_running":true}`.
+
+Program state commands:
+
+- `{"program_running": true}` starts the programmed ProofPro power run from the
+  current config. It is the preferred replacement for legacy
+  `{"start":"power"}`.
+- `{"program_running": false}` exits programmed ACCEL/RUN state and returns the
+  device to manual/live power control. It clears program timer/end-condition
+  state and program-managed AccElement relay authority, but it does not force
+  DC outputs to 0 and does not change retained program defaults.
+- `{"stop": true}` remains the separate safe/off shutdown command. It forces
+  DC outputs and relays off and clears program state.
 
 ### DC output commands
 

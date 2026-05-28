@@ -57,7 +57,7 @@ Expected status shape:
   "SSID": "Chaos",
   "client": "10.0.1.60",
   "firmware": "proofpro",
-  "firmware_version": "0.1.0",
+  "firmware_version": "0.2.0",
   "schema_version": 1,
   "unit": "F",
   "remote_enabled": true,
@@ -75,7 +75,7 @@ Enable Remote on the device, then send the power start command:
 
 ```bash
 mosquitto_pub -h <broker-ip> -u proof -P test123 \
-  -t 'smartpidM5/proofpro/791402d5ac0fe1/commands' -m '{"start":"power"}'
+  -t 'smartpidM5/proofpro/791402d5ac0fe1/commands' -m '{"program_running":true}'
 ```
 
 Power telemetry publishes on `power/CH1` and `power/CH2` at the configured

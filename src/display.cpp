@@ -53,10 +53,10 @@ static const int kSetupMenuCount = 6;
 
 // ── Info menu items (from spec §12) ──────────────────────────────────────
 static const char* const kInfoMenuItems[] = {
-    "SW Version", "SW Upgrade", "Serial Number",
+    "SW Version", "Serial Number",
     "WiFi Status", "IP Address", "MQTT Status", "Exit"
 };
-static const int kInfoMenuCount = 7;
+static const int kInfoMenuCount = 6;
 
 // ── WiFi/Logging menu items (from spec §10) ───────────────────────────────
 static const char* const kWifiMenuItems[] = {
@@ -266,6 +266,10 @@ static void clearPowerProgramState(ChannelState* ch, bool forceOutputsOff) {
     ch->timerFrozenRemaining_s = 0;
     ch->accelPhaseActive = false;
     ch->accelPhaseJustEnded = false;
+    if (ch->relay_mode == RelayMode::ACC_SYNC) {
+        ch->relay_state = false;
+        ch->relay_command = false;
+    }
     if (forceOutputsOff) {
         ch->power_pct = 0;
         ch->relay_state = false;
@@ -712,7 +716,7 @@ void DisplayManager::_drawHeader(const char* title) {
 
 // _drawNavFooter — standard footer for all navigable menu/list screens.
 void DisplayManager::_drawNavFooter() {
-    _drawFooter("\x1e Up", "Sel/Back", "Down \x1f");
+    _drawFooter("\x1e", "Sel/Back", "\x1f");
 }
 
 // _drawFooter — fills the 20px COL_ACCENT footer bar and draws button labels.
@@ -1570,6 +1574,7 @@ void DisplayManager::_handlePowerStatus(UIEvent ev) {
                 if ((_ch1 && _ch1->programRunning) || (_ch2 && _ch2->programRunning)) {
                     clearPowerProgramState(_ch1, false);
                     clearPowerProgramState(_ch2, false);
+                    if (_cfg) _cfg->saveRunState(0, 0, false, false);
                     _applyPowerOutputState();
                 } else {
                     startPowerProgramFromTiles(_ch1, _ch2);
@@ -1880,7 +1885,7 @@ void DisplayManager::_handleSetMaxPower(UIEvent ev) {
 
 void DisplayManager::_drawListSelectDialog() {
     _drawHeader(_listTitle);
-    _drawFooter("\x1e up", "OK", "cancel");
+    _drawFooter("\x1e", "OK/Back", "\x1f");
     _drawMenuList(_listOptions, nullptr, _listCount, _listSel, _menuScroll);
 }
 
@@ -2012,20 +2017,19 @@ void DisplayManager::_handleInfoSingle(UIEvent ev) {
                 // Populate info value and go to single-value screen
                 strlcpy(_editLabel, kInfoMenuItems[_menuSel], sizeof(_editLabel));
                 switch (_menuSel) {
-                    case 0: strlcpy(_errorMsg, "0.2.3", sizeof(_errorMsg)); break;
-                    case 1: strlcpy(_errorMsg, "OTA N/A", sizeof(_errorMsg)); break;
-                    case 2:
+                    case 0: strlcpy(_errorMsg, "0.2.0", sizeof(_errorMsg)); break;
+                    case 1:
                         if (_cfg) strlcpy(_errorMsg, _cfg->serial_hex, sizeof(_errorMsg));
                         else strlcpy(_errorMsg, "N/A", sizeof(_errorMsg));
                         break;
-                    case 3: strlcpy(_errorMsg, (WiFi.status() == WL_CONNECTED) ? "OK" : "FAIL", sizeof(_errorMsg)); break;
-                    case 4:
+                    case 2: strlcpy(_errorMsg, (WiFi.status() == WL_CONNECTED) ? "OK" : "FAIL", sizeof(_errorMsg)); break;
+                    case 3:
                         if (WiFi.status() == WL_CONNECTED)
                             strlcpy(_errorMsg, WiFi.localIP().toString().c_str(), sizeof(_errorMsg));
                         else strlcpy(_errorMsg, "N/A", sizeof(_errorMsg));
                         break;
-                    case 5: strlcpy(_errorMsg, (_mqtt && _mqtt->connected()) ? "OK" : "FAIL", sizeof(_errorMsg)); break;
-                    case 6: _goTo(UIScreen::MAIN_MENU); return;  // Exit — resets stack
+                    case 4: strlcpy(_errorMsg, (_mqtt && _mqtt->connected()) ? "OK" : "FAIL", sizeof(_errorMsg)); break;
+                    case 5: _goTo(UIScreen::MAIN_MENU); return;  // Exit — resets stack
                 }
                 _navPush(); _goTo(UIScreen::INFO_SINGLE_VALUE);
                 break;
@@ -2169,13 +2173,13 @@ void DisplayManager::notifyOtaError(const char* errMsg) {
 
 // ── Probe type option strings (spec §8.1, IMG_2560) ────────────────────────
 static const char* const kProbeTypeOpts[] = {
-    "OFF", "DS18B20", "NTC", "PT100 2 Wires", "PT100 3 Wires", "K-Type"
+    "Off", "DS18B20", "NTC", "PT100 2 Wires", "PT100 3 Wires", "K-Type"
 };
 static const int kProbeTypeCount = 6;
 
 static const char* probeShort(ProbeType t) {
     switch (t) {
-        case ProbeType::OFF:      return "OFF";
+        case ProbeType::OFF:      return "Off";
         case ProbeType::DS18B20:  return "DS18B20";
         case ProbeType::NTC:      return "NTC";
         case ProbeType::PT100_2W: return "PT100 2W";
@@ -2241,6 +2245,15 @@ static const char* const kDcModeOpts[] = {
     "Off", "Element", "Auxiliary"
 };
 static const int kDcModeCount = 3;
+
+static const char* dcOutputModeDisplayStr(DcOutputMode mode) {
+    switch (mode) {
+        case DcOutputMode::OFF:       return "Off";
+        case DcOutputMode::ELEMENT:   return "Element";
+        case DcOutputMode::AUXILIARY: return "Auxiliary";
+    }
+    return "Off";
+}
 
 // ── Relay mode option strings (POWER_DIRECT setup) ────────────────────────
 static const char* const kRelayModeOpts[] = {
@@ -2339,8 +2352,8 @@ void DisplayManager::_drawSetupProcess() {
     uint8_t  mp1 = _ch1 ? _ch1->maxpwm   : 100;
     uint8_t  mp2 = _ch2 ? _ch2->maxpwm   : 100;
 
-    strlcpy(vbufs[0], dcOutputModeStr(normalizeDcOutputMode(c.pwr_dc1_mode)), sizeof(vbufs[0])); vals[0] = vbufs[0];
-    strlcpy(vbufs[1], dcOutputModeStr(normalizeDcOutputMode(c.pwr_dc2_mode)), sizeof(vbufs[1])); vals[1] = vbufs[1];
+    strlcpy(vbufs[0], dcOutputModeDisplayStr(normalizeDcOutputMode(c.pwr_dc1_mode)), sizeof(vbufs[0])); vals[0] = vbufs[0];
+    strlcpy(vbufs[1], dcOutputModeDisplayStr(normalizeDcOutputMode(c.pwr_dc2_mode)), sizeof(vbufs[1])); vals[1] = vbufs[1];
     snprintf(vbufs[2], sizeof(vbufs[2]), "%u%%", mp1); vals[2] = vbufs[2];
     snprintf(vbufs[3], sizeof(vbufs[3]), "%u%%", mp2); vals[3] = vbufs[3];
     snprintf(vbufs[4], sizeof(vbufs[4]), "%lu s", (unsigned long)c.pwr_wdog_s);

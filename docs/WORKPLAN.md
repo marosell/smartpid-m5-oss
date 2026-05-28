@@ -120,7 +120,11 @@ configured as `off`, `manual_on_off`, `acc_element`, `remote_other`, or `cycle`.
   commands such as reset/status/chirp from END.
 - Controller reboot publishes `controller_rebooted` with `reset_reason`,
   `auto_resume_enabled`, and `auto_resume_pending`; Proof should restore active
-  Proof runs by re-sending the current program and `{"start":"power"}`.
+  Proof runs by re-sending the current program and `{"program_running":true}`.
+- Program state is binary over MQTT: `{"program_running":true}` starts ACCEL/RUN
+  program control, while `{"program_running":false}` returns to manual/live
+  control without safe/off shutdown. `{"stop":true}` remains the separate
+  safe/off command.
 - Removed the local `<<Resume Previous>>` main-menu shortcut. Reboot/run
   restoration is now treated as a Proof-owned flow driven by reboot events,
   retained config, and explicit start/runtime commands.

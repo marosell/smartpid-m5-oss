@@ -49,7 +49,7 @@ Start programmed power run:
 ```bash
 mosquitto_pub -h 10.0.1.203 -u proof -P proof \
   -t 'smartpidM5/proofpro/791402d5ac0fe1/commands' \
-  -m '{"start":"power"}'
+  -m '{"program_running":true}'
 ```
 
 Stop run:
@@ -132,7 +132,7 @@ mosquitto_pub -h 10.0.1.203 -u proof -P proof \
 ```bash
 mosquitto_pub -h 10.0.1.203 -u proof -P proof \
   -t 'smartpidM5/proofpro/791402d5ac0fe1/commands' \
-  -m '{"start":"power"}'
+  -m '{"program_running":true}'
 ```
 
 Run C, Timer END:
@@ -146,7 +146,7 @@ mosquitto_pub -h 10.0.1.203 -u proof -P proof \
 ```bash
 mosquitto_pub -h 10.0.1.203 -u proof -P proof \
   -t 'smartpidM5/proofpro/791402d5ac0fe1/commands' \
-  -m '{"start":"power"}'
+  -m '{"program_running":true}'
 ```
 
 Run D, Finish temp from CH1:
@@ -160,7 +160,7 @@ mosquitto_pub -h 10.0.1.203 -u proof -P proof \
 ```bash
 mosquitto_pub -h 10.0.1.203 -u proof -P proof \
   -t 'smartpidM5/proofpro/791402d5ac0fe1/commands' \
-  -m '{"start":"power"}'
+  -m '{"program_running":true}'
 ```
 
 Run E, Finish temp from CH2:
@@ -174,7 +174,7 @@ mosquitto_pub -h 10.0.1.203 -u proof -P proof \
 ```bash
 mosquitto_pub -h 10.0.1.203 -u proof -P proof \
   -t 'smartpidM5/proofpro/791402d5ac0fe1/commands' \
-  -m '{"start":"power"}'
+  -m '{"program_running":true}'
 ```
 
 Cycle relay test, CH1:
@@ -397,7 +397,7 @@ Pass criteria:
 - [ ] Confirm `events/standard` publishes `controller_rebooted` with `reset_reason`.
 - [ ] Confirm Proof detects the reboot/reconnect.
 - [ ] Confirm Proof re-sends the active program payload.
-- [ ] Confirm Proof re-sends `{"start":"power"}` and intended power/relay state.
+- [ ] Confirm Proof re-sends `{"program_running":true}` and intended power/relay state.
 - [ ] Confirm the controller returns to the intended active run state.
 
 Pass criteria:

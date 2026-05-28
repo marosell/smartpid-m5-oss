@@ -25,7 +25,7 @@ Final retained status shape:
   "SSID": "Chaos",
   "client": "10.0.1.60",
   "firmware": "proofpro",
-  "firmware_version": "0.1.0",
+  "firmware_version": "0.2.0",
   "schema_version": 1,
   "unit": "F",
   "remote_enabled": true,
@@ -45,7 +45,7 @@ Proof changes:
 - Read `remote_enabled` and `remote_state` for readiness/session display.
 - Read `auto_resume_enabled`, but do not rely on firmware Auto Resume alone.
   After a ProofPro reboot during an active Proof run, Proof should re-publish
-  the active program and issue `{"start":"power"}` plus intended output/relay
+  the active program and issue `{"program_running":true}` plus intended output/relay
   state.
 - Do not expect or depend on a local ProofPro `Resume Previous` main-menu
   action. The firmware no longer exposes that shortcut because it could restart
@@ -419,7 +419,13 @@ Proof changes:
 - Send heartbeat every 10 seconds while active Remote control is ongoing.
 - Expect watchdog armed/active only in Remote ON state.
 - Treat `{"start":"remote"}` as deprecated and start runs with
-  `{"start":"power"}`.
+  `{"program_running":true}`.
+- Treat `{"start":"power"}` as a legacy compatibility alias. New Proof code
+  should use `{"program_running":true}`.
+- Use `{"program_running":false}` to exit ACCEL/RUN program state and return
+  ProofPro to manual/live control without forcing safe/off shutdown and without
+  changing retained program defaults.
+- Keep `{"stop":true}` for full safe/off shutdown only.
 
 ## 9. Events still channel-scoped for now
 
@@ -484,7 +490,7 @@ authoritative device-level END event.
 - Use only device-level program command keys.
 - Add support for DC output mode `auxiliary`.
 - Restore active Proof runs after `controller_rebooted` / reconnect by
-  re-sending current program and `{"start":"power"}`.
+  re-sending current program and `{"program_running":true}`.
 - Add ProofPro timezone settings and send flat `timezone_label`,
   `timezone_posix`, and optional `clock_24h` command keys.
 - Remove `finish_time` as a distinct app concept.

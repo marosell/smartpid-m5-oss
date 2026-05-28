@@ -95,6 +95,7 @@ void TelemetryPublisher::_publishChannel(const char* chName, const ChannelState&
         doc["relay_mode"] = relayModeStr(ch.relay_mode);
         doc["remote_enabled"] = mqttRemoteEnabled();
         doc["remote_state"] = !mqttRemoteEnabled() ? "OFF" : (mqttRemoteActive() ? "ON" : "RDY");
+        doc["program_running"] = ch.programRunning;
         doc["acc_elements_enabled"] = accElementsEnabled();
         doc["finish_temp_source"] = (_cfg->pwr_dfsp_source == 2) ? "CH2" : "CH1";
         doc["ended"] = ch.finishEnd;
