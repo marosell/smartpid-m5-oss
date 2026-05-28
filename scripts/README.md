@@ -15,3 +15,17 @@ python3 scripts/generate_oem_migration_package.py
 
 The script writes to `build/migration/oem-layout/`. It does not talk to
 hardware and it does not enable firmware-side bootloader writes.
+
+The package includes a generated 8 KB `otadata` image for the selected OEM
+layout boot slot. By default that is ProofPro in OEM `app0`; pass
+`--boot-app oem` to generate `otadata` that selects OEM SmartPID in `app1`.
+The manifest remains `safe_to_flash: false` until the guarded on-device writer
+and sequencing rules are implemented.
+
+Inspect OEM or generated OTA data:
+
+```bash
+python3 scripts/otadata_tool.py inspect firmware-oem/extracted/oem_otadata_0xe000_0x2000.bin
+python3 scripts/otadata_tool.py inspect firmware-oem/smartpid_m5pro_firmware_v2.8.0.bin --offset 0xe000
+python3 scripts/otadata_tool.py inspect build/migration/oem-layout/otadata_boot_proofpro_app0.bin
+```

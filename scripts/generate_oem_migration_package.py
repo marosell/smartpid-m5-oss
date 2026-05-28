@@ -16,6 +16,8 @@ import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
+from otadata_tool import make_otadata
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -61,11 +63,18 @@ def require_file(path: Path, label: str) -> None:
         raise SystemExit(f"Missing {label}: {path}")
 
 
+def display_path(path: Path) -> str:
+    try:
+        return str(path.relative_to(ROOT))
+    except ValueError:
+        return str(path)
+
+
 def artifact(path: Path, offset: int, role: str, max_size: int | None = None) -> dict:
     size = path.stat().st_size
     return {
         "role": role,
-        "path": str(path.relative_to(ROOT)),
+        "path": display_path(path),
         "offset": offset,
         "offset_hex": f"0x{offset:x}",
         "size": size,
@@ -90,7 +99,7 @@ def main() -> int:
         "--boot-app",
         choices=("proofpro", "oem"),
         default="proofpro",
-        help="Which app the generated otadata stub should document as boot target.",
+        help="Which app the generated OEM-layout otadata should boot.",
     )
     args = parser.parse_args()
 
@@ -113,9 +122,10 @@ def main() -> int:
     if not bootloader or bootloader[0] != 0xE9:
         raise SystemExit("Extracted OEM bootloader does not start with ESP image magic 0xE9")
 
+    boot_slot = "app0" if args.boot_app == "proofpro" else "app1"
     bootloader_out = out_dir / "oem_bootloader.bin"
     partitions_out = out_dir / "oem_partitions.bin"
-    otadata_out = out_dir / "otadata_boot_proofpro_app0.bin"
+    otadata_out = out_dir / f"otadata_boot_{args.boot_app}_{boot_slot}.bin"
     proofpro_out = out_dir / "proofpro_oem_layout_app0.bin"
     oem_app_out = out_dir / "smartpid_oem_app1.bin"
 
@@ -124,21 +134,12 @@ def main() -> int:
     copy_file(PROOFPRO_OEM_APP, proofpro_out)
     copy_file(OEM_APP, oem_app_out)
 
-    # Keep this intentionally inert for now. The firmware-side conversion writer
-    # should generate or verify real OTA data before enabling writes.
-    otadata_note = {
-        "note": "placeholder only; do not flash as otadata",
-        "boot_app": args.boot_app,
-        "app0": "proofpro",
-        "app1": "smartpid_oem",
-        "created_at": datetime.now(timezone.utc).isoformat(),
-    }
-    write_bytes(otadata_out, json.dumps(otadata_note, indent=2).encode("ascii") + b"\n")
+    write_bytes(otadata_out, make_otadata(boot_slot))
 
     artifacts = [
         artifact(bootloader_out, OEM_BOOTLOADER_OFFSET, "bootloader", OEM_BOOTLOADER_WINDOW_SIZE),
         artifact(partitions_out, OEM_PARTITION_TABLE_OFFSET, "partition_table", OEM_PARTITION_TABLE_SIZE),
-        artifact(otadata_out, OTA_DATA_OFFSET, "otadata_placeholder", OTA_DATA_SIZE),
+        artifact(otadata_out, OTA_DATA_OFFSET, f"otadata_boot_{boot_slot}", OTA_DATA_SIZE),
         artifact(proofpro_out, OEM_APP0_OFFSET, "proofpro_app0", OEM_APP_SLOT_SIZE),
         artifact(oem_app_out, OEM_APP1_OFFSET, "smartpid_oem_app1", OEM_APP_SLOT_SIZE),
     ]
@@ -149,8 +150,8 @@ def main() -> int:
             errors.append(f"{item['role']} does not fit at {item['offset_hex']}")
     if partitions_out.stat().st_size != OEM_PARTITION_TABLE_SIZE:
         errors.append("OEM partition table backup is not exactly 0x0c00 bytes")
-    if otadata_out.stat().st_size > OTA_DATA_SIZE:
-        errors.append("otadata placeholder exceeds 0x2000 bytes")
+    if otadata_out.stat().st_size != OTA_DATA_SIZE:
+        errors.append("generated otadata is not exactly 0x2000 bytes")
 
     manifest = {
         "schema": "proofpro_oem_layout_migration_manifest",
@@ -181,11 +182,12 @@ def main() -> int:
             },
         },
         "boot_app": args.boot_app,
+        "boot_slot": boot_slot,
         "artifacts": artifacts,
         "safe_to_flash": False,
         "safety_note": (
-            "Generated package is for offline verification only. Do not flash the "
-            "otadata placeholder. Firmware conversion writes remain disabled."
+            "Generated package is for offline verification only. Firmware conversion "
+            "writes remain disabled until the full on-device sequencing is implemented."
         ),
         "errors": errors,
     }
@@ -193,7 +195,7 @@ def main() -> int:
     manifest_out = out_dir / "manifest.json"
     manifest_out.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
 
-    print(f"Wrote {manifest_out.relative_to(ROOT)}")
+    print(f"Wrote {display_path(manifest_out)}")
     for item in artifacts:
         fit = "fits" if item["fits"] else "DOES NOT FIT"
         print(

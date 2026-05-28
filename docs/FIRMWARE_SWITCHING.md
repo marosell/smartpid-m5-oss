@@ -327,6 +327,20 @@ The migration preflight is intentionally read-only. It never writes bootloader,
 partition-table, otadata, or app bytes. The actual bootloader/layout conversion
 path is not enabled in firmware yet.
 
+`scripts/otadata_tool.py` can inspect an 8 KB ESP32 OTA data image and generate
+an OEM-layout OTA data image for either slot. The local OEM dump currently
+decodes as `ota_seq = 1`, CRC-valid, state `undefined`, which selects OEM
+`app0` in the original two-slot layout. For the proposed converted layout:
+
+```text
+ota_seq = 1 -> app0 -> ProofPro OEM-layout image
+ota_seq = 2 -> app1 -> OEM SmartPID image
+```
+
+The package generator now emits a real 8 KB `otadata` artifact for the selected
+boot app, but the manifest remains `safe_to_flash: false` because firmware-side
+conversion writes are still disabled.
+
 To prepare for a future conversion, ProofPro can be told to reboot into the high
 current-layout `app1` slot:
 
