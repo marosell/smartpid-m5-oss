@@ -387,6 +387,20 @@ pio run -e m5stack-core-esp32-16M-installer-apps
 
 Do not use that environment for normal ProofPro releases.
 
+A second special installer build may be compiled with
+`PROOFPRO_ENABLE_OEM_LAYOUT_METADATA_INSTALL`. That build enables only
+`write_stage: "metadata"`: after a full validation pass, it opens the package
+again and writes the OEM-layout partition table at `0x8000`, bootloader at
+`0x1000`, and otadata at `0xe000`, verifying each artifact by readback SHA-256.
+Use this only after the app-stage write/readback has succeeded. `write_stage:
+"all"` remains disabled.
+
+Build the metadata-stage installer with:
+
+```bash
+pio run -e m5stack-core-esp32-16M-installer-metadata
+```
+
 Current firmware validates the confirmation string and package fields, requires
 the device to be running from current-layout high `app1`, downloads the package,
 verifies the outer package SHA-256, parses the manifest, and verifies every

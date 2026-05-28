@@ -523,8 +523,16 @@ If validation fails first, the command error reason is `download_failed` or
 A special installer build may enable `write_stage: "apps"` with the compile-time
 flag `PROOFPRO_ENABLE_OEM_LAYOUT_INSTALL`. That build writes and readback-verifies
 only `proofpro_app0` and `smartpid_oem_app1` after a full package validation
-pass. It still rejects `metadata` and `all`, and production firmware rejects all
-real write stages.
+pass.
+
+A separate special installer build may enable `write_stage: "metadata"` with the
+compile-time flag `PROOFPRO_ENABLE_OEM_LAYOUT_METADATA_INSTALL`. That build
+writes and readback-verifies only `partition_table`, `bootloader`, and
+`otadata_boot_app0` after a full package validation pass. Use it only after the
+app-stage write/readback has succeeded.
+
+`write_stage: "all"` remains disabled. Production firmware rejects all real
+write stages.
 
 Possible command errors from this command include:
 

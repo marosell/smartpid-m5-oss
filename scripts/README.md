@@ -44,6 +44,13 @@ The current guarded installer code supports a compile-time-only `apps` stage for
 future testing. It is disabled in normal builds and does not write metadata.
 Build it explicitly with `pio run -e m5stack-core-esp32-16M-installer-apps`.
 
+The metadata stage is a separate compile-time-only build. It is disabled in
+normal builds and should only be used after the app-stage readback succeeds:
+
+```bash
+pio run -e m5stack-core-esp32-16M-installer-metadata
+```
+
 Inspect OEM or generated OTA data:
 
 ```bash

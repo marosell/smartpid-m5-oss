@@ -147,7 +147,7 @@ static MigrationInstallResult readHashAndMaybeWrite(Stream& stream,
         mbedtls_sha256_update(&packageCtx, buf, chunk);
         mbedtls_sha256_update(&artifactCtx, buf, chunk);
 
-#if defined(PROOFPRO_ENABLE_OEM_LAYOUT_INSTALL)
+#if defined(PROOFPRO_ENABLE_OEM_LAYOUT_INSTALL) || defined(PROOFPRO_ENABLE_OEM_LAYOUT_METADATA_INSTALL)
         if (writeArtifact) {
             if (esp_flash_write(nullptr, buf, artifact.offset + artifactOffset, chunk) != ESP_OK) {
                 return MigrationInstallResult::FLASH_WRITE_FAILED;
@@ -196,7 +196,13 @@ static bool isAppArtifact(const char* role) {
            strcmp(role, "smartpid_oem_app1") == 0;
 }
 
-#if defined(PROOFPRO_ENABLE_OEM_LAYOUT_INSTALL)
+static bool isMetadataArtifact(const char* role) {
+    return strcmp(role, "partition_table") == 0 ||
+           strcmp(role, "bootloader") == 0 ||
+           strcmp(role, "otadata_boot_app0") == 0;
+}
+
+#if defined(PROOFPRO_ENABLE_OEM_LAYOUT_INSTALL) || defined(PROOFPRO_ENABLE_OEM_LAYOUT_METADATA_INSTALL)
 static bool eraseFlashRegion(uint32_t offset, uint32_t size) {
     constexpr uint32_t sectorSize = 0x1000;
     const uint32_t eraseSize = (size + sectorSize - 1) & ~(sectorSize - 1);
@@ -231,13 +237,20 @@ static bool hashFlashRegion(uint32_t offset, uint32_t size, char outHex[65]) {
 
 static MigrationInstallResult validatePackageStream(const MigrationInstallRequest& request,
                                                     TelemetryPublisher* telemetry,
-                                                    bool enableAppWrites) {
+                                                    bool enableAppWrites,
+                                                    bool enableMetadataWrites) {
     const char* writeStage = requestedWriteStage(request);
 #if defined(PROOFPRO_ENABLE_OEM_LAYOUT_INSTALL)
     const bool writeApps = enableAppWrites && strcmp(writeStage, "apps") == 0;
 #else
     (void)enableAppWrites;
     const bool writeApps = false;
+#endif
+#if defined(PROOFPRO_ENABLE_OEM_LAYOUT_METADATA_INSTALL)
+    const bool writeMetadata = enableMetadataWrites && strcmp(writeStage, "metadata") == 0;
+#else
+    (void)enableMetadataWrites;
+    const bool writeMetadata = false;
 #endif
 
     HTTPClient http;
@@ -412,8 +425,9 @@ static MigrationInstallResult validatePackageStream(const MigrationInstallReques
             return MigrationInstallResult::PACKAGE_INVALID;
         }
 
-        const bool writeArtifact = writeApps && isAppArtifact(role);
-#if defined(PROOFPRO_ENABLE_OEM_LAYOUT_INSTALL)
+        const bool writeArtifact = (writeApps && isAppArtifact(role)) ||
+                                   (writeMetadata && isMetadataArtifact(role));
+#if defined(PROOFPRO_ENABLE_OEM_LAYOUT_INSTALL) || defined(PROOFPRO_ENABLE_OEM_LAYOUT_METADATA_INSTALL)
         if (writeArtifact) {
             if (telemetry) {
                 telemetry->publishMigrationInstallStatus(role,
@@ -481,7 +495,7 @@ static MigrationInstallResult validatePackageStream(const MigrationInstallReques
             return MigrationInstallResult::PACKAGE_INVALID;
         }
 
-#if defined(PROOFPRO_ENABLE_OEM_LAYOUT_INSTALL)
+#if defined(PROOFPRO_ENABLE_OEM_LAYOUT_INSTALL) || defined(PROOFPRO_ENABLE_OEM_LAYOUT_METADATA_INSTALL)
         if (writeArtifact) {
             char flashHex[65] = {};
             if (!hashFlashRegion(expected.offset, size, flashHex)) {
@@ -622,7 +636,7 @@ MigrationInstallResult migrationInstallOemLayout(const MigrationInstallRequest& 
 #ifdef DESKTOP_BUILD
     return MigrationInstallResult::UNSAFE_STATE;
 #else
-    MigrationInstallResult validation = validatePackageStream(request, telemetry, false);
+    MigrationInstallResult validation = validatePackageStream(request, telemetry, false, false);
     if (validation != MigrationInstallResult::ACCEPTED) return validation;
 
     if (strcmp(writeStage, "validate_only") == 0) {
@@ -641,12 +655,30 @@ MigrationInstallResult migrationInstallOemLayout(const MigrationInstallRequest& 
 
 #if defined(PROOFPRO_ENABLE_OEM_LAYOUT_INSTALL)
     if (strcmp(writeStage, "apps") == 0) {
-        MigrationInstallResult writeResult = validatePackageStream(request, telemetry, true);
+        MigrationInstallResult writeResult = validatePackageStream(request, telemetry, true, false);
         if (writeResult != MigrationInstallResult::ACCEPTED) return writeResult;
         if (telemetry) {
             telemetry->publishMigrationInstallStatus("writer",
                                                      "verified",
                                                      "apps_written",
+                                                     request.packageUrl,
+                                                     request.packageSha256,
+                                                     0,
+                                                     0,
+                                                     writeStage);
+        }
+        return MigrationInstallResult::ACCEPTED;
+    }
+#endif
+
+#if defined(PROOFPRO_ENABLE_OEM_LAYOUT_METADATA_INSTALL)
+    if (strcmp(writeStage, "metadata") == 0) {
+        MigrationInstallResult writeResult = validatePackageStream(request, telemetry, false, true);
+        if (writeResult != MigrationInstallResult::ACCEPTED) return writeResult;
+        if (telemetry) {
+            telemetry->publishMigrationInstallStatus("writer",
+                                                     "verified",
+                                                     "metadata_written",
                                                      request.packageUrl,
                                                      request.packageSha256,
                                                      0,
