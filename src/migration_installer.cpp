@@ -121,6 +121,7 @@ static bool readAndHash(Stream& stream,
                                                      bytesTotal);
             lastEventMs = millis();
         }
+        delay(1);
     }
     return true;
 }
@@ -171,6 +172,7 @@ static MigrationInstallResult readHashAndMaybeWrite(Stream& stream,
                                                      requestedWriteStage(request));
             lastEventMs = millis();
         }
+        delay(1);
     }
 
     return MigrationInstallResult::ACCEPTED;
@@ -206,7 +208,13 @@ static bool isMetadataArtifact(const char* role) {
 static bool eraseFlashRegion(uint32_t offset, uint32_t size) {
     constexpr uint32_t sectorSize = 0x1000;
     const uint32_t eraseSize = (size + sectorSize - 1) & ~(sectorSize - 1);
-    return esp_flash_erase_region(nullptr, offset, eraseSize) == ESP_OK;
+    for (uint32_t done = 0; done < eraseSize; done += sectorSize) {
+        if (esp_flash_erase_region(nullptr, offset + done, sectorSize) != ESP_OK) {
+            return false;
+        }
+        delay(1);
+    }
+    return true;
 }
 
 static bool hashFlashRegion(uint32_t offset, uint32_t size, char outHex[65]) {
@@ -225,6 +233,7 @@ static bool hashFlashRegion(uint32_t offset, uint32_t size, char outHex[65]) {
         }
         mbedtls_sha256_update(&ctx, buf, chunk);
         done += chunk;
+        delay(1);
     }
 
     uint8_t digest[32] = {};
@@ -364,6 +373,7 @@ static MigrationInstallResult validatePackageStream(const MigrationInstallReques
                                                      bytesTotal);
             lastManifestEventMs = millis();
         }
+        delay(1);
     }
     manifest[manifestLen] = '\0';
 

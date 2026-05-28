@@ -17,13 +17,13 @@ build/migration/oem-layout/proofpro_oem_layout_migration.ppmig
 Package SHA-256:
 
 ```text
-e7e4c960f5c7010e9eed7f07a9a22a54184db8c5084952c0cf8c712fc73b4bf3
+88474ce279c5778014569749304a7d14056f5a858ae28ff0e84e28619eba3b65
 ```
 
 Artifacts:
 
 ```text
-proofpro_app0       @ 0x10000   1628208 bytes
+proofpro_app0       @ 0x10000   1628624 bytes
 smartpid_oem_app1  @ 0x200000  2031616 bytes
 partition_table    @ 0x8000       3072 bytes
 bootloader         @ 0x1000      17104 bytes
@@ -82,7 +82,7 @@ With normal firmware running, validate package download and hashes:
 ```bash
 mosquitto_pub -h 10.0.1.203 -u proof -P proof \
   -t 'smartpidM5/proofpro/{topic_id}/commands' \
-  -m '{"migration":"install_oem_bootloader_layout","confirm":"YES_INSTALL_OEM_LAYOUT","write_stage":"validate_only","package_url":"http://10.0.1.203:8080/proofpro_oem_layout_migration.ppmig","package_sha256":"e7e4c960f5c7010e9eed7f07a9a22a54184db8c5084952c0cf8c712fc73b4bf3"}'
+  -m '{"migration":"install_oem_bootloader_layout","confirm":"YES_INSTALL_OEM_LAYOUT","write_stage":"validate_only","package_url":"http://10.0.1.203:8080/proofpro_oem_layout_migration.ppmig","package_sha256":"88474ce279c5778014569749304a7d14056f5a858ae28ff0e84e28619eba3b65"}'
 ```
 
 Expected result:
@@ -108,7 +108,7 @@ Then write and readback-verify only the app regions:
 ```bash
 mosquitto_pub -h 10.0.1.203 -u proof -P proof \
   -t 'smartpidM5/proofpro/{topic_id}/commands' \
-  -m '{"migration":"install_oem_bootloader_layout","confirm":"YES_INSTALL_OEM_LAYOUT_APPS","write_stage":"apps","package_url":"http://10.0.1.203:8080/proofpro_oem_layout_migration.ppmig","package_sha256":"e7e4c960f5c7010e9eed7f07a9a22a54184db8c5084952c0cf8c712fc73b4bf3"}'
+  -m '{"migration":"install_oem_bootloader_layout","confirm":"YES_INSTALL_OEM_LAYOUT_APPS","write_stage":"apps","package_url":"http://10.0.1.203:8080/proofpro_oem_layout_migration.ppmig","package_sha256":"88474ce279c5778014569749304a7d14056f5a858ae28ff0e84e28619eba3b65"}'
 ```
 
 Expected result:
@@ -138,7 +138,7 @@ Then write and readback-verify boot metadata:
 ```bash
 mosquitto_pub -h 10.0.1.203 -u proof -P proof \
   -t 'smartpidM5/proofpro/{topic_id}/commands' \
-  -m '{"migration":"install_oem_bootloader_layout","confirm":"YES_INSTALL_OEM_LAYOUT_METADATA","write_stage":"metadata","package_url":"http://10.0.1.203:8080/proofpro_oem_layout_migration.ppmig","package_sha256":"e7e4c960f5c7010e9eed7f07a9a22a54184db8c5084952c0cf8c712fc73b4bf3"}'
+  -m '{"migration":"install_oem_bootloader_layout","confirm":"YES_INSTALL_OEM_LAYOUT_METADATA","write_stage":"metadata","package_url":"http://10.0.1.203:8080/proofpro_oem_layout_migration.ppmig","package_sha256":"88474ce279c5778014569749304a7d14056f5a858ae28ff0e84e28619eba3b65"}'
 ```
 
 Expected result:
