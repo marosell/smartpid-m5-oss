@@ -32,6 +32,18 @@ static bool validPackageUrl(const char* value) {
     return strncmp(value, "http://", 7) == 0;
 }
 
+static const char* requestedWriteStage(const MigrationInstallRequest& request) {
+    return (request.writeStage && request.writeStage[0] != '\0') ? request.writeStage : "validate_only";
+}
+
+static bool validWriteStage(const char* value) {
+    return value &&
+           (strcmp(value, "validate_only") == 0 ||
+            strcmp(value, "apps") == 0 ||
+            strcmp(value, "metadata") == 0 ||
+            strcmp(value, "all") == 0);
+}
+
 static bool runningFromCurrentHighApp1() {
 #ifdef DESKTOP_BUILD
     return false;
@@ -399,6 +411,17 @@ MigrationInstallResult migrationInstallOemLayout(const MigrationInstallRequest& 
                                                      request.packageUrl,
                                                      request.packageSha256);
         }
+        return MigrationInstallResult::INVALID_WRITE_STAGE;
+    }
+    const char* writeStage = requestedWriteStage(request);
+    if (!validWriteStage(writeStage)) {
+        if (telemetry) {
+            telemetry->publishMigrationInstallStatus("validate_request",
+                                                     "rejected",
+                                                     "invalid_write_stage",
+                                                     request.packageUrl,
+                                                     request.packageSha256);
+        }
         return MigrationInstallResult::INVALID_REQUEST;
     }
     if (!runningFromCurrentHighApp1()) {
@@ -418,12 +441,29 @@ MigrationInstallResult migrationInstallOemLayout(const MigrationInstallRequest& 
     MigrationInstallResult validation = validatePackageStream(request, telemetry);
     if (validation != MigrationInstallResult::ACCEPTED) return validation;
 
+    if (strcmp(writeStage, "validate_only") == 0) {
+        if (telemetry) {
+            telemetry->publishMigrationInstallStatus("writer",
+                                                     "validated",
+                                                     "validate_only",
+                                                     request.packageUrl,
+                                                     request.packageSha256,
+                                                     0,
+                                                     0,
+                                                     writeStage);
+        }
+        return MigrationInstallResult::ACCEPTED;
+    }
+
     if (telemetry) {
         telemetry->publishMigrationInstallStatus("writer",
                                                  "rejected",
                                                  "writes_not_enabled",
                                                  request.packageUrl,
-                                                 request.packageSha256);
+                                                 request.packageSha256,
+                                                 0,
+                                                 0,
+                                                 writeStage);
     }
     return MigrationInstallResult::WRITES_DISABLED;
 #endif

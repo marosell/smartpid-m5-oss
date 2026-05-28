@@ -64,7 +64,8 @@ public:
                                        const char* packageUrl = nullptr,
                                        const char* packageSha256 = nullptr,
                                        uint32_t bytesDone = 0,
-                                       uint32_t bytesTotal = 0);
+                                       uint32_t bytesTotal = 0,
+                                       const char* writeStage = nullptr);
 
     // Publish an event to events/advanced immediately.
     // Used for profile sequencer events: "profile", "ramp N", "soak N".

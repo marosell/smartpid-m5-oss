@@ -109,7 +109,8 @@ private:
     void _cmdMigrationPreflight(uint32_t proofproAppSize, uint32_t oemAppSize);
     void _cmdMigrationInstallOemLayout(const char* confirm,
                                        const char* packageUrl,
-                                       const char* packageSha256);
+                                       const char* packageSha256,
+                                       const char* writeStage);
     void _cmdBootHighApp1(const char* confirm);
 };
 

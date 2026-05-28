@@ -35,6 +35,11 @@ layout boot slot. By default that is ProofPro in OEM `app0`; pass
 The manifest remains `safe_to_flash: false` until the guarded on-device writer
 and sequencing rules are implemented.
 
+Current firmware can download and verify this package with
+`write_stage: "validate_only"`. Real stages (`apps`, `metadata`, `all`) are
+reserved and rejected unless a future installer build explicitly enables
+destructive flash writes.
+
 Inspect OEM or generated OTA data:
 
 ```bash

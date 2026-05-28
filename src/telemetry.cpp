@@ -524,7 +524,8 @@ void TelemetryPublisher::publishMigrationInstallStatus(const char* phase,
                                                        const char* packageUrl,
                                                        const char* packageSha256,
                                                        uint32_t bytesDone,
-                                                       uint32_t bytesTotal) {
+                                                       uint32_t bytesTotal,
+                                                       const char* writeStage) {
     if (!_mqtt->connected()) return;
 
     JsonDocument doc;
@@ -537,6 +538,7 @@ void TelemetryPublisher::publishMigrationInstallStatus(const char* phase,
     if (reason) doc["reason"] = reason;
     if (packageUrl) doc["package_url"] = packageUrl;
     if (packageSha256) doc["package_sha256"] = packageSha256;
+    if (writeStage) doc["write_stage"] = writeStage;
     if (bytesTotal > 0) {
         doc["bytes_done"] = bytesDone;
         doc["bytes_total"] = bytesTotal;

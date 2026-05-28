@@ -7,11 +7,13 @@ class TelemetryPublisher;
 struct MigrationInstallRequest {
     const char* packageUrl = nullptr;
     const char* packageSha256 = nullptr;
+    const char* writeStage = nullptr;
 };
 
 enum class MigrationInstallResult {
     ACCEPTED,
     INVALID_REQUEST,
+    INVALID_WRITE_STAGE,
     UNSAFE_STATE,
     DOWNLOAD_FAILED,
     PACKAGE_INVALID,

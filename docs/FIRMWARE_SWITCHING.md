@@ -359,17 +359,24 @@ The reserved install command shape is:
 {
   "migration": "install_oem_bootloader_layout",
   "confirm": "YES_INSTALL_OEM_LAYOUT",
+  "write_stage": "validate_only",
   "package_url": "http://10.0.1.203:8080/proofpro_oem_layout_migration.ppmig",
   "package_sha256": "<64 hex chars>"
 }
 ```
 
+`write_stage` is an explicit safety stage. Supported values are
+`validate_only`, `apps`, `metadata`, and `all`. Current production firmware only
+allows `validate_only` to complete. Any real write stage validates the package
+first and then rejects before flash writes with `writes_not_enabled`.
+
 Current firmware validates the confirmation string and package fields, requires
 the device to be running from current-layout high `app1`, downloads the package,
-verifies the outer package SHA-256, parses the manifest, verifies every artifact
-hash and size while streaming, then publishes a `migration_install` status event
-and rejects before flash writes with `writes_not_enabled`. The destructive writer
-is not implemented yet.
+verifies the outer package SHA-256, parses the manifest, and verifies every
+artifact hash and size while streaming. With `write_stage: "validate_only"` it
+publishes a final `migration_install` status of `validated`. With `apps`,
+`metadata`, or `all`, it publishes a `migration_install` rejection and a
+`command_error` because the destructive writer is not enabled yet.
 
 To prepare for a future conversion, ProofPro can be told to reboot into the high
 current-layout `app1` slot:

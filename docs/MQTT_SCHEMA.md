@@ -503,20 +503,25 @@ Reserved package install command:
 {
   "migration": "install_oem_bootloader_layout",
   "confirm": "YES_INSTALL_OEM_LAYOUT",
+  "write_stage": "validate_only",
   "package_url": "http://10.0.1.203:8080/proofpro_oem_layout_migration.ppmig",
   "package_sha256": "..."
 }
 ```
 
-This command is intentionally non-writing in current firmware. If the device is
-running from current-layout high `app1`, firmware downloads the package, verifies
-the package SHA-256, parses the embedded manifest, verifies every artifact hash
-and size while streaming, then rejects before flash writes with
-`command_error.reason = "writes_not_enabled"`. If validation fails first, the
-command error reason is `download_failed` or `package_invalid`.
+`write_stage` may be `validate_only`, `apps`, `metadata`, or `all`.
+`validate_only` is the only stage that can complete in current production
+firmware. If the device is running from current-layout high `app1`, firmware
+downloads the package, verifies the package SHA-256, parses the embedded
+manifest, verifies every artifact hash and size while streaming, and publishes a
+final validated event. Real write stages validate the package first and then
+reject before flash writes with `command_error.reason = "writes_not_enabled"`.
+If validation fails first, the command error reason is `download_failed` or
+`package_invalid`. Invalid write stages publish
+`command_error.reason = "invalid_write_stage"`.
 
-Current firmware also publishes a structured status event while rejecting the
-reserved command:
+Current firmware also publishes a structured status event while rejecting a real
+write stage:
 
 ```json
 {
@@ -527,6 +532,7 @@ reserved command:
   "phase": "writer",
   "status": "rejected",
   "reason": "writes_not_enabled",
+  "write_stage": "apps",
   "package_url": "http://10.0.1.203:8080/proofpro_oem_layout_migration.ppmig",
   "package_sha256": "...",
   "bytes_done": 3690506,

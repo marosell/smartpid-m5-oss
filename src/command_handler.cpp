@@ -293,7 +293,8 @@ void CommandHandler::handle(const uint8_t* payload, unsigned int len) {
         } else if (strcmp(migration, "install_oem_bootloader_layout") == 0) {
             _cmdMigrationInstallOemLayout(doc["confirm"].as<const char*>(),
                                           doc["package_url"].as<const char*>(),
-                                          doc["package_sha256"].as<const char*>());
+                                          doc["package_sha256"].as<const char*>(),
+                                          doc["write_stage"].as<const char*>());
         } else if (strcmp(migration, "oem_bootloader_layout") == 0) {
             _cmdMigrationPreflight(doc["proofpro_app_size"].as<uint32_t>(),
                                    doc["oem_app_size"].as<uint32_t>());
@@ -1211,7 +1212,8 @@ void CommandHandler::_cmdMigrationPreflight(uint32_t proofproAppSize,
 
 void CommandHandler::_cmdMigrationInstallOemLayout(const char* confirm,
                                                    const char* packageUrl,
-                                                   const char* packageSha256) {
+                                                   const char* packageSha256,
+                                                   const char* writeStage) {
     static constexpr const char* REQUIRED_CONFIRM = "YES_INSTALL_OEM_LAYOUT";
 
     if (!confirm || strcmp(confirm, REQUIRED_CONFIRM) != 0) {
@@ -1223,10 +1225,13 @@ void CommandHandler::_cmdMigrationInstallOemLayout(const char* confirm,
     MigrationInstallRequest request;
     request.packageUrl = packageUrl;
     request.packageSha256 = packageSha256;
+    request.writeStage = writeStage;
     MigrationInstallResult result = migrationInstallOemLayout(request, _tele);
 
     if (result == MigrationInstallResult::INVALID_REQUEST) {
         if (_tele) _tele->publishCommandError("migration", "invalid_package", "install_oem_bootloader_layout");
+    } else if (result == MigrationInstallResult::INVALID_WRITE_STAGE) {
+        if (_tele) _tele->publishCommandError("migration", "invalid_write_stage", "install_oem_bootloader_layout");
     } else if (result == MigrationInstallResult::UNSAFE_STATE) {
         if (_tele) _tele->publishCommandError("migration", "unsafe_state", "install_oem_bootloader_layout");
     } else if (result == MigrationInstallResult::DOWNLOAD_FAILED) {
