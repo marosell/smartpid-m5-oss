@@ -75,6 +75,8 @@ After reboot, run preflight again and confirm `running_from_high_app1: true`.
 
 ## Stage 1: Validate Only
 
+Required confirmation string: `YES_INSTALL_OEM_LAYOUT`
+
 With normal firmware running, validate package download and hashes:
 
 ```bash
@@ -93,6 +95,8 @@ Stop if package validation fails.
 
 ## Stage 2: App Writes
 
+Required confirmation string: `YES_INSTALL_OEM_LAYOUT_APPS`
+
 OTA the app-stage installer build:
 
 ```text
@@ -104,7 +108,7 @@ Then write and readback-verify only the app regions:
 ```bash
 mosquitto_pub -h 10.0.1.203 -u proof -P proof \
   -t 'smartpidM5/proofpro/{topic_id}/commands' \
-  -m '{"migration":"install_oem_bootloader_layout","confirm":"YES_INSTALL_OEM_LAYOUT","write_stage":"apps","package_url":"http://10.0.1.203:8080/proofpro_oem_layout_migration.ppmig","package_sha256":"e7e4c960f5c7010e9eed7f07a9a22a54184db8c5084952c0cf8c712fc73b4bf3"}'
+  -m '{"migration":"install_oem_bootloader_layout","confirm":"YES_INSTALL_OEM_LAYOUT_APPS","write_stage":"apps","package_url":"http://10.0.1.203:8080/proofpro_oem_layout_migration.ppmig","package_sha256":"e7e4c960f5c7010e9eed7f07a9a22a54184db8c5084952c0cf8c712fc73b4bf3"}'
 ```
 
 Expected result:
@@ -121,6 +125,8 @@ Stop here and inspect events before continuing.
 
 Only continue after Stage 2 succeeds.
 
+Required confirmation string: `YES_INSTALL_OEM_LAYOUT_METADATA`
+
 OTA the metadata-stage installer build:
 
 ```text
@@ -132,7 +138,7 @@ Then write and readback-verify boot metadata:
 ```bash
 mosquitto_pub -h 10.0.1.203 -u proof -P proof \
   -t 'smartpidM5/proofpro/{topic_id}/commands' \
-  -m '{"migration":"install_oem_bootloader_layout","confirm":"YES_INSTALL_OEM_LAYOUT","write_stage":"metadata","package_url":"http://10.0.1.203:8080/proofpro_oem_layout_migration.ppmig","package_sha256":"e7e4c960f5c7010e9eed7f07a9a22a54184db8c5084952c0cf8c712fc73b4bf3"}'
+  -m '{"migration":"install_oem_bootloader_layout","confirm":"YES_INSTALL_OEM_LAYOUT_METADATA","write_stage":"metadata","package_url":"http://10.0.1.203:8080/proofpro_oem_layout_migration.ppmig","package_sha256":"e7e4c960f5c7010e9eed7f07a9a22a54184db8c5084952c0cf8c712fc73b4bf3"}'
 ```
 
 Expected result:

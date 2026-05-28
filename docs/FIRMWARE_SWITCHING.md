@@ -370,6 +370,15 @@ The reserved install command shape is:
 allows `validate_only` to complete. Any real write stage validates the package
 first and then rejects before flash writes with `writes_not_enabled`.
 
+The confirmation string is stage-specific:
+
+```text
+validate_only -> YES_INSTALL_OEM_LAYOUT
+apps          -> YES_INSTALL_OEM_LAYOUT_APPS
+metadata      -> YES_INSTALL_OEM_LAYOUT_METADATA
+all           -> disabled
+```
+
 A special installer build may be compiled with `PROOFPRO_ENABLE_OEM_LAYOUT_INSTALL`.
 That build enables only `write_stage: "apps"`: it forces outputs off, erases the
 future OEM-layout app regions, streams `proofpro_app0` to `0x10000`, streams

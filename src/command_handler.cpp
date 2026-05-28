@@ -1214,11 +1214,19 @@ void CommandHandler::_cmdMigrationInstallOemLayout(const char* confirm,
                                                    const char* packageUrl,
                                                    const char* packageSha256,
                                                    const char* writeStage) {
-    static constexpr const char* REQUIRED_CONFIRM = "YES_INSTALL_OEM_LAYOUT";
+    const char* stage = (writeStage && writeStage[0] != '\0') ? writeStage : "validate_only";
+    const char* requiredConfirm = "YES_INSTALL_OEM_LAYOUT";
+    if (strcmp(stage, "apps") == 0) {
+        requiredConfirm = "YES_INSTALL_OEM_LAYOUT_APPS";
+    } else if (strcmp(stage, "metadata") == 0) {
+        requiredConfirm = "YES_INSTALL_OEM_LAYOUT_METADATA";
+    } else if (strcmp(stage, "all") == 0) {
+        requiredConfirm = "YES_INSTALL_OEM_LAYOUT_ALL_DISABLED";
+    }
 
-    if (!confirm || strcmp(confirm, REQUIRED_CONFIRM) != 0) {
+    if (!confirm || strcmp(confirm, requiredConfirm) != 0) {
         if (_tele) _tele->publishCommandError("migration", "confirmation_required", "install_oem_bootloader_layout");
-        log_w("[CMD] install_oem_bootloader_layout rejected — confirmation required");
+        log_w("[CMD] install_oem_bootloader_layout rejected — confirmation required for stage=%s", stage);
         return;
     }
     if (_tele) _tele->publishMigrationPreflight("install_oem_bootloader_layout");
@@ -1226,7 +1234,6 @@ void CommandHandler::_cmdMigrationInstallOemLayout(const char* confirm,
     request.packageUrl = packageUrl;
     request.packageSha256 = packageSha256;
     request.writeStage = writeStage;
-    const char* stage = (writeStage && writeStage[0] != '\0') ? writeStage : "validate_only";
     if (strcmp(stage, "validate_only") != 0) {
         log_w("[CMD] install_oem_bootloader_layout write stage requested — forcing outputs safe");
         outputCtrl.forceAllOff();

@@ -520,6 +520,15 @@ If validation fails first, the command error reason is `download_failed` or
 `package_invalid`. Invalid write stages publish
 `command_error.reason = "invalid_write_stage"`.
 
+Each stage requires its own confirmation string:
+
+```text
+validate_only -> YES_INSTALL_OEM_LAYOUT
+apps          -> YES_INSTALL_OEM_LAYOUT_APPS
+metadata      -> YES_INSTALL_OEM_LAYOUT_METADATA
+all           -> disabled
+```
+
 A special installer build may enable `write_stage: "apps"` with the compile-time
 flag `PROOFPRO_ENABLE_OEM_LAYOUT_INSTALL`. That build writes and readback-verifies
 only `proofpro_app0` and `smartpid_oem_app1` after a full package validation
