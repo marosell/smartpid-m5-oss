@@ -341,9 +341,29 @@ The package generator now emits a real 8 KB `otadata` artifact for the selected
 boot app, but the manifest remains `safe_to_flash: false` because firmware-side
 conversion writes are still disabled.
 
+The generator also emits `proofpro_oem_layout_migration.ppmig`, a single-file
+package with a fixed magic header, an embedded JSON manifest, and the artifact
+payloads in manifest order. Firmware should eventually stream this package from
+HTTP or another local transport, verify each artifact hash and size, then write
+the validated payload to the planned flash offset.
+
 The firmware preflight event also includes the planned OEM-layout offsets and
 write sequence. That plan is read-only documentation from the device; it is not
 an enabled writer.
+
+The reserved install command shape is:
+
+```json
+{
+  "migration": "install_oem_bootloader_layout",
+  "confirm": "YES_INSTALL_OEM_LAYOUT",
+  "package_url": "http://10.0.1.203:8080/proofpro_oem_layout_migration.ppmig",
+  "package_sha256": "<64 hex chars>"
+}
+```
+
+Current firmware validates the confirmation string and package fields, then
+rejects the command with `writes_not_enabled`.
 
 To prepare for a future conversion, ProofPro can be told to reboot into the high
 current-layout `app1` slot:

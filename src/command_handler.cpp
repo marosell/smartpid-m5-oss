@@ -289,6 +289,10 @@ void CommandHandler::handle(const uint8_t* payload, unsigned int len) {
                                    doc["oem_app_size"].as<uint32_t>());
         } else if (strcmp(migration, "boot_high_app1") == 0) {
             _cmdBootHighApp1(doc["confirm"].as<const char*>());
+        } else if (strcmp(migration, "install_oem_bootloader_layout") == 0) {
+            _cmdMigrationInstallOemLayout(doc["confirm"].as<const char*>(),
+                                          doc["package_url"].as<const char*>(),
+                                          doc["package_sha256"].as<const char*>());
         } else if (strcmp(migration, "oem_bootloader_layout") == 0) {
             _cmdMigrationPreflight(doc["proofpro_app_size"].as<uint32_t>(),
                                    doc["oem_app_size"].as<uint32_t>());
@@ -1202,6 +1206,35 @@ void CommandHandler::_cmdMigrationPreflight(uint32_t proofproAppSize,
                                          proofproAppSize,
                                          oemAppSize);
     }
+}
+
+void CommandHandler::_cmdMigrationInstallOemLayout(const char* confirm,
+                                                   const char* packageUrl,
+                                                   const char* packageSha256) {
+    static constexpr const char* REQUIRED_CONFIRM = "YES_INSTALL_OEM_LAYOUT";
+
+    if (!confirm || strcmp(confirm, REQUIRED_CONFIRM) != 0) {
+        if (_tele) _tele->publishCommandError("migration", "confirmation_required", "install_oem_bootloader_layout");
+        log_w("[CMD] install_oem_bootloader_layout rejected — confirmation required");
+        return;
+    }
+    if (!packageUrl || packageUrl[0] == '\0') {
+        if (_tele) _tele->publishCommandError("migration", "missing_package_url", "install_oem_bootloader_layout");
+        log_w("[CMD] install_oem_bootloader_layout rejected — missing package_url");
+        return;
+    }
+    if (!packageSha256 || strlen(packageSha256) != 64) {
+        if (_tele) _tele->publishCommandError("migration", "missing_package_sha256", "install_oem_bootloader_layout");
+        log_w("[CMD] install_oem_bootloader_layout rejected — missing package_sha256");
+        return;
+    }
+
+    if (_tele) {
+        _tele->publishMigrationPreflight("install_oem_bootloader_layout");
+        _tele->publishCommandError("migration", "writes_not_enabled", "install_oem_bootloader_layout");
+    }
+    log_w("[CMD] install_oem_bootloader_layout rejected — writes disabled url=%s sha=%s",
+          packageUrl, packageSha256);
 }
 
 void CommandHandler::_cmdBootHighApp1(const char* confirm) {

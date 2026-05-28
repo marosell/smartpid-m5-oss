@@ -497,6 +497,23 @@ Example response:
 `{"migration":"oem_bootloader_layout"}` currently performs the same preflight
 and then publishes a `command_error` with reason `writes_not_enabled`.
 
+Reserved package install command:
+
+```json
+{
+  "migration": "install_oem_bootloader_layout",
+  "confirm": "YES_INSTALL_OEM_LAYOUT",
+  "package_url": "http://10.0.1.203:8080/proofpro_oem_layout_migration.ppmig",
+  "package_sha256": "..."
+}
+```
+
+This command is intentionally rejected by current firmware with
+`command_error.reason = "writes_not_enabled"`. The intended package format is
+documented in `docs/FIRMWARE_SWITCHING.md`; the future implementation should
+stream the package, verify the package SHA-256, verify every artifact hash and
+size from the embedded manifest, then execute the preflight write plan.
+
 Prepare for bootloader/layout conversion by rebooting into the high current
 `app1` slot:
 

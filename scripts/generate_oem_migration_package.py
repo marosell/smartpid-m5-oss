@@ -13,6 +13,7 @@ import argparse
 import hashlib
 import json
 import shutil
+import struct
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -38,6 +39,8 @@ OTA_DATA_SIZE = 0x2000
 OEM_APP0_OFFSET = 0x10000
 OEM_APP1_OFFSET = 0x200000
 OEM_APP_SLOT_SIZE = 0x1F0000
+PACKAGE_MAGIC = b"PPMIG001"
+PACKAGE_HEADER_SIZE = 12
 
 
 def sha256(path: Path) -> str:
@@ -56,6 +59,18 @@ def write_bytes(path: Path, data: bytes) -> None:
 def copy_file(src: Path, dst: Path) -> None:
     dst.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(src, dst)
+
+
+def make_package(path: Path, manifest: dict, artifact_items: list[dict]) -> None:
+    manifest_payload = json.dumps(manifest, indent=2).encode("utf-8")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("wb") as f:
+        f.write(PACKAGE_MAGIC)
+        f.write(struct.pack("<I", len(manifest_payload)))
+        f.write(manifest_payload)
+        for item in artifact_items:
+            f.write((ROOT / item["path"]).read_bytes() if not Path(item["path"]).is_absolute()
+                    else Path(item["path"]).read_bytes())
 
 
 def require_file(path: Path, label: str) -> None:
@@ -128,6 +143,7 @@ def main() -> int:
     otadata_out = out_dir / f"otadata_boot_{args.boot_app}_{boot_slot}.bin"
     proofpro_out = out_dir / "proofpro_oem_layout_app0.bin"
     oem_app_out = out_dir / "smartpid_oem_app1.bin"
+    package_out = out_dir / "proofpro_oem_layout_migration.ppmig"
 
     write_bytes(bootloader_out, bootloader)
     copy_file(OEM_PARTITIONS, partitions_out)
@@ -183,6 +199,12 @@ def main() -> int:
         },
         "boot_app": args.boot_app,
         "boot_slot": boot_slot,
+        "package_format": {
+            "magic": PACKAGE_MAGIC.decode("ascii"),
+            "header_size": PACKAGE_HEADER_SIZE,
+            "manifest_length_encoding": "uint32_le",
+            "payload_order": "artifacts array order",
+        },
         "artifacts": artifacts,
         "safe_to_flash": False,
         "safety_note": (
@@ -194,8 +216,10 @@ def main() -> int:
 
     manifest_out = out_dir / "manifest.json"
     manifest_out.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    make_package(package_out, manifest, artifacts)
 
     print(f"Wrote {display_path(manifest_out)}")
+    print(f"Wrote {display_path(package_out)} ({package_out.stat().st_size} bytes)")
     for item in artifacts:
         fit = "fits" if item["fits"] else "DOES NOT FIT"
         print(
