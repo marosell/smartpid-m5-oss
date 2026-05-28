@@ -1272,16 +1272,45 @@ static void printFlashMetadata() {
     addFlashRegion(doc, "bootloader", 0x1000, 0x7000, true);
     addFlashRegion(doc, "partition_table", 0x8000, 0x0c00, false);
     addFlashRegion(doc, "otadata", 0xe000, 0x2000, false);
-    addFlashRegion(doc, "app0_header", 0x10000, 0x1000, true);
-    addFlashRegion(doc, "app1_header", 0x650000, 0x1000, true);
 #ifndef DESKTOP_BUILD
     const esp_partition_t* running = esp_ota_get_running_partition();
+    const esp_partition_t* boot = esp_ota_get_boot_partition();
+    const esp_partition_t* next = esp_ota_get_next_update_partition(nullptr);
+
+    auto addPartition = [](JsonObject obj, const esp_partition_t* part) {
+        if (!part) {
+            obj["available"] = false;
+            return;
+        }
+        obj["available"] = true;
+        obj["label"] = part->label;
+        obj["type"] = part->type;
+        obj["subtype"] = part->subtype;
+        obj["address"] = part->address;
+        obj["size"] = part->size;
+    };
+
     if (running) {
         JsonObject active = doc["running_app"].to<JsonObject>();
-        active["label"] = running->label;
-        active["address"] = running->address;
-        active["size"] = running->size;
+        addPartition(active, running);
         addFlashRegion(doc, "running_app_header", running->address, 0x1000, true);
+    }
+    addPartition(doc["boot_app"].to<JsonObject>(), boot);
+    addPartition(doc["next_update_app"].to<JsonObject>(), next);
+
+    JsonArray apps = doc["apps"].to<JsonArray>();
+    esp_partition_iterator_t it =
+        esp_partition_find(ESP_PARTITION_TYPE_APP,
+                           ESP_PARTITION_SUBTYPE_ANY,
+                           nullptr);
+    while (it) {
+        const esp_partition_t* part = esp_partition_get(it);
+        JsonObject app = apps.add<JsonObject>();
+        addPartition(app, part);
+        char key[32];
+        snprintf(key, sizeof(key), "%s_header", part->label);
+        addFlashRegion(doc, key, part->address, 0x1000, true);
+        it = esp_partition_next(it);
     }
 #endif
     serializeJson(doc, Serial);

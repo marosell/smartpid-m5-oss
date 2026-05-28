@@ -5,6 +5,9 @@
 #include "output_control.h"
 #include "io_expander.h"
 #include <ArduinoJson.h>
+#ifndef DESKTOP_BUILD
+#include <esp_ota_ops.h>
+#endif
 
 TelemetryPublisher telemetry;
 
@@ -335,6 +338,67 @@ void TelemetryPublisher::publishOutputDiagnostics(const char* reason,
     String topic = _mqtt->fullTopic("events/standard");
     _mqtt->publish(topic.c_str(), payload.c_str(), /*retained=*/false);
     log_i("[EVENT/STD] output diagnostics: %s", payload.c_str());
+}
+
+void TelemetryPublisher::publishPartitionDiagnostics(const char* reason) {
+    if (!_mqtt->connected()) return;
+
+    JsonDocument doc;
+    doc["time"] = bootSeconds();
+    doc["type"] = "partition_diagnostics";
+    doc["event"] = "partition diagnostics";
+    doc["reason"] = reason ? reason : "requested";
+
+#ifdef DESKTOP_BUILD
+    doc["available"] = false;
+#else
+    doc["available"] = true;
+
+    const esp_partition_t* running = esp_ota_get_running_partition();
+    const esp_partition_t* boot = esp_ota_get_boot_partition();
+    const esp_partition_t* next = esp_ota_get_next_update_partition(nullptr);
+
+    auto addPartition = [](JsonObject obj, const esp_partition_t* part) {
+        if (!part) {
+            obj["available"] = false;
+            return;
+        }
+        obj["available"] = true;
+        obj["label"] = part->label;
+        obj["type"] = part->type;
+        obj["subtype"] = part->subtype;
+        obj["address"] = part->address;
+        obj["size"] = part->size;
+    };
+
+    addPartition(doc["running"].to<JsonObject>(), running);
+    addPartition(doc["boot"].to<JsonObject>(), boot);
+    addPartition(doc["next_update"].to<JsonObject>(), next);
+
+    JsonArray apps = doc["apps"].to<JsonArray>();
+    esp_partition_iterator_t it =
+        esp_partition_find(ESP_PARTITION_TYPE_APP,
+                           ESP_PARTITION_SUBTYPE_ANY,
+                           nullptr);
+    while (it) {
+        const esp_partition_t* part = esp_partition_get(it);
+        JsonObject app = apps.add<JsonObject>();
+        addPartition(app, part);
+        esp_ota_img_states_t state;
+        if (esp_ota_get_state_partition(part, &state) == ESP_OK) {
+            app["ota_state"] = (int)state;
+        }
+        it = esp_partition_next(it);
+    }
+    esp_partition_iterator_release(it);
+#endif
+
+    String payload;
+    serializeJson(doc, payload);
+
+    String topic = _mqtt->fullTopic("events/standard");
+    _mqtt->publish(topic.c_str(), payload.c_str(), /*retained=*/false);
+    log_i("[EVENT/STD] partition diagnostics: %s", payload.c_str());
 }
 
 // ── publishEventAdv ───────────────────────────────────────────────────────────

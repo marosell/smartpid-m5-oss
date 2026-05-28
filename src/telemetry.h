@@ -54,6 +54,7 @@ public:
     void publishOutputDiagnostics(const char* reason,
                                   const ChannelState& ch1,
                                   const ChannelState& ch2);
+    void publishPartitionDiagnostics(const char* reason);
 
     // Publish an event to events/advanced immediately.
     // Used for profile sequencer events: "profile", "ramp N", "soak N".

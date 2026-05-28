@@ -268,6 +268,8 @@ void CommandHandler::handle(const uint8_t* payload, unsigned int len) {
         const char* diag = doc["diagnostics"].as<const char*>();
         if (strcmp(diag, "outputs") == 0) {
             _tele->publishOutputDiagnostics("mqtt_command", *_ch[0], *_ch[1]);
+        } else if (strcmp(diag, "partitions") == 0 || strcmp(diag, "flash") == 0) {
+            _tele->publishPartitionDiagnostics("mqtt_command");
         } else {
             _tele->publishCommandError("diagnostics", "invalid_value", diag);
         }

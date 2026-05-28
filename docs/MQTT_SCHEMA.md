@@ -356,6 +356,41 @@ Boot/output diagnostic events:
 }
 ```
 
+```json
+{
+  "time": 123,
+  "type": "partition_diagnostics",
+  "event": "partition diagnostics",
+  "reason": "mqtt_command",
+  "running": {
+    "available": true,
+    "label": "app0",
+    "type": 0,
+    "subtype": 16,
+    "address": 65536,
+    "size": 6553600
+  },
+  "next_update": {
+    "available": true,
+    "label": "app1",
+    "type": 0,
+    "subtype": 17,
+    "address": 6619136,
+    "size": 6553600
+  },
+  "apps": [
+    {
+      "available": true,
+      "label": "app0",
+      "type": 0,
+      "subtype": 16,
+      "address": 65536,
+      "size": 6553600
+    }
+  ]
+}
+```
+
 ### `events/advanced`
 
 Legacy profile-sequencer topic. Not part of the main ProofPro custom workflow.
@@ -381,6 +416,16 @@ Request live output diagnostics:
   "diagnostics": "outputs"
 }
 ```
+
+Request partition/OTA-slot diagnostics:
+
+```json
+{
+  "diagnostics": "partitions"
+}
+```
+
+`"diagnostics": "flash"` is accepted as an alias.
 
 ### General commands
 

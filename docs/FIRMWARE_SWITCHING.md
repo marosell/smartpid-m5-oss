@@ -20,8 +20,38 @@ concept:
 `smartpid_app0.bin` has been verified as a valid ESP32 app image and matches the
 segments used for the Ghidra decompile.
 
-Current custom firmware size is about 1.42 MB. The current partition table has
-two 0x640000-byte app slots, so both the custom app and OEM app fit easily.
+The OEM bootloader can be extracted from the full flash dump at
+`0x1000..0x8000`. The used portion is about `0x42d0` bytes and parses as a
+valid ESP32 bootloader image:
+
+```text
+firmware-oem/extracted/oem_bootloader_0x1000_0x7000.bin
+firmware-oem/extracted/oem_bootloader_trimmed.bin
+```
+
+These extracted files are local/generated artifacts and are intentionally not
+tracked by git.
+
+Current ProofPro app size is about 1.50 MB. The OEM app image is about 1.94 MB.
+Both fit inside the original OEM 1984K OTA app slots and inside the current
+ProofPro 6400K OTA app slots.
+
+ProofPro now has a dedicated OEM-layout build target:
+
+```bash
+pio run -e m5stack-core-esp32-16M-oem-layout
+```
+
+That target uses `partitions_oem.csv` and fails the build if ProofPro grows past
+the original 1984K OEM app slot. On 2026-05-28, ProofPro used 1,500,019 bytes of
+the 2,031,616-byte slot, leaving about 531 KB of headroom.
+
+Original OEM app partitions:
+
+```text
+app0  ota_0  0x010000  0x1f0000
+app1  ota_1  0x200000  0x1f0000
+```
 
 Current app partitions:
 
@@ -29,6 +59,17 @@ Current app partitions:
 app0  ota_0  0x010000  0x640000
 app1  ota_1  0x650000  0x640000
 ```
+
+The original OEM bootloader is the better compatibility anchor if we want one
+device to manually swap between ProofPro and the OEM SmartPID app. Espressif's
+bootloader compatibility guidance says OTA can update apps but not bootloaders;
+older bootloaders support newer apps, while newer bootloaders do not support
+booting apps from older ESP-IDF versions. The OEM SmartPID app was built with
+ESP-IDF 3.3.5, while current ProofPro is built with ESP-IDF 5.5.4.
+
+The current ProofPro bootloader may not be able to boot the OEM app. The OEM
+bootloader is more likely to boot both the OEM app and ProofPro, but this must
+be bench-tested before it is treated as a product path.
 
 ## Prior art
 
@@ -97,38 +138,68 @@ Source:
 
 ## Architecture options
 
-### Option B: two app slots, ProofPro owns switching
+### Option B: two app slots, OEM-compatible bootloader
 
 Layout:
 
 ```text
+bootloader = OEM-compatible ESP-IDF 3.3.5-era bootloader
+partition table = OEM-compatible app0/app1 OTA slots
 app0 / ota_0 = ProofPro custom firmware
-app1 / ota_1 = OEM firmware app image
+app1 / ota_1 = OEM SmartPID app image
 ```
 
 Boot flow:
 
 ```text
 ESP32 bootloader -> selected OTA app
-ProofPro can select OEM and reboot
+selected app can accept normal app OTA updates
 ```
 
 Pros:
 
-- Fits our current partition table.
-- Lowest-risk proof of concept.
-- Does not require a partition table change.
+- Best compatibility path for manually replacing ProofPro with OEM SmartPID and
+  back again.
 - Does not require a custom bootloader.
-- Lets us test whether the OEM app boots from an alternate OTA slot.
+- Keeps normal OTA updates scoped to app partitions.
+- Preserves the older-bootloader/newer-app compatibility direction documented
+  by Espressif.
 
 Cons:
 
+- Requires a controlled first-time conversion flash if the device is already on
+  the current ProofPro bootloader/partition table.
 - Once OEM is running, ProofPro is not running.
-- OEM cannot offer "Boot ProofPro".
-- OEM OTA behavior is unknown and should not be used.
-- Return path may require USB, companion app, or rollback behavior.
+- OEM cannot offer a ProofPro-specific return UI unless its OTA updater accepts
+  the ProofPro app image.
+- OEM OTA behavior is still unknown and must be tested before relying on it.
 
-Use this only as the first bench spike.
+Use this as the next bench spike before designing a launcher.
+
+### Option C: current ProofPro bootloader with OEM app in inactive slot
+
+Layout:
+
+```text
+bootloader = current ProofPro ESP-IDF 5.5.4 bootloader
+partition table = current 6400K app0/app1 slots
+app0 / ota_0 = ProofPro custom firmware
+app1 / ota_1 = OEM SmartPID app image
+```
+
+Pros:
+
+- Fits the current device layout.
+- Avoids bootloader and partition-table writes.
+- Lowest-risk way to test image writing into the inactive slot.
+
+Cons:
+
+- The current newer bootloader may not boot the older ESP-IDF 3.3.5 OEM app.
+- If the OEM app boots, the return path to ProofPro is still unknown.
+
+This is useful as a diagnostic, but it is less likely to become the final
+switching architecture.
 
 ### Option A: resident launcher/recovery app plus two payload apps
 
@@ -213,16 +284,49 @@ switch proof of concept. Only write the app image to the inactive app partition.
 
 ## Recommended next spike
 
-Do not build UI first. Add hidden serial-only diagnostics and commands.
+Do not build UI first. Validate boot compatibility in layers.
 
-Phase 1: introspection only
+Phase 1: local artifact verification
 
-- Print running partition label, subtype, address, and size.
-- Print next update partition label, subtype, address, and size.
-- Print OTA state for each app slot.
+- Extract the OEM bootloader window from the full flash dump:
+
+```text
+0x1000..0x8000 -> firmware-oem/extracted/oem_bootloader_0x1000_0x7000.bin
+```
+
+- Confirm the OEM partition table decodes to:
+
+```text
+nvs      data/nvs  0x009000  20K
+otadata  data/ota  0x00e000  8K
+app0     app/ota_0 0x010000  1984K
+app1     app/ota_1 0x200000  1984K
+eeprom   data/0x99 0x3ff000  4K
+```
+
+- Confirm current ProofPro and OEM app images both fit in 1984K app slots by
+  running `pio run -e m5stack-core-esp32-16M-oem-layout`.
+
+Phase 2: introspection only on hardware
+
+- Use serial command `flashmeta` to print read-only bootloader, partition table,
+  otadata, app partition, and app-header metadata.
+- Or publish MQTT command `{"diagnostics":"partitions"}` and read the
+  `partition_diagnostics` event on `events/standard`.
+- Confirm running partition label, subtype, address, and size.
+- Confirm next update partition label, subtype, address, and size.
+- Confirm OTA state for each app slot when available.
 - Print whether `smartpid_app0.bin` would fit in the inactive app slot.
 
-Phase 2: install OEM image into inactive slot
+Phase 3: decide which boot baseline to test
+
+- If testing the current ProofPro bootloader first, write only the OEM app image
+  to the inactive slot and attempt one controlled boot switch.
+- If testing the recommended compatibility baseline, perform a controlled bench
+  flash of the OEM-compatible bootloader and partition table with ProofPro in one
+  OTA slot and OEM SmartPID in the other.
+
+Phase 4: install OEM image into inactive slot
 
 - Provide a controlled path to write `smartpid_app0.bin` into the inactive OTA
   partition.
@@ -230,7 +334,7 @@ Phase 2: install OEM image into inactive slot
   validation before rebooting.
 - Do not expose this in the UI yet.
 
-Phase 3: one controlled boot switch
+Phase 5: one controlled boot switch
 
 - Add a confirmation command such as:
 
@@ -243,18 +347,21 @@ boot_oem_confirm YES_I_HAVE_BACKUP
 - Observe whether OEM boots.
 - Observe whether a plain reboot returns to ProofPro or remains on OEM.
 
-Phase 4: decide final architecture
+Phase 6: decide final architecture
 
-- If ProofPro can reliably recover or be selected again without USB, keep the
-  two-slot splash-screen design.
-- If not, design the SafeBoot/launcher partition before public release.
+- If the OEM-compatible bootloader can boot both apps and each app can OTA the
+  other app image, app-level manual replacement may be enough.
+- If users need a friendly chooser or guaranteed return path from OEM, design a
+  SafeBoot/launcher partition before public release.
 
 ## Open questions
 
-- Does the OEM app boot correctly from `ota_1` at `0x650000`, or does it assume
-  the original `0x10000` placement?
+- Does the current ProofPro bootloader reject the older OEM ESP-IDF 3.3.5 app?
+- Does the OEM bootloader boot current ProofPro ESP-IDF 5.5.4 app reliably?
+- Does the OEM app boot correctly from `ota_1`, or does it assume the original
+  `0x10000` placement?
 - Does the OEM firmware touch `otadata` or OTA APIs?
-- Does OEM firmware behave safely with the custom partition table?
+- Does OEM firmware behave safely with the current ProofPro partition table?
 - Does shared NVS cause OEM or ProofPro config confusion?
 - Does rollback exist in our current Arduino/ESP-IDF bootloader build?
 - Can we make an OEM boot one-shot without a resident launcher?
@@ -264,11 +371,15 @@ Phase 4: decide final architecture
 
 Proceed in this order:
 
-1. Implement serial-only partition introspection.
-2. Bench-test whether the OEM app can live in the inactive app slot.
-3. Test one controlled OEM boot switch.
-4. Decide between:
-   - two-slot ProofPro-owned switcher, or
+1. Keep USB flashing out of the normal workflow until the GPIO12/DC1 spike is
+   fully understood.
+2. Implement serial-only partition introspection.
+3. Bench-test whether the current ProofPro bootloader can boot the OEM app from
+   an inactive slot. Treat failure as expected, not surprising.
+4. If needed, bench-test an OEM-compatible bootloader/partition baseline with
+   ProofPro and OEM SmartPID as app payloads.
+5. Only after both app images boot under one baseline, decide between:
+   - manual app-level replacement via OTA, or
    - SafeBoot/launcher public architecture.
 
 The likely long-term design is not a custom low-level bootloader. It is a small

@@ -1,5 +1,7 @@
-# SmartPID M5 PRO partition table — matches OEM layout
+# SmartPID M5 PRO development partition table.
 # Preserves NVS partition at same offset so device config survives firmware swap.
+# Uses larger OTA app slots than the original OEM layout. For OEM bootloader/
+# slot-size validation, build with partitions_oem.csv.
 #
 # Name,     Type, SubType,  Offset,   Size,     Flags
 nvs,        data, nvs,      0x9000,   0x5000,
