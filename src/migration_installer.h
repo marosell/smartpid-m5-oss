@@ -17,6 +17,8 @@ enum class MigrationInstallResult {
     UNSAFE_STATE,
     DOWNLOAD_FAILED,
     PACKAGE_INVALID,
+    FLASH_WRITE_FAILED,
+    FLASH_VERIFY_FAILED,
     WRITES_DISABLED,
 };
 

@@ -6,6 +6,7 @@
 #include <HTTPClient.h>
 #include <esp_ota_ops.h>
 #include <esp_partition.h>
+#include <esp_flash.h>
 #include <mbedtls/sha256.h>
 #include <new>
 #endif
@@ -85,6 +86,12 @@ static bool readExact(Stream& stream, uint8_t* out, size_t len, uint32_t timeout
     return true;
 }
 
+struct ExpectedArtifact {
+    const char* role;
+    uint32_t offset;
+    uint32_t maxSize;
+};
+
 static bool readAndHash(Stream& stream,
                         size_t len,
                         mbedtls_sha256_context& packageCtx,
@@ -118,18 +125,63 @@ static bool readAndHash(Stream& stream,
     return true;
 }
 
+static MigrationInstallResult readHashAndMaybeWrite(Stream& stream,
+                                                    const ExpectedArtifact& artifact,
+                                                    size_t len,
+                                                    bool writeArtifact,
+                                                    mbedtls_sha256_context& packageCtx,
+                                                    mbedtls_sha256_context& artifactCtx,
+                                                    uint32_t& bytesDone,
+                                                    uint32_t bytesTotal,
+                                                    TelemetryPublisher* telemetry,
+                                                    const MigrationInstallRequest& request) {
+    uint8_t buf[1024];
+    size_t remaining = len;
+    uint32_t artifactOffset = 0;
+    uint32_t lastEventMs = 0;
+
+    while (remaining > 0) {
+        size_t chunk = remaining < sizeof(buf) ? remaining : sizeof(buf);
+        if (!readExact(stream, buf, chunk)) return MigrationInstallResult::DOWNLOAD_FAILED;
+
+        mbedtls_sha256_update(&packageCtx, buf, chunk);
+        mbedtls_sha256_update(&artifactCtx, buf, chunk);
+
+#if defined(PROOFPRO_ENABLE_OEM_LAYOUT_INSTALL)
+        if (writeArtifact) {
+            if (esp_flash_write(nullptr, buf, artifact.offset + artifactOffset, chunk) != ESP_OK) {
+                return MigrationInstallResult::FLASH_WRITE_FAILED;
+            }
+        }
+#else
+        (void)writeArtifact;
+#endif
+
+        remaining -= chunk;
+        artifactOffset += (uint32_t)chunk;
+        bytesDone += (uint32_t)chunk;
+        if (telemetry && (millis() - lastEventMs > 1000 || remaining == 0)) {
+            telemetry->publishMigrationInstallStatus(artifact.role,
+                                                     writeArtifact ? "writing" : "validating",
+                                                     nullptr,
+                                                     request.packageUrl,
+                                                     request.packageSha256,
+                                                     bytesDone,
+                                                     bytesTotal,
+                                                     requestedWriteStage(request));
+            lastEventMs = millis();
+        }
+    }
+
+    return MigrationInstallResult::ACCEPTED;
+}
+
 static uint32_t readU32Le(const uint8_t* bytes) {
     return (uint32_t)bytes[0] |
            ((uint32_t)bytes[1] << 8) |
            ((uint32_t)bytes[2] << 16) |
            ((uint32_t)bytes[3] << 24);
 }
-
-struct ExpectedArtifact {
-    const char* role;
-    uint32_t offset;
-    uint32_t maxSize;
-};
 
 static constexpr ExpectedArtifact EXPECTED_ARTIFACTS[] = {
     {"proofpro_app0", 0x10000, 0x1f0000},
@@ -139,8 +191,55 @@ static constexpr ExpectedArtifact EXPECTED_ARTIFACTS[] = {
     {"otadata_boot_app0", 0xe000, 0x2000},
 };
 
+static bool isAppArtifact(const char* role) {
+    return strcmp(role, "proofpro_app0") == 0 ||
+           strcmp(role, "smartpid_oem_app1") == 0;
+}
+
+#if defined(PROOFPRO_ENABLE_OEM_LAYOUT_INSTALL)
+static bool eraseFlashRegion(uint32_t offset, uint32_t size) {
+    constexpr uint32_t sectorSize = 0x1000;
+    const uint32_t eraseSize = (size + sectorSize - 1) & ~(sectorSize - 1);
+    return esp_flash_erase_region(nullptr, offset, eraseSize) == ESP_OK;
+}
+
+static bool hashFlashRegion(uint32_t offset, uint32_t size, char outHex[65]) {
+    uint8_t buf[1024];
+    mbedtls_sha256_context ctx;
+    mbedtls_sha256_init(&ctx);
+    mbedtls_sha256_starts(&ctx, 0);
+
+    uint32_t done = 0;
+    while (done < size) {
+        uint32_t chunk = size - done;
+        if (chunk > sizeof(buf)) chunk = sizeof(buf);
+        if (esp_flash_read(nullptr, buf, offset + done, chunk) != ESP_OK) {
+            mbedtls_sha256_free(&ctx);
+            return false;
+        }
+        mbedtls_sha256_update(&ctx, buf, chunk);
+        done += chunk;
+    }
+
+    uint8_t digest[32] = {};
+    mbedtls_sha256_finish(&ctx, digest);
+    mbedtls_sha256_free(&ctx);
+    sha256ToHex(digest, outHex);
+    return true;
+}
+#endif
+
 static MigrationInstallResult validatePackageStream(const MigrationInstallRequest& request,
-                                                    TelemetryPublisher* telemetry) {
+                                                    TelemetryPublisher* telemetry,
+                                                    bool enableAppWrites) {
+    const char* writeStage = requestedWriteStage(request);
+#if defined(PROOFPRO_ENABLE_OEM_LAYOUT_INSTALL)
+    const bool writeApps = enableAppWrites && strcmp(writeStage, "apps") == 0;
+#else
+    (void)enableAppWrites;
+    const bool writeApps = false;
+#endif
+
     HTTPClient http;
     http.setTimeout(15000);
     if (!http.begin(request.packageUrl)) {
@@ -313,19 +412,58 @@ static MigrationInstallResult validatePackageStream(const MigrationInstallReques
             return MigrationInstallResult::PACKAGE_INVALID;
         }
 
+        const bool writeArtifact = writeApps && isAppArtifact(role);
+#if defined(PROOFPRO_ENABLE_OEM_LAYOUT_INSTALL)
+        if (writeArtifact) {
+            if (telemetry) {
+                telemetry->publishMigrationInstallStatus(role,
+                                                         "erasing",
+                                                         nullptr,
+                                                         request.packageUrl,
+                                                         request.packageSha256,
+                                                         bytesDone,
+                                                         bytesTotal,
+                                                         writeStage);
+            }
+            if (!eraseFlashRegion(expected.offset, expected.maxSize)) {
+                mbedtls_sha256_free(&packageCtx);
+                http.end();
+                if (telemetry) {
+                    telemetry->publishMigrationInstallStatus(role,
+                                                             "rejected",
+                                                             "flash_erase_failed",
+                                                             request.packageUrl,
+                                                             request.packageSha256,
+                                                             bytesDone,
+                                                             bytesTotal,
+                                                             writeStage);
+                }
+                return MigrationInstallResult::FLASH_WRITE_FAILED;
+            }
+        }
+#endif
+
         mbedtls_sha256_context artifactCtx;
         mbedtls_sha256_init(&artifactCtx);
         mbedtls_sha256_starts(&artifactCtx, 0);
-        bool ok = readAndHash(*stream, size, packageCtx, &artifactCtx, bytesDone, bytesTotal,
-                              telemetry, role, request);
+        MigrationInstallResult readResult = readHashAndMaybeWrite(*stream,
+                                                                  expected,
+                                                                  size,
+                                                                  writeArtifact,
+                                                                  packageCtx,
+                                                                  artifactCtx,
+                                                                  bytesDone,
+                                                                  bytesTotal,
+                                                                  telemetry,
+                                                                  request);
         uint8_t artifactDigest[32] = {};
         char artifactHex[65] = {};
         mbedtls_sha256_finish(&artifactCtx, artifactDigest);
         mbedtls_sha256_free(&artifactCtx);
-        if (!ok) {
+        if (readResult != MigrationInstallResult::ACCEPTED) {
             mbedtls_sha256_free(&packageCtx);
             http.end();
-            return MigrationInstallResult::DOWNLOAD_FAILED;
+            return readResult;
         }
         sha256ToHex(artifactDigest, artifactHex);
         if (strcmp(artifactHex, expectedSha) != 0) {
@@ -342,6 +480,52 @@ static MigrationInstallResult validatePackageStream(const MigrationInstallReques
             }
             return MigrationInstallResult::PACKAGE_INVALID;
         }
+
+#if defined(PROOFPRO_ENABLE_OEM_LAYOUT_INSTALL)
+        if (writeArtifact) {
+            char flashHex[65] = {};
+            if (!hashFlashRegion(expected.offset, size, flashHex)) {
+                mbedtls_sha256_free(&packageCtx);
+                http.end();
+                if (telemetry) {
+                    telemetry->publishMigrationInstallStatus(role,
+                                                             "rejected",
+                                                             "flash_readback_failed",
+                                                             request.packageUrl,
+                                                             request.packageSha256,
+                                                             bytesDone,
+                                                             bytesTotal,
+                                                             writeStage);
+                }
+                return MigrationInstallResult::FLASH_VERIFY_FAILED;
+            }
+            if (strcmp(flashHex, expectedSha) != 0) {
+                mbedtls_sha256_free(&packageCtx);
+                http.end();
+                if (telemetry) {
+                    telemetry->publishMigrationInstallStatus(role,
+                                                             "rejected",
+                                                             "flash_verify_sha_mismatch",
+                                                             request.packageUrl,
+                                                             request.packageSha256,
+                                                             bytesDone,
+                                                             bytesTotal,
+                                                             writeStage);
+                }
+                return MigrationInstallResult::FLASH_VERIFY_FAILED;
+            }
+            if (telemetry) {
+                telemetry->publishMigrationInstallStatus(role,
+                                                         "verified",
+                                                         "flash_readback_verified",
+                                                         request.packageUrl,
+                                                         request.packageSha256,
+                                                         bytesDone,
+                                                         bytesTotal,
+                                                         writeStage);
+            }
+        }
+#endif
     }
 
     if (contentLength > 0 && bytesDone != (uint32_t)contentLength) {
@@ -411,7 +595,7 @@ MigrationInstallResult migrationInstallOemLayout(const MigrationInstallRequest& 
                                                      request.packageUrl,
                                                      request.packageSha256);
         }
-        return MigrationInstallResult::INVALID_WRITE_STAGE;
+        return MigrationInstallResult::INVALID_REQUEST;
     }
     const char* writeStage = requestedWriteStage(request);
     if (!validWriteStage(writeStage)) {
@@ -422,7 +606,7 @@ MigrationInstallResult migrationInstallOemLayout(const MigrationInstallRequest& 
                                                      request.packageUrl,
                                                      request.packageSha256);
         }
-        return MigrationInstallResult::INVALID_REQUEST;
+        return MigrationInstallResult::INVALID_WRITE_STAGE;
     }
     if (!runningFromCurrentHighApp1()) {
         if (telemetry) {
@@ -438,7 +622,7 @@ MigrationInstallResult migrationInstallOemLayout(const MigrationInstallRequest& 
 #ifdef DESKTOP_BUILD
     return MigrationInstallResult::UNSAFE_STATE;
 #else
-    MigrationInstallResult validation = validatePackageStream(request, telemetry);
+    MigrationInstallResult validation = validatePackageStream(request, telemetry, false);
     if (validation != MigrationInstallResult::ACCEPTED) return validation;
 
     if (strcmp(writeStage, "validate_only") == 0) {
@@ -454,6 +638,24 @@ MigrationInstallResult migrationInstallOemLayout(const MigrationInstallRequest& 
         }
         return MigrationInstallResult::ACCEPTED;
     }
+
+#if defined(PROOFPRO_ENABLE_OEM_LAYOUT_INSTALL)
+    if (strcmp(writeStage, "apps") == 0) {
+        MigrationInstallResult writeResult = validatePackageStream(request, telemetry, true);
+        if (writeResult != MigrationInstallResult::ACCEPTED) return writeResult;
+        if (telemetry) {
+            telemetry->publishMigrationInstallStatus("writer",
+                                                     "verified",
+                                                     "apps_written",
+                                                     request.packageUrl,
+                                                     request.packageSha256,
+                                                     0,
+                                                     0,
+                                                     writeStage);
+        }
+        return MigrationInstallResult::ACCEPTED;
+    }
+#endif
 
     if (telemetry) {
         telemetry->publishMigrationInstallStatus("writer",

@@ -370,13 +370,30 @@ The reserved install command shape is:
 allows `validate_only` to complete. Any real write stage validates the package
 first and then rejects before flash writes with `writes_not_enabled`.
 
+A special installer build may be compiled with `PROOFPRO_ENABLE_OEM_LAYOUT_INSTALL`.
+That build enables only `write_stage: "apps"`: it forces outputs off, erases the
+future OEM-layout app regions, streams `proofpro_app0` to `0x10000`, streams
+`smartpid_oem_app1` to `0x200000`, and verifies both regions by readback
+SHA-256. The installer validates the full package first, then opens it again for
+the app write/readback pass. It still does not write the bootloader, partition
+table, or otadata. `metadata` and `all` remain reserved until those stages are
+explicitly reviewed.
+
+Build that special app-stage installer with:
+
+```bash
+pio run -e m5stack-core-esp32-16M-installer-apps
+```
+
+Do not use that environment for normal ProofPro releases.
+
 Current firmware validates the confirmation string and package fields, requires
 the device to be running from current-layout high `app1`, downloads the package,
 verifies the outer package SHA-256, parses the manifest, and verifies every
 artifact hash and size while streaming. With `write_stage: "validate_only"` it
-publishes a final `migration_install` status of `validated`. With `apps`,
-`metadata`, or `all`, it publishes a `migration_install` rejection and a
-`command_error` because the destructive writer is not enabled yet.
+publishes a final `migration_install` status of `validated`. In production
+builds, `apps`, `metadata`, or `all` publish a `migration_install` rejection and
+a `command_error` because the destructive writer is not enabled.
 
 To prepare for a future conversion, ProofPro can be told to reboot into the high
 current-layout `app1` slot:

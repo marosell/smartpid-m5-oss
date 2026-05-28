@@ -40,6 +40,10 @@ Current firmware can download and verify this package with
 reserved and rejected unless a future installer build explicitly enables
 destructive flash writes.
 
+The current guarded installer code supports a compile-time-only `apps` stage for
+future testing. It is disabled in normal builds and does not write metadata.
+Build it explicitly with `pio run -e m5stack-core-esp32-16M-installer-apps`.
+
 Inspect OEM or generated OTA data:
 
 ```bash

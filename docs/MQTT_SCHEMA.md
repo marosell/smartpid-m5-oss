@@ -520,6 +520,23 @@ If validation fails first, the command error reason is `download_failed` or
 `package_invalid`. Invalid write stages publish
 `command_error.reason = "invalid_write_stage"`.
 
+A special installer build may enable `write_stage: "apps"` with the compile-time
+flag `PROOFPRO_ENABLE_OEM_LAYOUT_INSTALL`. That build writes and readback-verifies
+only `proofpro_app0` and `smartpid_oem_app1` after a full package validation
+pass. It still rejects `metadata` and `all`, and production firmware rejects all
+real write stages.
+
+Possible command errors from this command include:
+
+- `invalid_package`
+- `invalid_write_stage`
+- `unsafe_state`
+- `download_failed`
+- `package_invalid`
+- `flash_write_failed`
+- `flash_verify_failed`
+- `writes_not_enabled`
+
 Current firmware also publishes a structured status event while rejecting a real
 write stage:
 

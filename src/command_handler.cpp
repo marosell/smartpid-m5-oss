@@ -1226,6 +1226,12 @@ void CommandHandler::_cmdMigrationInstallOemLayout(const char* confirm,
     request.packageUrl = packageUrl;
     request.packageSha256 = packageSha256;
     request.writeStage = writeStage;
+    const char* stage = (writeStage && writeStage[0] != '\0') ? writeStage : "validate_only";
+    if (strcmp(stage, "validate_only") != 0) {
+        log_w("[CMD] install_oem_bootloader_layout write stage requested — forcing outputs safe");
+        outputCtrl.forceAllOff();
+        if (_cfg) _cfg->saveRunState(0, 0, false, false);
+    }
     MigrationInstallResult result = migrationInstallOemLayout(request, _tele);
 
     if (result == MigrationInstallResult::INVALID_REQUEST) {
@@ -1238,6 +1244,10 @@ void CommandHandler::_cmdMigrationInstallOemLayout(const char* confirm,
         if (_tele) _tele->publishCommandError("migration", "download_failed", "install_oem_bootloader_layout");
     } else if (result == MigrationInstallResult::PACKAGE_INVALID) {
         if (_tele) _tele->publishCommandError("migration", "package_invalid", "install_oem_bootloader_layout");
+    } else if (result == MigrationInstallResult::FLASH_WRITE_FAILED) {
+        if (_tele) _tele->publishCommandError("migration", "flash_write_failed", "install_oem_bootloader_layout");
+    } else if (result == MigrationInstallResult::FLASH_VERIFY_FAILED) {
+        if (_tele) _tele->publishCommandError("migration", "flash_verify_failed", "install_oem_bootloader_layout");
     } else if (result == MigrationInstallResult::WRITES_DISABLED) {
         if (_tele) _tele->publishCommandError("migration", "writes_not_enabled", "install_oem_bootloader_layout");
     }
