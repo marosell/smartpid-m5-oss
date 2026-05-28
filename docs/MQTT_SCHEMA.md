@@ -508,11 +508,12 @@ Reserved package install command:
 }
 ```
 
-This command is intentionally rejected by current firmware with
-`command_error.reason = "writes_not_enabled"`. The intended package format is
-documented in `docs/FIRMWARE_SWITCHING.md`; the future implementation should
-stream the package, verify the package SHA-256, verify every artifact hash and
-size from the embedded manifest, then execute the preflight write plan.
+This command is intentionally non-writing in current firmware. If the device is
+running from current-layout high `app1`, firmware downloads the package, verifies
+the package SHA-256, parses the embedded manifest, verifies every artifact hash
+and size while streaming, then rejects before flash writes with
+`command_error.reason = "writes_not_enabled"`. If validation fails first, the
+command error reason is `download_failed` or `package_invalid`.
 
 Current firmware also publishes a structured status event while rejecting the
 reserved command:
@@ -528,6 +529,8 @@ reserved command:
   "reason": "writes_not_enabled",
   "package_url": "http://10.0.1.203:8080/proofpro_oem_layout_migration.ppmig",
   "package_sha256": "...",
+  "bytes_done": 3690506,
+  "bytes_total": 3690506,
   "writes_enabled": false
 }
 ```

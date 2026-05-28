@@ -343,9 +343,11 @@ conversion writes are still disabled.
 
 The generator also emits `proofpro_oem_layout_migration.ppmig`, a single-file
 package with a fixed magic header, an embedded JSON manifest, and the artifact
-payloads in manifest order. Firmware should eventually stream this package from
-HTTP or another local transport, verify each artifact hash and size, then write
-the validated payload to the planned flash offset.
+payloads in manifest order. The artifact order follows the future safe write
+sequence: ProofPro app0, OEM app1, partition table, bootloader, then otadata.
+Firmware should eventually stream this package from HTTP or another local
+transport, verify each artifact hash and size, then write the validated payload
+to the planned flash offset.
 
 The firmware preflight event also includes the planned OEM-layout offsets and
 write sequence. That plan is read-only documentation from the device; it is not
@@ -362,11 +364,12 @@ The reserved install command shape is:
 }
 ```
 
-Current firmware validates the confirmation string and package fields, then
-publishes a `migration_install` status event and rejects the command with
-`writes_not_enabled`. The installer module is present, but destructive writes
-are compile-time disabled unless `PROOFPRO_ENABLE_OEM_LAYOUT_INSTALL` is added
-to the build and the writer is implemented.
+Current firmware validates the confirmation string and package fields, requires
+the device to be running from current-layout high `app1`, downloads the package,
+verifies the outer package SHA-256, parses the manifest, verifies every artifact
+hash and size while streaming, then publishes a `migration_install` status event
+and rejects before flash writes with `writes_not_enabled`. The destructive writer
+is not implemented yet.
 
 To prepare for a future conversion, ProofPro can be told to reboot into the high
 current-layout `app1` slot:

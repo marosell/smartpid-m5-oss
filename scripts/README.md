@@ -26,6 +26,9 @@ N bytes  JSON manifest
 ...      artifact payloads in manifest artifact order
 ```
 
+The artifact order follows the future safe write sequence: ProofPro app0, OEM
+app1, partition table, bootloader, then otadata.
+
 The package includes a generated 8 KB `otadata` image for the selected OEM
 layout boot slot. By default that is ProofPro in OEM `app0`; pass
 `--boot-app oem` to generate `otadata` that selects OEM SmartPID in `app1`.

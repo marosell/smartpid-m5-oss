@@ -13,6 +13,8 @@ enum class MigrationInstallResult {
     ACCEPTED,
     INVALID_REQUEST,
     UNSAFE_STATE,
+    DOWNLOAD_FAILED,
+    PACKAGE_INVALID,
     WRITES_DISABLED,
 };
 

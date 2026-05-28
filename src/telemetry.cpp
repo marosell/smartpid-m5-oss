@@ -522,7 +522,9 @@ void TelemetryPublisher::publishMigrationInstallStatus(const char* phase,
                                                        const char* status,
                                                        const char* reason,
                                                        const char* packageUrl,
-                                                       const char* packageSha256) {
+                                                       const char* packageSha256,
+                                                       uint32_t bytesDone,
+                                                       uint32_t bytesTotal) {
     if (!_mqtt->connected()) return;
 
     JsonDocument doc;
@@ -535,6 +537,10 @@ void TelemetryPublisher::publishMigrationInstallStatus(const char* phase,
     if (reason) doc["reason"] = reason;
     if (packageUrl) doc["package_url"] = packageUrl;
     if (packageSha256) doc["package_sha256"] = packageSha256;
+    if (bytesTotal > 0) {
+        doc["bytes_done"] = bytesDone;
+        doc["bytes_total"] = bytesTotal;
+    }
     doc["writes_enabled"] =
 #if defined(PROOFPRO_ENABLE_OEM_LAYOUT_INSTALL) && !defined(DESKTOP_BUILD)
         true;

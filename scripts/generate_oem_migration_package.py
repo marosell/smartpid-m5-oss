@@ -153,11 +153,11 @@ def main() -> int:
     write_bytes(otadata_out, make_otadata(boot_slot))
 
     artifacts = [
-        artifact(bootloader_out, OEM_BOOTLOADER_OFFSET, "bootloader", OEM_BOOTLOADER_WINDOW_SIZE),
-        artifact(partitions_out, OEM_PARTITION_TABLE_OFFSET, "partition_table", OEM_PARTITION_TABLE_SIZE),
-        artifact(otadata_out, OTA_DATA_OFFSET, f"otadata_boot_{boot_slot}", OTA_DATA_SIZE),
         artifact(proofpro_out, OEM_APP0_OFFSET, "proofpro_app0", OEM_APP_SLOT_SIZE),
         artifact(oem_app_out, OEM_APP1_OFFSET, "smartpid_oem_app1", OEM_APP_SLOT_SIZE),
+        artifact(partitions_out, OEM_PARTITION_TABLE_OFFSET, "partition_table", OEM_PARTITION_TABLE_SIZE),
+        artifact(bootloader_out, OEM_BOOTLOADER_OFFSET, "bootloader", OEM_BOOTLOADER_WINDOW_SIZE),
+        artifact(otadata_out, OTA_DATA_OFFSET, f"otadata_boot_{boot_slot}", OTA_DATA_SIZE),
     ]
 
     errors: list[str] = []

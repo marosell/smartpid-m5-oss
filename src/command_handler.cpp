@@ -1229,6 +1229,10 @@ void CommandHandler::_cmdMigrationInstallOemLayout(const char* confirm,
         if (_tele) _tele->publishCommandError("migration", "invalid_package", "install_oem_bootloader_layout");
     } else if (result == MigrationInstallResult::UNSAFE_STATE) {
         if (_tele) _tele->publishCommandError("migration", "unsafe_state", "install_oem_bootloader_layout");
+    } else if (result == MigrationInstallResult::DOWNLOAD_FAILED) {
+        if (_tele) _tele->publishCommandError("migration", "download_failed", "install_oem_bootloader_layout");
+    } else if (result == MigrationInstallResult::PACKAGE_INVALID) {
+        if (_tele) _tele->publishCommandError("migration", "package_invalid", "install_oem_bootloader_layout");
     } else if (result == MigrationInstallResult::WRITES_DISABLED) {
         if (_tele) _tele->publishCommandError("migration", "writes_not_enabled", "install_oem_bootloader_layout");
     }
