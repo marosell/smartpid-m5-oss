@@ -2,7 +2,9 @@
 
 **Current status, 2026-05-27:** Custom ProofPro firmware builds, OTA updates,
 boots on the test unit, connects to WiFi/MQTT, renders the custom Power UI, and
-has bench-confirmed output and probe paths.
+has bench-confirmed output and probe paths. USB flashing/download entry can
+briefly energize DC OUT 1 on this hardware; OTA is the normal update path for
+the installed/test unit.
 
 The firmware is no longer trying to expose the OEM standard/advanced/monitor
 workflow. The active product workflow is:
@@ -53,6 +55,11 @@ explicitly about OEM backups, decompile research, or firmware switching.
 | PT100 2-wire | Bench-confirmed T2 2-wire route; specific terminal pairing matters |
 | Sensor publish cadence | sample every 2s, MQTT publish every 6s |
 | Sensor error gating | values below 0C or above 120C display/publish as error |
+| OTA update path | OTA to `10.0.1.60` succeeds and avoids the USB flashing DC1 spike |
+| USB flashing hazard | `esptool --no-stub` with auto-reset caused DC1 to spike; `--before no-reset` stayed quiet but could not connect |
+| Audio hardware | No onboard microphone confirmed; end notification should use synthesized tones |
+| Accel transition | Accel completion is device-wide; status transitions `ACCEL` to `RUN` |
+| Relay runtime sync | Live relay mode now syncs from retained config on boot and before relay commands |
 
 ---
 
@@ -89,7 +96,9 @@ DC outputs can be configured as `element` or `off`. Relays can be configured as
 - Acceleration is a temporary override of element output power.
 - During acceleration, DC tiles blink between the user/MQTT-selected percent and
   the acceleration percent.
-- When acceleration ends, DC outputs return to their selected percent.
+- When acceleration ends, the device leaves accel as one program phase, DC
+  outputs return to their selected percent, AccElement relays drop out, and the
+  status tile changes from `ACCEL` to `RUN`.
 - Timer is entered as hours/minutes and displays as `HH:MM:SS` while running.
 - In programmed Accel, the finish timer starts when status enters `ACCEL`.
 - In non-Accel programmed runs, the finish timer starts when Timer Start Temp
@@ -135,6 +144,18 @@ device-level `unit`, `remote_enabled`, `remote_state`, `watchdog_enabled`, and
 `watchdog_s`. Retained config includes program defaults and relay mode/timing.
 See `docs/MQTT_SCHEMA.md` for the canonical schema.
 
+Live relay telemetry is synchronized with retained relay config on boot and
+before accepted remote relay commands. Proof should still treat live telemetry
+as the authority for actual relay output state.
+
+### Audio
+
+- The bench unit has no onboard microphone.
+- The internal speaker path is controlled explicitly after boot to avoid boot
+  pops/noise.
+- Run-ending audio should be implemented as a generated tone sequence once the
+  desired DSPR400 beep pattern is recorded and measured from the MacBook.
+
 ---
 
 ## Next bench tests
@@ -161,6 +182,13 @@ See `docs/MQTT_SCHEMA.md` for the canonical schema.
 4. **NTC route**
    - Test if an NTC probe becomes available.
 
+5. **Proof remote relay flow**
+   - Retained config shows relay mode `remote_other`.
+   - Live telemetry also shows `relay_mode:"remote_other"`.
+   - Remote state begins `RDY`.
+   - Proof relay command changes Remote to `ON` and toggles the relay.
+   - Telemetry reports both `relay_engaged` and physical `relay`.
+
 ## Recently cleared
 
 | Item | Current status |
@@ -168,6 +196,8 @@ See `docs/MQTT_SCHEMA.md` for the canonical schema.
 | PT100 3-wire regression | Cleared. Both PT100 3-wire probes were confirmed on OEM and custom firmware with the current calibration offsets documented in `docs/WIRING.md`. |
 | Program state regression | Cleared. `RST` resets without start, `MAN/RUN` starts/stops, output tiles reflect actual state, and END latch/freeze behavior is implemented and no longer on the next-test list. |
 | MQTT Remote gating | Cleared. Remote gates MQTT start/output/program commands, and the setting is persisted as `remote_en`. |
+| Accel status hang | Cleared. Accel completion now ends the device accel phase, restores steady programmed output display, and returns status to `RUN`. |
+| Relay config/live mismatch | Cleared. Runtime relay mode syncs from retained config on boot and before relay commands; relay mode updates are no longer blocked by prior `off` mode. |
 
 ---
 
@@ -179,8 +209,10 @@ See `docs/MQTT_SCHEMA.md` for the canonical schema.
 | PT100 2-wire CH1 route | T2 confirmed; CH1 still needs the same wiring test |
 | NTC | Code path present, but no current NTC probe available for bench validation |
 | Relay cycle mode | Settings/UI present; needs a focused bench pass |
+| Proof remote relay regression | Latest sync fix needs Proof-side retest |
+| Run-ending tone | Need DSPR400 beep recording/frequency timing before implementing synthesized notification |
 | MQTT schema doc | Canonical human-readable schema is updated; Proof migration summary lives in `docs/PROOF_MQTT_SCHEMA_CHANGES_2026-05-27.md` |
-| Production release tag | Wait until watchdog and PT100 2-wire CH1 tests pass |
+| Production release tag | Wait until watchdog, Proof relay regression, program END regression, and PT100 2-wire CH1 tests pass |
 
 ---
 

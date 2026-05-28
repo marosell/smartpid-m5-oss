@@ -175,3 +175,12 @@ bool IOExpander::begin() {
           IO_EXP_ADDR, out, dir);
     return true;
 }
+
+void IOExpander::flashSafeState() {
+    writeReg(IO_EXP_REG_OUTPUT, 0x00);
+    setConfig(false);   // all outputs, actively driving the low output latch
+    uint8_t out = readReg(IO_EXP_REG_OUTPUT);
+    uint8_t dir = readReg(IO_EXP_REG_CONFIG);
+    log_i("[IO_EXP] Flash-safe state — reg1(output)=0x%02X reg3(config)=0x%02X",
+          out, dir);
+}

@@ -3,6 +3,7 @@
 #include "telemetry.h"
 #include "command_handler.h"
 #include "output_control.h"
+#include "io_expander.h"
 #include <ArduinoJson.h>
 
 TelemetryPublisher telemetry;
@@ -294,6 +295,15 @@ void TelemetryPublisher::publishOutputDiagnostics(const char* reason,
     gpio["dc2_gpio13"] = digitalRead(GPIO_DCOUT2);
     gpio["rl1_gpio26"] = digitalRead(GPIO_RL1);
     gpio["rl2_gpio16"] = digitalRead(GPIO_RL2);
+
+    JsonObject probe = doc["probe"].to<JsonObject>();
+    probe["ch1_type"] = (uint8_t)_cfg->ch1_probe_type;
+    probe["ch2_type"] = (uint8_t)_cfg->ch2_probe_type;
+
+    JsonObject io = doc["io_expander"].to<JsonObject>();
+    io["input_reg"] = ioExpander.readReg(IO_EXP_REG_INPUT);
+    io["output_reg"] = ioExpander.readReg(IO_EXP_REG_OUTPUT);
+    io["config_reg"] = ioExpander.readReg(IO_EXP_REG_CONFIG);
 
     String payload;
     serializeJson(doc, payload);

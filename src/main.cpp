@@ -39,6 +39,10 @@
 #include <Preferences.h>
 #include <esp_ota_ops.h>    // esp_ota_set_boot_partition — OTA boot-loop rollback
 #include <esp_system.h>
+#ifndef DESKTOP_BUILD
+#include <esp_flash.h>
+#include <mbedtls/sha256.h>
+#endif
 
 #include "config.h"
 #include "mqtt_client.h"
@@ -48,9 +52,11 @@
 #include "profiles.h"
 #include "probe.h"
 #include "output_control.h"
+#include "io_expander.h"
 #include "ota.h"
 #include "display.h"
 #include "captive_portal.h"
+#include "hardware_profile.h"
 
 // ── Forward declarations ──────────────────────────────────────────────────────
 static void setupWiFi();
@@ -62,6 +68,19 @@ static void handleSerialCommand(String line);
 static void printSerialHelp();
 static void printBenchStatus(const char* reason);
 static void printOutputDiagnostics(const char* reason);
+static void printAudioDiagnostics(const char* reason);
+static void audioSpeakerBegin();
+static void audioToneTest();
+static void audioMicBegin();
+static void audioMicSample();
+static void audioOff();
+static void enterFlashSafeState(const char* reason);
+static bool getSkipProbeInit();
+static void setSkipProbeInit(bool skip);
+static bool getBootTraceMode();
+static void setBootTraceMode(bool enabled);
+static void bootTracePause(const char* stage);
+static void printFlashMetadata();
 static void forceProbeSample();
 static void applyOutputsNow();
 static void serialSetDc1(int pct);
@@ -145,7 +164,8 @@ static String        gStatusLine        = "booting...";
 static String        gSerialLine;
 static bool          gRawOutputOverride = false;
 static bool          gBootDiagnosticsPublished = false;
-
+static bool          gProbeInitEnabled = true;
+static bool          gBootTraceEnabled = false;
 struct BootPinSnapshot {
     int gpio0 = LOW;
     int gpio2 = LOW;
@@ -201,21 +221,30 @@ static unsigned long gAutoResumeAtMs   = 0;        // when > 0: millis() target 
 
 // ── setup() ───────────────────────────────────────────────────────────────────
 void setup() {
-    // OTA boot-loop watchdog — MUST be the very first thing.
+    Serial.begin(115200);
+    delay(200);
+    gBootTraceEnabled = getBootTraceMode();
+    bootTracePause("before_ota_watchdog");
+
+    // OTA boot-loop watchdog — first persistent boot action after optional
+    // diagnostic serial setup.
     // Increments NVS boot counter; if threshold exceeded, rolls back to previous
     // OTA partition before any other initialisation runs.
     // Uses a separate NVS namespace ("smartpid_sys") so cfg.load() can't interfere.
     otaBootWatchdogInit();
+    bootTracePause("before_m5_begin");
 
-    // M5Unified init (handles display, IMU, power chip detection)
+    // M5Unified init (handles display, IMU, power chip detection).
+    // ProofPro owns audio initialization explicitly; generic M5Stack audio
+    // startup pops the SmartPID base speaker path.
     auto mcfg = M5.config();
+    proofpro_hw::applyM5Config(mcfg);
     M5.begin(mcfg);
-
-    Serial.begin(115200);
-    delay(200);
+    bootTracePause("after_m5_begin");
 
     captureBootPinSnapshot();
     outputCtrl.forceAllOff();
+    bootTracePause("after_force_outputs_low");
 
     log_i("==============================");
     log_i("SmartPID M5 OSS — Phase 1 boot");
@@ -258,12 +287,15 @@ void setup() {
             log_i("[I2C] Scan complete: %d device(s)", found);
         }
     }
+    bootTracePause("after_i2c_scan");
 
     // Load config from NVS ("smartpid" namespace)
     cfg.load();
+    gProbeInitEnabled = !getSkipProbeInit();
     log_i("Serial:   %s", cfg.serial_hex);
     log_i("Topic ID: %s", cfg.topic_id);
     log_i("MQTT:     %s:%u", cfg.mqtt_host, cfg.mqtt_port);
+    log_i("[DIAG] probe init: %s", gProbeInitEnabled ? "enabled" : "SKIPPED");
 
     // ── Phase 7: Captive portal ───────────────────────────────────────────────
     // Run before splash/WiFi if no credentials in NVS or BtnA held at boot.
@@ -292,8 +324,10 @@ void setup() {
     M5.Display.setCursor(10, 60);
     M5.Display.println("Connecting WiFi...");
 
+    bootTracePause("before_wifi");
     setupWiFi();
     log_i("WiFi connected: SSID=%s  IP=%s", WiFi.SSID().c_str(), WiFi.localIP().toString().c_str());
+    bootTracePause("after_wifi");
 
     M5.Display.setCursor(10, 75);
     M5.Display.printf("WiFi: %s\n", WiFi.SSID().c_str());
@@ -305,6 +339,7 @@ void setup() {
     // ── MQTT setup ────────────────────────────────────────────────────────────
     mqttMgr.onMessage(onMQTTMessage);
     mqttMgr.begin(cfg);
+    bootTracePause("after_mqtt_begin");
 
     // ── Phase 2+3: channel state, probe, PID, telemetry, command handler ────────
     // Load stored SP/PID defaults into in-RAM channel state
@@ -314,12 +349,23 @@ void setup() {
     ch2.maxpwm = 100;
 
     // Phase 3: probe reader and output controller
-    probeReader.begin();
+    if (gProbeInitEnabled) {
+        probeReader.begin();
+    } else {
+        log_w("[DIAG] probeReader.begin() skipped by NVS diag_skip_probe");
+    }
+    bootTracePause("after_probe_begin");
     outputCtrl.begin(cfg);
+    bootTracePause("after_output_begin");
 
     // Read initial temperature (populates ch.temp before first telemetry tick)
-    ch1.temp = probeReader.readTemp(1);
-    ch2.temp = probeReader.readTemp(2);
+    if (gProbeInitEnabled) {
+        ch1.temp = probeReader.readTemp(1);
+        ch2.temp = probeReader.readTemp(2);
+    } else {
+        ch1.temp = PROBE_SENTINEL_VALUE;
+        ch2.temp = PROBE_SENTINEL_VALUE;
+    }
     ch1.runmode = Runmode::POWER_DIRECT;
     ch2.runmode = Runmode::POWER_DIRECT;
     ch1.paused = false;
@@ -394,8 +440,13 @@ void loop() {
     if (nowMs - lastSampleMs >= kProbeSampleMs) {
         lastSampleMs = nowMs;
         // Read probes (Phase 3)
-        ch1.temp = probeReader.readTemp(1);
-        ch2.temp = probeReader.readTemp(2);
+        if (gProbeInitEnabled) {
+            ch1.temp = probeReader.readTemp(1);
+            ch2.temp = probeReader.readTemp(2);
+        } else {
+            ch1.temp = PROBE_SENTINEL_VALUE;
+            ch2.temp = PROBE_SENTINEL_VALUE;
+        }
         // PID + output update (Phase 3)
         if (!gRawOutputOverride) {
             outputCtrl.update(ch1, ch2);
@@ -619,6 +670,58 @@ static void handleSerialCommand(String line) {
         printOutputDiagnostics("serial_command");
         return;
     }
+    if (lower == "audio" || lower == "audio status") {
+        printAudioDiagnostics("serial_command");
+        return;
+    }
+    if (lower == "audio speaker" || lower == "audio spk" || lower == "audio speaker begin") {
+        audioSpeakerBegin();
+        return;
+    }
+    if (lower == "audio tone" || lower == "audio beep") {
+        audioToneTest();
+        return;
+    }
+    if (lower == "audio mic" || lower == "audio mic begin") {
+        audioMicBegin();
+        return;
+    }
+    if (lower == "audio mic sample" || lower == "audio sample") {
+        audioMicSample();
+        return;
+    }
+    if (lower == "audio off") {
+        audioOff();
+        return;
+    }
+    if (lower == "skipprobe on" || lower == "probeinit off") {
+        setSkipProbeInit(true);
+        Serial.println("{\"type\":\"diag_config\",\"skip_probe_init\":true,\"reboot_required\":true}");
+        return;
+    }
+    if (lower == "skipprobe off" || lower == "probeinit on") {
+        setSkipProbeInit(false);
+        Serial.println("{\"type\":\"diag_config\",\"skip_probe_init\":false,\"reboot_required\":true}");
+        return;
+    }
+    if (lower == "boottrace on") {
+        setBootTraceMode(true);
+        Serial.println("{\"type\":\"diag_config\",\"boot_trace\":true,\"reboot_required\":true}");
+        return;
+    }
+    if (lower == "boottrace off") {
+        setBootTraceMode(false);
+        Serial.println("{\"type\":\"diag_config\",\"boot_trace\":false,\"reboot_required\":true}");
+        return;
+    }
+    if (lower == "flashsafe" || lower == "flash safe" || lower == "usb safe") {
+        enterFlashSafeState("serial_command");
+        return;
+    }
+    if (lower == "flashmeta" || lower == "flash meta") {
+        printFlashMetadata();
+        return;
+    }
     if (serialHandleCalibration(lower)) {
         forceProbeSample();
         printBenchStatus("cal");
@@ -702,6 +805,16 @@ static void printSerialHelp() {
     Serial.println("  pt100 scan            scan PT100 excitation/config candidates");
     Serial.println("  pt100 3w              print PT100 3-wire terminal/comp diagnostics");
     Serial.println("  diag/outputs          print output GPIO readback diagnostics");
+    Serial.println("  audio/status          print speaker/mic diagnostics");
+    Serial.println("  audio speaker         enable speaker after boot");
+    Serial.println("  audio tone            play a short speaker tone");
+    Serial.println("  audio mic             enable mic after boot");
+    Serial.println("  audio mic sample      record a short mic sample and print level");
+    Serial.println("  audio off             stop speaker and mic");
+    Serial.println("  skipprobe on|off      persistently skip/enable probe init on next boot");
+    Serial.println("  boottrace on|off      pause/log early boot stages on next boot");
+    Serial.println("  flashsafe             force GPIO + IO expander safe before USB flash");
+    Serial.println("  flashmeta             read-only bootloader/partition flash metadata");
     Serial.println("  cal                   print probe calibration offsets");
     Serial.println("  cal1|cal2 <offset>    set probe calibration offset in current temp unit");
     Serial.println("  monitor               send OEM JSON {\"start\":\"monitor\"}");
@@ -719,6 +832,147 @@ static void printSerialHelp() {
     Serial.println("  {json...}             pass OEM-format JSON to MQTT command handler");
 }
 
+static void printAudioDiagnostics(const char* reason) {
+    JsonDocument doc;
+    doc["type"] = "audio_diagnostics";
+    doc["reason"] = reason;
+    doc["time"] = millis();
+#ifdef DESKTOP_BUILD
+    doc["available"] = false;
+#else
+    JsonObject speaker = doc["speaker"].to<JsonObject>();
+    speaker["enabled"] = M5.Speaker.isEnabled();
+    speaker["running"] = M5.Speaker.isRunning();
+    speaker["playing"] = (bool)M5.Speaker.isPlaying();
+    speaker["volume"] = M5.Speaker.getVolume();
+    auto spk = M5.Speaker.config();
+    speaker["pin_data_out"] = spk.pin_data_out;
+    speaker["use_dac"] = spk.use_dac;
+    speaker["i2s_port"] = (int)spk.i2s_port;
+
+    JsonObject mic = doc["mic"].to<JsonObject>();
+    mic["enabled"] = M5.Mic.isEnabled();
+    mic["running"] = M5.Mic.isRunning();
+    mic["recording"] = (uint32_t)M5.Mic.isRecording();
+    auto mc = M5.Mic.config();
+    mic["pin_data_in"] = mc.pin_data_in;
+    mic["use_adc"] = mc.use_adc;
+    mic["i2s_port"] = (int)mc.i2s_port;
+#endif
+    serializeJson(doc, Serial);
+    Serial.println();
+}
+
+static void audioSpeakerBegin() {
+#ifdef DESKTOP_BUILD
+    Serial.println("{\"type\":\"audio_speaker_begin\",\"available\":false}");
+#else
+    M5.Mic.end();
+    proofpro_hw::holdSpeakerQuiet();
+    delay(25);
+    proofpro_hw::configureSpeaker();
+    M5.Speaker.setVolume(0);
+    bool ok = M5.Speaker.begin();
+    delay(100);
+    M5.Speaker.setVolume(32);
+
+    JsonDocument doc;
+    doc["type"] = "audio_speaker_begin";
+    doc["time"] = millis();
+    doc["ok"] = ok;
+    doc["enabled"] = M5.Speaker.isEnabled();
+    doc["running"] = M5.Speaker.isRunning();
+    doc["volume"] = M5.Speaker.getVolume();
+    serializeJson(doc, Serial);
+    Serial.println();
+#endif
+}
+
+static void audioToneTest() {
+#ifdef DESKTOP_BUILD
+    Serial.println("{\"type\":\"audio_tone\",\"available\":false}");
+#else
+    if (!M5.Speaker.isRunning()) audioSpeakerBegin();
+    bool ok = M5.Speaker.tone(1000, 120);
+    JsonDocument doc;
+    doc["type"] = "audio_tone";
+    doc["time"] = millis();
+    doc["ok"] = ok;
+    doc["running"] = M5.Speaker.isRunning();
+    serializeJson(doc, Serial);
+    Serial.println();
+#endif
+}
+
+static void audioMicBegin() {
+#ifdef DESKTOP_BUILD
+    Serial.println("{\"type\":\"audio_mic_begin\",\"available\":false}");
+#else
+    M5.Speaker.end();
+    proofpro_hw::configureMic();
+    bool ok = M5.Mic.begin();
+    JsonDocument doc;
+    doc["type"] = "audio_mic_begin";
+    doc["time"] = millis();
+    doc["ok"] = ok;
+    doc["enabled"] = M5.Mic.isEnabled();
+    doc["running"] = M5.Mic.isRunning();
+    serializeJson(doc, Serial);
+    Serial.println();
+#endif
+}
+
+static void audioMicSample() {
+#ifdef DESKTOP_BUILD
+    Serial.println("{\"type\":\"audio_mic_sample\",\"available\":false}");
+#else
+    if (!M5.Mic.isRunning()) audioMicBegin();
+    static int16_t samples[320] = {};
+    memset(samples, 0, sizeof(samples));
+    bool ok = M5.Mic.record(samples, sizeof(samples) / sizeof(samples[0]), 16000);
+    uint32_t waitStart = millis();
+    while (M5.Mic.isRecording() && (millis() - waitStart) < 1000) {
+        delay(1);
+    }
+    int16_t minSample = 32767;
+    int16_t maxSample = -32768;
+    uint32_t absSum = 0;
+    for (size_t i = 0; i < sizeof(samples) / sizeof(samples[0]); ++i) {
+        int16_t s = samples[i];
+        if (s < minSample) minSample = s;
+        if (s > maxSample) maxSample = s;
+        absSum += (uint32_t)abs((int)s);
+    }
+    JsonDocument doc;
+    doc["type"] = "audio_mic_sample";
+    doc["time"] = millis();
+    doc["ok"] = ok;
+    doc["recording"] = (uint32_t)M5.Mic.isRecording();
+    doc["min"] = minSample;
+    doc["max"] = maxSample;
+    doc["avg_abs"] = absSum / (sizeof(samples) / sizeof(samples[0]));
+    serializeJson(doc, Serial);
+    Serial.println();
+#endif
+}
+
+static void audioOff() {
+#ifdef DESKTOP_BUILD
+    Serial.println("{\"type\":\"audio_off\",\"available\":false}");
+#else
+    M5.Speaker.end();
+    M5.Mic.end();
+    proofpro_hw::holdSpeakerQuiet();
+    JsonDocument doc;
+    doc["type"] = "audio_off";
+    doc["time"] = millis();
+    doc["speaker_running"] = M5.Speaker.isRunning();
+    doc["mic_running"] = M5.Mic.isRunning();
+    serializeJson(doc, Serial);
+    Serial.println();
+#endif
+}
+
 static void printBenchStatus(const char* reason) {
     JsonDocument doc;
     doc["type"] = "bench_status";
@@ -728,9 +982,15 @@ static void printBenchStatus(const char* reason) {
     doc["wifi"] = (WiFi.status() == WL_CONNECTED);
     doc["ip"] = WiFi.localIP().toString();
     doc["mqtt"] = mqttMgr.connected();
+    doc["probe_init_enabled"] = gProbeInitEnabled;
     doc["remote"] = mqttRemoteEnabled();
     doc["acc_elements_enabled"] = accElementsEnabled();
     doc["raw_output_override"] = gRawOutputOverride;
+
+    JsonObject io = doc["io_expander"].to<JsonObject>();
+    io["input_reg"] = ioExpander.readReg(IO_EXP_REG_INPUT);
+    io["output_reg"] = ioExpander.readReg(IO_EXP_REG_OUTPUT);
+    io["config_reg"] = ioExpander.readReg(IO_EXP_REG_CONFIG);
 
     JsonObject c1 = doc["ch1"].to<JsonObject>();
     bool c1Valid = tempInProcessRange(ch1.temp, cfg.temp_unit);
@@ -772,6 +1032,7 @@ static void printOutputDiagnostics(const char* reason) {
     doc["reason"] = reason;
     doc["time"] = millis();
     doc["reset_reason"] = resetReasonString(gBootResetReason);
+    doc["probe_init_enabled"] = gProbeInitEnabled;
 
     JsonObject boot = doc["boot_gpio"].to<JsonObject>();
     boot["0"] = gBootPins.gpio0;
@@ -800,14 +1061,235 @@ static void printOutputDiagnostics(const char* reason) {
     gpio["rl1_gpio26"] = digitalRead(GPIO_RL1);
     gpio["rl2_gpio16"] = digitalRead(GPIO_RL2);
 
+    JsonObject probe = doc["probe"].to<JsonObject>();
+    probe["ch1_type"] = (uint8_t)cfg.ch1_probe_type;
+    probe["ch2_type"] = (uint8_t)cfg.ch2_probe_type;
+
+    JsonObject io = doc["io_expander"].to<JsonObject>();
+    io["input_reg"] = ioExpander.readReg(IO_EXP_REG_INPUT);
+    io["output_reg"] = ioExpander.readReg(IO_EXP_REG_OUTPUT);
+    io["config_reg"] = ioExpander.readReg(IO_EXP_REG_CONFIG);
+
     serializeJson(doc, Serial);
     Serial.println();
     telemetry.publishOutputDiagnostics(reason, ch1, ch2);
 }
 
+static void enterFlashSafeState(const char* reason) {
+    ch1.stop();
+    ch2.stop();
+    ch1.runmode = Runmode::IDLE;
+    ch2.runmode = Runmode::IDLE;
+    ch1.power_pct = 0;
+    ch2.power_pct = 0;
+    ch1.relay_command = false;
+    ch2.relay_command = false;
+    ch1.relay_state = false;
+    ch2.relay_state = false;
+    gRawOutputOverride = false;
+
+    outputCtrl.forceAllOff();
+    ioExpander.flashSafeState();
+
+    JsonDocument doc;
+    doc["type"] = "flash_safe";
+    doc["reason"] = reason;
+    doc["time"] = millis();
+    JsonObject gpio = doc["gpio_readback"].to<JsonObject>();
+    gpio["dc1_gpio12"] = digitalRead(GPIO_DCOUT1);
+    gpio["dc2_gpio13"] = digitalRead(GPIO_DCOUT2);
+    gpio["rl1_gpio26"] = digitalRead(GPIO_RL1);
+    gpio["rl2_gpio16"] = digitalRead(GPIO_RL2);
+    gpio["io_exp_output"] = ioExpander.readReg(IO_EXP_REG_OUTPUT);
+    gpio["io_exp_config"] = ioExpander.readReg(IO_EXP_REG_CONFIG);
+
+    serializeJson(doc, Serial);
+    Serial.println();
+    telemetry.publishOutputDiagnostics("flash_safe", ch1, ch2);
+}
+
+static bool getSkipProbeInit() {
+    Preferences prefs;
+    prefs.begin("smartpid_sys", /*readOnly=*/true);
+    bool skip = prefs.getBool("diag_skip_probe", false);
+    prefs.end();
+    return skip;
+}
+
+static void setSkipProbeInit(bool skip) {
+    Preferences prefs;
+    prefs.begin("smartpid_sys", /*readOnly=*/false);
+    prefs.putBool("diag_skip_probe", skip);
+    prefs.end();
+    log_w("[DIAG] diag_skip_probe set to %s; reboot required",
+          skip ? "true" : "false");
+}
+
+static bool getBootTraceMode() {
+    Preferences prefs;
+    prefs.begin("smartpid_sys", /*readOnly=*/true);
+    bool enabled = prefs.getBool("diag_boot_trace", false);
+    prefs.end();
+    return enabled;
+}
+
+static void setBootTraceMode(bool enabled) {
+    Preferences prefs;
+    prefs.begin("smartpid_sys", /*readOnly=*/false);
+    prefs.putBool("diag_boot_trace", enabled);
+    prefs.end();
+    log_w("[DIAG] diag_boot_trace set to %s; reboot required",
+          enabled ? "true" : "false");
+}
+
+static void bootTracePause(const char* stage) {
+    if (!gBootTraceEnabled) return;
+
+    JsonDocument doc;
+    doc["type"] = "boot_trace";
+    doc["stage"] = stage;
+    doc["time"] = millis();
+    serializeJson(doc, Serial);
+    Serial.println();
+    Serial.flush();
+    delay(1500);
+}
+
+static const char* espImageFlashModeName(uint8_t mode) {
+    switch (mode) {
+        case 0x00: return "qio";
+        case 0x01: return "qout";
+        case 0x02: return "dio";
+        case 0x03: return "dout";
+        default: return "unknown";
+    }
+}
+
+static const char* espImageFlashFreqName(uint8_t sizeFreq) {
+    switch (sizeFreq & 0x0f) {
+        case 0x0: return "40m";
+        case 0x1: return "26m";
+        case 0x2: return "20m";
+        case 0xf: return "80m";
+        default: return "unknown";
+    }
+}
+
+static const char* espImageFlashSizeName(uint8_t sizeFreq) {
+    switch ((sizeFreq >> 4) & 0x0f) {
+        case 0x0: return "1MB";
+        case 0x1: return "2MB";
+        case 0x2: return "4MB";
+        case 0x3: return "8MB";
+        case 0x4: return "16MB";
+        default: return "unknown";
+    }
+}
+
+#ifndef DESKTOP_BUILD
+static bool flashReadBytes(uint32_t address, void* out, size_t len) {
+    return esp_flash_read(esp_flash_default_chip, out, address, len) == ESP_OK;
+}
+
+static bool flashSha256(uint32_t address, size_t len, char outHex[65]) {
+    mbedtls_sha256_context ctx;
+    mbedtls_sha256_init(&ctx);
+    mbedtls_sha256_starts(&ctx, 0);
+
+    uint8_t buf[256];
+    size_t done = 0;
+    while (done < len) {
+        size_t chunk = min(sizeof(buf), len - done);
+        if (!flashReadBytes(address + done, buf, chunk)) {
+            mbedtls_sha256_free(&ctx);
+            return false;
+        }
+        mbedtls_sha256_update(&ctx, buf, chunk);
+        done += chunk;
+    }
+
+    uint8_t digest[32];
+    mbedtls_sha256_finish(&ctx, digest);
+    mbedtls_sha256_free(&ctx);
+
+    static const char* hex = "0123456789abcdef";
+    for (size_t i = 0; i < sizeof(digest); ++i) {
+        outHex[i * 2] = hex[digest[i] >> 4];
+        outHex[i * 2 + 1] = hex[digest[i] & 0x0f];
+    }
+    outHex[64] = '\0';
+    return true;
+}
+
+#endif
+
+static void addFlashRegion(JsonDocument& doc,
+                           const char* name,
+                           uint32_t address,
+                           size_t len,
+                           bool imageHeader) {
+    JsonObject region = doc[name].to<JsonObject>();
+    region["address"] = address;
+    region["length"] = len;
+
+#ifdef DESKTOP_BUILD
+    region["available"] = false;
+#else
+    uint8_t header[8] = {};
+    char sha[65] = {};
+    bool headerOk = flashReadBytes(address, header, sizeof(header));
+    bool shaOk = flashSha256(address, len, sha);
+
+    region["available"] = headerOk && shaOk;
+    if (shaOk) region["sha256"] = sha;
+    if (headerOk) {
+        region["magic"] = header[0];
+        if (imageHeader) {
+            region["segments"] = header[1];
+            region["flash_mode"] = espImageFlashModeName(header[2]);
+            region["flash_freq"] = espImageFlashFreqName(header[3]);
+            region["flash_size"] = espImageFlashSizeName(header[3]);
+            region["entry_addr"] =
+                ((uint32_t)header[7] << 24) |
+                ((uint32_t)header[6] << 16) |
+                ((uint32_t)header[5] << 8) |
+                (uint32_t)header[4];
+        }
+    }
+#endif
+}
+
+static void printFlashMetadata() {
+    JsonDocument doc;
+    doc["type"] = "flash_metadata";
+    doc["time"] = millis();
+    addFlashRegion(doc, "bootloader", 0x1000, 0x7000, true);
+    addFlashRegion(doc, "partition_table", 0x8000, 0x0c00, false);
+    addFlashRegion(doc, "otadata", 0xe000, 0x2000, false);
+    addFlashRegion(doc, "app0_header", 0x10000, 0x1000, true);
+    addFlashRegion(doc, "app1_header", 0x650000, 0x1000, true);
+#ifndef DESKTOP_BUILD
+    const esp_partition_t* running = esp_ota_get_running_partition();
+    if (running) {
+        JsonObject active = doc["running_app"].to<JsonObject>();
+        active["label"] = running->label;
+        active["address"] = running->address;
+        active["size"] = running->size;
+        addFlashRegion(doc, "running_app_header", running->address, 0x1000, true);
+    }
+#endif
+    serializeJson(doc, Serial);
+    Serial.println();
+}
+
 static void forceProbeSample() {
-    ch1.temp = probeReader.readTemp(1);
-    ch2.temp = probeReader.readTemp(2);
+    if (gProbeInitEnabled) {
+        ch1.temp = probeReader.readTemp(1);
+        ch2.temp = probeReader.readTemp(2);
+    } else {
+        ch1.temp = PROBE_SENTINEL_VALUE;
+        ch2.temp = PROBE_SENTINEL_VALUE;
+    }
     display.notifyDataUpdate();
 }
 
@@ -978,11 +1460,7 @@ static bool serialHandleRawOut(const String& lower) {
 }
 
 static void serialRawAllOff(bool leaveOverride) {
-    const int pins[] = {GPIO_CH0_OUT, GPIO_CH1_OUT, GPIO_CH2_OUT, GPIO_CH3_OUT};
-    for (int pin : pins) {
-        pinMode(pin, OUTPUT);
-        digitalWrite(pin, LOW);
-    }
+    outputCtrl.forceAllOff();
     gRawOutputOverride = leaveOverride;
     ch1.power_pct = 0;
     ch2.power_pct = 0;
@@ -1005,8 +1483,7 @@ static void serialRawSetSlot(int slot, bool on, bool exclusive) {
     ch2.runmode = Runmode::MONITOR;
 
     gRawOutputOverride = true;
-    pinMode(pin, OUTPUT);
-    digitalWrite(pin, on ? HIGH : LOW);
+    outputCtrl.driveOutputPin(pin, on);
 }
 
 static void serialRawMask(uint8_t mask) {
@@ -1019,8 +1496,7 @@ static void serialRawMask(uint8_t mask) {
     for (int slot = 0; slot < 4; ++slot) {
         int pin = serialRawPinForSlot(slot);
         if (pin < 0) continue;
-        pinMode(pin, OUTPUT);
-        digitalWrite(pin, (mask & (1u << slot)) ? HIGH : LOW);
+        outputCtrl.driveOutputPin(pin, (mask & (1u << slot)) != 0);
     }
 }
 

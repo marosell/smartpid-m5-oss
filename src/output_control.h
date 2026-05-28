@@ -59,6 +59,10 @@ public:
     // diagnostics paths where state-machine timing must not leave hardware on.
     void forceAllOff();
 
+    // Low-level bench/diagnostic drive for one physical output. OFF applies the
+    // same low-hold used by normal control paths.
+    void driveOutputPin(int pin, bool on);
+
     // Run one update cycle after each local probe read.
     void update(ChannelState& ch1, ChannelState& ch2);
 

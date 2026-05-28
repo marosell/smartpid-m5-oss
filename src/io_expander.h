@@ -76,6 +76,11 @@ public:
     // Returns true if device ACKs at IO_EXP_ADDR.
     bool begin();
 
+    // Maintenance safe state before USB bootloader/flash attempts. Drives the
+    // external latch low so any carrier-board enables controlled by this chip
+    // stay inactive while the ESP32 is reset into ROM mode.
+    void flashSafeState();
+
     // Configure excitation bits for one probe channel.
     // Mirrors OEM FUN_400f9c78(probe_type, ch_bit, comp_bit).
     //   probe_type — ProbeType enum value

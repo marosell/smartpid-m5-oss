@@ -160,6 +160,24 @@ static void startAccelProgramTimer(ChannelState* ch) {
     ch->timerFrozenRemaining_s = 0;
 }
 
+static RelayMode savedRelayModeFor(const Config* cfg, int chIdx) {
+    if (!cfg) return RelayMode::OFF;
+    return (RelayMode)((chIdx == 1) ? cfg->pwr_relay1_mode : cfg->pwr_relay2_mode);
+}
+
+static void syncRelayModeFromConfig(ChannelState* ch, const Config* cfg, int chIdx) {
+    if (!ch || !cfg) return;
+    RelayMode savedMode = savedRelayModeFor(cfg, chIdx);
+    if (ch->relay_mode == savedMode) return;
+    log_i("[CMD] CH%d relay_mode live sync: %s -> %s",
+          chIdx, relayModeStr(ch->relay_mode), relayModeStr(savedMode));
+    ch->relay_mode = savedMode;
+    if (savedMode == RelayMode::OFF || savedMode == RelayMode::LOCAL_ON_OFF) {
+        ch->relay_command = false;
+        ch->relay_state = false;
+    }
+}
+
 // ── begin ─────────────────────────────────────────────────────────────────────
 void CommandHandler::begin(Config& cfg, MQTTManager& mqtt,
                            TelemetryPublisher& tele,
@@ -178,6 +196,8 @@ void CommandHandler::begin(Config& cfg, MQTTManager& mqtt,
     }
     if (gMqttRemoteEnabled) cfg.pwr_wdog_enabled = true;
     gAccElementsEnabled = cfg.pwr_acc_elements_enabled;
+    syncRelayModeFromConfig(&ch1, &cfg, 1);
+    syncRelayModeFromConfig(&ch2, &cfg, 2);
     gLastMqttMsgMs = millis();
     gWatchdogFired = false;
 }
@@ -744,14 +764,6 @@ void CommandHandler::_cmdSetAccMode(bool enabled) {
 void CommandHandler::_cmdSetRelayMode(int chIdx, const char* modeStr) {
     ChannelState* ch = _channel(chIdx);
     if (!ch) return;
-    const bool relayDisabled = _cfg && ((chIdx == 1)
-        ? (_cfg->pwr_relay1_mode == (uint8_t)RelayMode::OFF)
-        : (_cfg->pwr_relay2_mode == (uint8_t)RelayMode::OFF));
-    if (relayDisabled) {
-        if (_tele) _tele->publishCommandError("relay_mode", "disabled_output");
-        log_w("[CMD] CH%d relay_mode ignored — RL%d mode is Off", chIdx, chIdx);
-        return;
-    }
     RelayMode mode;
     if (strcmp(modeStr, "off") == 0)           mode = RelayMode::OFF;
     else if (strcmp(modeStr, "acc_element") == 0 || strcmp(modeStr, "acc_sync") == 0) mode = RelayMode::ACC_SYNC;
@@ -783,10 +795,8 @@ void CommandHandler::_cmdSetRelayMode(int chIdx, const char* modeStr) {
 void CommandHandler::_cmdSetRelay(int chIdx, bool state) {
     ChannelState* ch = _channel(chIdx);
     if (!ch) return;
-    const bool relayDisabled = _cfg && ((chIdx == 1)
-        ? (_cfg->pwr_relay1_mode == (uint8_t)RelayMode::OFF)
-        : (_cfg->pwr_relay2_mode == (uint8_t)RelayMode::OFF));
-    if (relayDisabled) {
+    syncRelayModeFromConfig(ch, _cfg, chIdx);
+    if (savedRelayModeFor(_cfg, chIdx) == RelayMode::OFF) {
         if (_tele) _tele->publishCommandError("relay", "disabled_output");
         log_w("[CMD] CH%d relay ignored — RL%d mode is Off", chIdx, chIdx);
         return;

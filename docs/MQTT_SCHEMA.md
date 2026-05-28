@@ -123,6 +123,9 @@ Field notes:
 - `relay` is the actual physical relay output state.
 - `relay_engaged` is the commanded/armed relay state for `remote_other`,
   `manual_on_off`, `acc_element`, and `cycle`; it is false for `off`.
+- Live `relay_mode` is synchronized from retained `config.relays.CHx.mode` on
+  boot and before accepted remote relay commands, so Proof should not need to
+  resend relay mode after reconnect just to make a configured relay commandable.
 - In `acc_element`, `relay_engaged=true` means the acceleration relay is allowed
   to run while acceleration is active.
 - In `cycle`, `relay_engaged=true` means the cycle is armed even when the actual
@@ -386,6 +389,8 @@ Behavior notes:
 
 - Changing `relay_mode` always clears `relay_command` and forces the physical
   relay off. The new mode must be turned on again manually or remotely.
+- Changing `relay_mode` is allowed even when the prior mode was `off`; `off`
+  means disabled behavior, not that future mode changes are rejected.
 - `remote_other` lets Proof directly drive the relay with `CHx relay`.
 - `acc_element` lets Proof engage/disengage the acceleration relay. Firmware
   still controls actual output from acceleration state.

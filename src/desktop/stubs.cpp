@@ -3,6 +3,7 @@
 
 #include "command_handler.h"
 #include "config.h"
+#include "io_expander.h"
 #include "mqtt_client.h"
 #include "output_control.h"
 #include "profiles.h"
@@ -13,6 +14,7 @@ Config cfg;
 MQTTManager mqttMgr;
 OutputController outputCtrl;
 ProfileManager profiles;
+IOExpander ioExpander;
 
 void DesktopM5::update() {}
 
@@ -69,6 +71,8 @@ String MQTTManager::fullTopic(const char* suffix) const { return String("desktop
 OutputController::OutputController() = default;
 OutputController::~OutputController() = default;
 void OutputController::begin(Config&) {}
+void OutputController::forceAllOff() {}
+void OutputController::driveOutputPin(int, bool) {}
 void OutputController::update(ChannelState& ch1, ChannelState& ch2) {
     auto powerState = [](ChannelState& ch, bool dcEnabled) -> uint8_t {
         if (!ch.isRunning() || ch.paused || ch.finishLatch || ch.watchdogFired || !dcEnabled) return 0;
@@ -99,6 +103,18 @@ void OutputController::update(ChannelState& ch1, ChannelState& ch2) {
     ch2.relay_state = relayState(ch2);
 }
 void OutputController::pwmLoop() {}
+
+bool IOExpander::begin() { return true; }
+void IOExpander::flashSafeState() {}
+void IOExpander::configureProbeExcitation(ProbeType, uint8_t, uint8_t) {}
+void IOExpander::setConfig(bool) {}
+void IOExpander::setBitInReg(uint8_t, uint8_t, bool) {}
+void IOExpander::setOutputBit(uint8_t, bool) {}
+void IOExpander::writeReg(uint8_t, uint8_t) {}
+uint8_t IOExpander::readReg(uint8_t reg) {
+    if (reg == IO_EXP_REG_CONFIG) return 0x00;
+    return 0x00;
+}
 
 void ProfileManager::begin(Config&, MQTTManager&, TelemetryPublisher&) {}
 bool ProfileManager::load(uint8_t, ProfileBlob& dest) const {

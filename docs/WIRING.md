@@ -13,7 +13,7 @@ in the ignored `firmware-oem/` archive.
 - Device IP during bench: `10.0.1.60`
 - MQTT broker during bench: `10.0.1.203:1883`
 - Firmware env: `m5stack-core-esp32-16M`
-- Bench dates covered here: 2026-05-25 to 2026-05-26
+- Bench dates covered here: 2026-05-25 to 2026-05-27
 
 ## Safety Notes
 
@@ -24,6 +24,12 @@ in the ignored `firmware-oem/` archive.
   voltmeter and continuity mode.
 - GPIO 12 is an ESP32 strapping pin. Keep DC OUT 1 LOW during reset/boot. The
   bench firmware initializes output pins LOW.
+- USB auto-reset/download entry can briefly energize DC OUT 1 / GPIO12 before
+  firmware can run. OTA is the normal update path. Do not USB-flash with a
+  heater or other hazardous load connected to DC OUT 1.
+- The bench unit has no onboard microphone. Run-ending audio should be a
+  generated tone sequence played through the speaker, not a recorded/listened
+  microphone feature.
 
 ## Resolved Preconditions
 
@@ -63,6 +69,8 @@ Additional output observations:
 | 2026-05-25 | DC1/DC2 PWM | 0%, 50%, and 100% behaved as expected by voltmeter |
 | 2026-05-26 | Power screen output reflection | DC and relay tiles update with commanded state |
 | 2026-05-26 | Disabled outputs | DC/relay functions disabled when configured `off`; UI darkening added |
+| 2026-05-27 | USB flashing auto-reset | `esptool --no-stub` caused DC1 to spike; no-reset serial attempt stayed quiet but could not connect |
+| 2026-05-27 | Normal boot/OTA output state | Normal firmware boot and OTA path hold DC1/DC2/RL1/RL2 safe/off |
 
 ## Terminal Functions
 
@@ -216,6 +224,9 @@ behavior that should be retested on hardware before release.
 | 2026-05-27 | PT100 3-wire regression | Cleared; current calibration offsets remain documented above |
 | 2026-05-27 | MQTT Remote gating | Cleared; Remote gates MQTT start/output/program commands and persists across power cycle |
 | 2026-05-27 | MQTT schema cleanup | Retained status exposes identity/runtime readiness; retained config exposes program/relay defaults; END event is device-level `program_ended` with `finish_timer` / `finish_temp` / `finish` reason |
+| 2026-05-27 | Accel completion | Accel completion is device-wide; AccElement drops out, DC outputs return to selected power, status returns to `RUN` |
+| 2026-05-27 | Relay config/live sync | Runtime relay mode syncs from retained config on boot and before relay commands |
+| 2026-05-27 | Audio hardware | No onboard microphone; MacBook recording of DSPR400 beep will be used to derive synthesized end tones |
 
 ## Must Test Next
 
@@ -224,6 +235,8 @@ behavior that should be retested on hardware before release.
 3. Relay `cycle` mode.
 4. NTC route if an NTC probe becomes available.
 5. Proof integration against updated MQTT schema in `docs/MQTT_SCHEMA.md`.
+6. Proof remote relay regression after retained/live relay mode sync fix.
+7. DSPR400 end-beep recording and tone frequency/timing extraction.
 
 ## Useful Commands
 

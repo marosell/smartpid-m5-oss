@@ -5,8 +5,16 @@ No temporary source edits are required for normal first boot.
 
 ## Step 1 - Flash firmware
 
-Before first USB flashing, complete the safety checks in `README.md` and
-`docs/WIRING.md`, especially confirming GPIO12 / DC OUT 1 is LOW at reset.
+USB flashing is not the normal update path for an installed ProofPro. Bench
+testing on 2026-05-27 showed that ESP32 USB auto-reset/download entry can
+briefly energize DC OUT 1 / GPIO12 before firmware or the bootloader can take
+control. `esptool --no-stub` still caused the DC1 spike, while
+`--before no-reset --after no-reset --no-stub` stayed quiet but could not
+connect.
+
+Use OTA for routine updates. If USB flashing is unavoidable, disconnect any
+hazardous loads from DC1/DC2/RL1/RL2 first and complete the safety checks in
+`README.md` and `docs/WIRING.md`.
 
 ```bash
 cd /path/to/smartpid-m5-oss
@@ -107,6 +115,10 @@ Device hostname: `smartpid-m5` via mDNS.
 Before and after OTA, firmware forces DC1/DC2/RL1/RL2 low and logs GPIO
 readback. This is especially important for DC OUT 1, which is GPIO12 and also
 an ESP32 boot strapping pin.
+
+Current operational rule: OTA is the safe update path for the bench/installed
+unit. Do not USB-flash with a heater or other hazardous load connected to DC
+OUT 1.
 
 ## Output strap diagnostics
 

@@ -36,6 +36,35 @@ static void freezePowerTimer(ChannelState& ch) {
     if (ch.timerFrozenRemaining_s == 0) ch.timerExpired = true;
 }
 
+static bool channelReachedAccelTemp(const ChannelState& ch, const Config& cfg) {
+    return ch.runmode == Runmode::POWER_DIRECT &&
+           ch.programRunning &&
+           ch.acc_mode &&
+           ch.accelPhaseActive &&
+           ch.dAST > 0.0f &&
+           tempInProcessRange(ch.temp, cfg.temp_unit) &&
+           ch.temp >= ch.dAST;
+}
+
+static void completeDeviceAccelPhase(ChannelState& ch1, ChannelState& ch2, int sourceCh) {
+    const bool ch1WasActive = ch1.accelPhaseActive;
+    const bool ch2WasActive = ch2.accelPhaseActive;
+
+    ch1.accelPhaseActive = false;
+    ch2.accelPhaseActive = false;
+
+    if (ch1WasActive) ch1.accelPhaseJustEnded = true;
+    if (ch2WasActive) ch2.accelPhaseJustEnded = true;
+
+    log_i("[OUT] device accel phase end from CH%d: CH1 → %u%%, CH2 → %u%%",
+          sourceCh, ch1.distill_power_pct, ch2.distill_power_pct);
+}
+
+static void writeOutputPin(int pin, bool on) {
+    pinMode(pin, OUTPUT);
+    digitalWrite(pin, on ? HIGH : LOW);
+}
+
 // ── begin ─────────────────────────────────────────────────────────────────────
 void OutputController::begin(Config& cfg) {
     _cfg = &cfg;
@@ -66,8 +95,7 @@ void OutputController::begin(Config& cfg) {
 void OutputController::forceAllOff() {
     const int pins[] = {GPIO_CH0_OUT, GPIO_CH1_OUT, GPIO_CH2_OUT, GPIO_CH3_OUT};
     for (int pin : pins) {
-        pinMode(pin, OUTPUT);
-        digitalWrite(pin, LOW);
+        writeOutputPin(pin, false);
     }
     _pwm1.dutyCurrent = 0;
     _pwm2.dutyCurrent = 0;
@@ -78,21 +106,33 @@ void OutputController::forceAllOff() {
     _rl1CoolingState = false;
 }
 
+void OutputController::driveOutputPin(int pin, bool on) {
+    writeOutputPin(pin, on);
+}
+
 // ── update ────────────────────────────────────────────────────────────────────
 // Dispatch each channel to the appropriate control path.
 void OutputController::update(ChannelState& ch1, ChannelState& ch2) {
     ControlAlgo algo1 = (ControlAlgo)_cfg->ch1_control_algo;
     ControlAlgo algo2 = (ControlAlgo)_cfg->ch2_control_algo;
 
+    if (_cfg && _cfg->pwr_acc_mode) {
+        if (channelReachedAccelTemp(ch1, *_cfg)) {
+            completeDeviceAccelPhase(ch1, ch2, 1);
+        } else if (channelReachedAccelTemp(ch2, *_cfg)) {
+            completeDeviceAccelPhase(ch1, ch2, 2);
+        }
+    }
+
     if (ch1.watchdogFired || ch2.watchdogFired) {
         _pwm1.dutyCurrent = 0;
         _pwm2.dutyCurrent = 0;
         _pwm1.pinHigh = false;
         _pwm2.pinHigh = false;
-        digitalWrite(GPIO_DCOUT1, LOW);
-        digitalWrite(GPIO_DCOUT2, LOW);
-        digitalWrite(GPIO_RL1, LOW);
-        digitalWrite(GPIO_RL2, LOW);
+        writeOutputPin(GPIO_DCOUT1, false);
+        writeOutputPin(GPIO_DCOUT2, false);
+        writeOutputPin(GPIO_RL1, false);
+        writeOutputPin(GPIO_RL2, false);
         ch1.power_pct = 0;
         ch2.power_pct = 0;
         ch1.relay_state = false;
@@ -145,10 +185,10 @@ void OutputController::_updatePowerDirect(int chIdx, ChannelState& ch,
     if (!tempInProcessRange(ch.temp, _cfg->temp_unit)) {
         pwmState.dutyCurrent = 0;
         if (pwmState.pinHigh) {
-            digitalWrite(dcOutPin, LOW);
+            writeOutputPin(dcOutPin, false);
             pwmState.pinHigh = false;
         }
-        digitalWrite(relayPin, LOW);
+        writeOutputPin(relayPin, false);
         ch.relay_state = false;
         ch.power_pct = 0;
         log_w("[OUT] CH%d PROBE DISCONNECTED (temp=%.0f) — outputs forced OFF",
@@ -174,9 +214,9 @@ void OutputController::_updatePowerDirect(int chIdx, ChannelState& ch,
     }
     if (ch.finishLatch) {
         pwmState.dutyCurrent = 0;
-        digitalWrite(dcOutPin, LOW);
+        writeOutputPin(dcOutPin, false);
         pwmState.pinHigh = false;
-        digitalWrite(relayPin, LOW);
+        writeOutputPin(relayPin, false);
         ch.relay_state = false;
         ch.power_pct = 0;
         return;
@@ -186,16 +226,18 @@ void OutputController::_updatePowerDirect(int chIdx, ChannelState& ch,
     if (!ch.isRunning() || ch.paused) {
         pwmState.dutyCurrent = 0;
         if (pwmState.pinHigh) {
-            digitalWrite(dcOutPin, LOW);
+            writeOutputPin(dcOutPin, false);
             pwmState.pinHigh = false;
         }
-        digitalWrite(relayPin, LOW);
+        writeOutputPin(relayPin, false);
         ch.relay_state = false;
         ch.power_pct = 0;
         return;
     }
 
-    // 4 + 5. Compute target power considering acceleration phase
+    // 4 + 5. Compute target power considering acceleration phase. The accel
+    // phase is completed device-wide in update(); this channel-level guard is
+    // kept for callers that exercise _updatePowerDirect directly.
     uint8_t targetPct;
     if (ch.acc_mode && ch.accelPhaseActive) {
         // Check if acceleration phase end threshold crossed
@@ -220,7 +262,7 @@ void OutputController::_updatePowerDirect(int chIdx, ChannelState& ch,
     // Drive DC OUT at computed duty
     pwmState.dutyCurrent = ch.power_pct;
     if (ch.power_pct == 0 && pwmState.pinHigh) {
-        digitalWrite(dcOutPin, LOW);
+        writeOutputPin(dcOutPin, false);
         pwmState.pinHigh = false;
     }
     // (non-zero duties are handled by pwmLoop())
@@ -230,7 +272,7 @@ void OutputController::_updatePowerDirect(int chIdx, ChannelState& ch,
         ? (_cfg->pwr_relay1_mode != (uint8_t)RelayMode::OFF)
         : (_cfg->pwr_relay2_mode != (uint8_t)RelayMode::OFF);
     if (!relayEnabled) {
-        digitalWrite(relayPin, LOW);
+        writeOutputPin(relayPin, false);
         ch.relay_state = false;
         ch.relay_command = false;
     } else {
@@ -296,7 +338,7 @@ void OutputController::_driveRelay(ChannelState& ch, int relayPin) {
     }
 
     if (newState != ch.relay_state) {
-        digitalWrite(relayPin, newState ? HIGH : LOW);
+        writeOutputPin(relayPin, newState);
         ch.relay_state = newState;
         log_d("[OUT] relay pin %d → %s (mode=%s)",
               relayPin, newState ? "ON" : "OFF", relayModeStr(ch.relay_mode));
@@ -388,7 +430,7 @@ void OutputController::_updateOnOff(int chIdx, ChannelState& ch,
 
     if (!tempInProcessRange(ch.temp, _cfg->temp_unit)) {
         if (oos.relayOn) {
-            digitalWrite(heatingPin, LOW);
+            writeOutputPin(heatingPin, false);
             oos.relayOn    = false;
             oos.relayOffMs = millis();
         }
@@ -401,7 +443,7 @@ void OutputController::_updateOnOff(int chIdx, ChannelState& ch,
 
     if (!ch.isRunning() || ch.paused || ch.runmode == Runmode::MONITOR) {
         if (oos.relayOn) {
-            digitalWrite(heatingPin, LOW);
+            writeOutputPin(heatingPin, false);
             oos.relayOn    = false;
             oos.relayOffMs = millis();
         }
@@ -444,7 +486,7 @@ void OutputController::_updateOnOff(int chIdx, ChannelState& ch,
     if (newRelayState != oos.relayOn) {
         oos.relayOn = newRelayState;
         if (!newRelayState) oos.relayOffMs = millis();
-        digitalWrite(heatingPin, newRelayState ? HIGH : LOW);
+        writeOutputPin(heatingPin, newRelayState);
         log_d("[OUT] CH%d ON/OFF %s: sp=%.1f temp=%.1f",
               chIdx, newRelayState ? "ON" : "OFF", ch.sp, ch.temp);
     }
@@ -465,13 +507,13 @@ void OutputController::_setHeatingOutput(int chIdx, uint8_t effectivePct,
     if (isPwm) {
         pwmState.dutyCurrent = effectivePct;
         if (effectivePct == 0) {
-            digitalWrite(heatingPin, LOW);
+            writeOutputPin(heatingPin, false);
             pwmState.pinHigh = false;
         }
     } else {
         bool shouldBeOn = (effectivePct > 0);
         if (shouldBeOn != pwmState.pinHigh) {
-            digitalWrite(heatingPin, shouldBeOn ? HIGH : LOW);
+            writeOutputPin(heatingPin, shouldBeOn);
             pwmState.pinHigh = shouldBeOn;
             log_d("[OUT] CH%d relay pin %d → %s", chIdx, heatingPin,
                   shouldBeOn ? "HIGH" : "LOW");
@@ -482,7 +524,7 @@ void OutputController::_setHeatingOutput(int chIdx, uint8_t effectivePct,
 // ── _setCoolingOutput ─────────────────────────────────────────────────────────
 void OutputController::_setCoolingOutput(int chIdx, bool active, int coolingPin) {
     if (chIdx == 1) _rl1CoolingState = active;  // track for relay_state telemetry
-    digitalWrite(coolingPin, active ? HIGH : LOW);
+    writeOutputPin(coolingPin, active);
 }
 
 // ── pwmLoop ───────────────────────────────────────────────────────────────────
@@ -508,14 +550,14 @@ void OutputController::_drivePwm(int pin, PwmState& state,
 
     if (duty == 0) {
         if (state.pinHigh) {
-            digitalWrite(pin, LOW);
+            writeOutputPin(pin, false);
             state.pinHigh = false;
         }
         return;
     }
     if (duty >= 100) {
         if (!state.pinHigh) {
-            digitalWrite(pin, HIGH);
+            writeOutputPin(pin, true);
             state.pinHigh = true;
         }
         return;
@@ -526,7 +568,7 @@ void OutputController::_drivePwm(int pin, PwmState& state,
         state.cycleStartMs = nowMs;
         elapsed = 0;
         state.pinHigh = true;
-        digitalWrite(pin, HIGH);
+        writeOutputPin(pin, true);
         return;
     }
 
@@ -534,12 +576,12 @@ void OutputController::_drivePwm(int pin, PwmState& state,
     if (elapsed < onTimeMs) {
         if (!state.pinHigh) {
             state.pinHigh = true;
-            digitalWrite(pin, HIGH);
+            writeOutputPin(pin, true);
         }
     } else {
         if (state.pinHigh) {
             state.pinHigh = false;
-            digitalWrite(pin, LOW);
+            writeOutputPin(pin, false);
         }
     }
 }

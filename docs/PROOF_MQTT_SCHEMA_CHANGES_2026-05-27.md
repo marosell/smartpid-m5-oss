@@ -277,6 +277,10 @@ Proof changes:
   currently false during the OFF part of the cycle.
 - For `acc_element`, `relay_engaged=true` means the acceleration relay is
   allowed to run while acceleration is active.
+- Live `relay_mode` is synchronized from retained `config.relays.CHx.mode` on
+  boot and before accepted remote relay commands. Proof should not need to send
+  an extra `CHx relay_mode` command after reconnect just to make a retained
+  `remote_other` relay commandable.
 - Use `ended` / `latched` for device END state display.
 - Use `finish_temp_source` to display which probe can trigger finish-by-temp.
 - Use `timer_remaining_s` and `timer_frozen` to display finish timer state.
@@ -307,6 +311,8 @@ Important behavior:
 
 - Changing relay mode always clears relay command state and physically turns the
   relay off.
+- Changing relay mode is allowed even when the previous saved/live mode was
+  `off`; `off` disables behavior but does not block later mode changes.
 - After a mode change, Proof or the local operator must intentionally turn or
   engage the relay again.
 - Local disengage is authoritative. Proof should not automatically re-engage a
@@ -403,3 +409,5 @@ authoritative device-level END event.
 - Use `relay_engaged` plus `relay` for managed relay display.
 - Do not auto-reengage managed relays after local disengage.
 - Do not assume a relay mode change turns the relay on.
+- Do not work around retained/live relay mode mismatch by resending mode on
+  every relay command; firmware now syncs live relay mode from retained config.
