@@ -341,6 +341,10 @@ The package generator now emits a real 8 KB `otadata` artifact for the selected
 boot app, but the manifest remains `safe_to_flash: false` because firmware-side
 conversion writes are still disabled.
 
+The firmware preflight event also includes the planned OEM-layout offsets and
+write sequence. That plan is read-only documentation from the device; it is not
+an enabled writer.
+
 To prepare for a future conversion, ProofPro can be told to reboot into the high
 current-layout `app1` slot:
 

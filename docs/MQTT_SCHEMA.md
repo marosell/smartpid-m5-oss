@@ -459,6 +459,28 @@ Example response:
   "event": "migration preflight",
   "target": "oem_bootloader_layout",
   "writes_enabled": false,
+  "target_layout": {
+    "bootloader_offset": 4096,
+    "bootloader_size": 28672,
+    "partition_table_offset": 32768,
+    "partition_table_size": 3072,
+    "otadata_offset": 57344,
+    "otadata_size": 8192,
+    "proofpro_app0_offset": 65536,
+    "proofpro_app0_size": 2031616,
+    "smartpid_app1_offset": 2097152,
+    "smartpid_app1_size": 2031616
+  },
+  "write_plan": [
+    "require_running_from_current_high_app1",
+    "force_outputs_safe_off",
+    "write_verify_proofpro_oem_layout_app0",
+    "write_verify_smartpid_oem_app1",
+    "write_verify_oem_partition_table",
+    "write_verify_oem_bootloader",
+    "write_verify_otadata_selecting_proofpro_app0",
+    "restart_into_oem_layout_proofpro_app0"
+  ],
   "safe_to_convert": false,
   "checks": {
     "current_large_slot_layout": true,
