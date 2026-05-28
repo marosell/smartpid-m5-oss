@@ -55,6 +55,9 @@ public:
                                   const ChannelState& ch1,
                                   const ChannelState& ch2);
     void publishPartitionDiagnostics(const char* reason);
+    void publishMigrationPreflight(const char* reason,
+                                   uint32_t proofproAppSize = 0,
+                                   uint32_t oemAppSize = 0);
 
     // Publish an event to events/advanced immediately.
     // Used for profile sequencer events: "profile", "ramp N", "soak N".

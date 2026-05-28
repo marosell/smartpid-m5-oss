@@ -427,6 +427,54 @@ Request partition/OTA-slot diagnostics:
 
 `"diagnostics": "flash"` is accepted as an alias.
 
+Request bootloader/layout migration preflight:
+
+```json
+{
+  "migration": "preflight",
+  "proofpro_app_size": 1500304,
+  "oem_app_size": 2031616
+}
+```
+
+Alias:
+
+```json
+{
+  "diagnostics": "migration_preflight"
+}
+```
+
+The preflight is read-only. It never writes flash. It reports whether the
+device is in the only safe state for converting from the current large-slot
+ProofPro layout to the OEM-compatible bootloader/layout: running from the high
+`app1` slot at `0x650000`.
+
+Example response:
+
+```json
+{
+  "time": 123,
+  "type": "migration_preflight",
+  "event": "migration preflight",
+  "target": "oem_bootloader_layout",
+  "writes_enabled": false,
+  "safe_to_convert": false,
+  "checks": {
+    "current_large_slot_layout": true,
+    "running_from_high_app1": false,
+    "proofpro_app_fits_oem_slot": true,
+    "oem_app_fits_oem_slot": true
+  },
+  "blockers": [
+    "not_running_from_high_app1"
+  ]
+}
+```
+
+`{"migration":"oem_bootloader_layout"}` currently performs the same preflight
+and then publishes a `command_error` with reason `writes_not_enabled`.
+
 ### General commands
 
 ```json

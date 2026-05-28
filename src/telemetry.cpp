@@ -7,6 +7,7 @@
 #include <ArduinoJson.h>
 #ifndef DESKTOP_BUILD
 #include <esp_ota_ops.h>
+#include <esp_partition.h>
 #endif
 
 TelemetryPublisher telemetry;
@@ -399,6 +400,100 @@ void TelemetryPublisher::publishPartitionDiagnostics(const char* reason) {
     String topic = _mqtt->fullTopic("events/standard");
     _mqtt->publish(topic.c_str(), payload.c_str(), /*retained=*/false);
     log_i("[EVENT/STD] partition diagnostics: %s", payload.c_str());
+}
+
+void TelemetryPublisher::publishMigrationPreflight(const char* reason,
+                                                   uint32_t proofproAppSize,
+                                                   uint32_t oemAppSize) {
+    if (!_mqtt->connected()) return;
+
+    JsonDocument doc;
+    doc["time"] = bootSeconds();
+    doc["type"] = "migration_preflight";
+    doc["event"] = "migration preflight";
+    doc["reason"] = reason ? reason : "requested";
+    doc["target"] = "oem_bootloader_layout";
+    doc["writes_enabled"] = false;
+
+    JsonObject required = doc["required"].to<JsonObject>();
+    required["running_label"] = "app1";
+    required["running_address"] = 0x650000;
+    required["running_size"] = 0x640000;
+    required["proofpro_max_app_size"] = 0x1f0000;
+    required["oem_max_app_size"] = 0x1f0000;
+
+#ifdef DESKTOP_BUILD
+    doc["available"] = false;
+    doc["safe_to_convert"] = false;
+    JsonArray blockers = doc["blockers"].to<JsonArray>();
+    blockers.add("desktop_build");
+#else
+    doc["available"] = true;
+
+    const esp_partition_t* running = esp_ota_get_running_partition();
+    const esp_partition_t* app0 =
+        esp_partition_find_first(ESP_PARTITION_TYPE_APP,
+                                 ESP_PARTITION_SUBTYPE_APP_OTA_0,
+                                 nullptr);
+    const esp_partition_t* app1 =
+        esp_partition_find_first(ESP_PARTITION_TYPE_APP,
+                                 ESP_PARTITION_SUBTYPE_APP_OTA_1,
+                                 nullptr);
+
+    auto addPartition = [](JsonObject obj, const esp_partition_t* part) {
+        if (!part) {
+            obj["available"] = false;
+            return;
+        }
+        obj["available"] = true;
+        obj["label"] = part->label;
+        obj["type"] = part->type;
+        obj["subtype"] = part->subtype;
+        obj["address"] = part->address;
+        obj["size"] = part->size;
+    };
+
+    addPartition(doc["running"].to<JsonObject>(), running);
+    addPartition(doc["app0"].to<JsonObject>(), app0);
+    addPartition(doc["app1"].to<JsonObject>(), app1);
+
+    const bool largeLayout =
+        app0 && app1 &&
+        app0->address == 0x10000 && app0->size == 0x640000 &&
+        app1->address == 0x650000 && app1->size == 0x640000;
+    const bool runningFromHighApp1 =
+        running && running->address == 0x650000 && running->size == 0x640000;
+    const bool proofproFits =
+        proofproAppSize == 0 || proofproAppSize <= 0x1f0000;
+    const bool oemFits =
+        oemAppSize == 0 || oemAppSize <= 0x1f0000;
+
+    JsonObject checks = doc["checks"].to<JsonObject>();
+    checks["current_large_slot_layout"] = largeLayout;
+    checks["running_from_high_app1"] = runningFromHighApp1;
+    checks["proofpro_app_fits_oem_slot"] = proofproFits;
+    checks["oem_app_fits_oem_slot"] = oemFits;
+
+    JsonObject sizes = doc["candidate_sizes"].to<JsonObject>();
+    sizes["proofpro_app"] = proofproAppSize;
+    sizes["oem_app"] = oemAppSize;
+
+    JsonArray blockers = doc["blockers"].to<JsonArray>();
+    if (!largeLayout) blockers.add("not_current_large_slot_layout");
+    if (!runningFromHighApp1) blockers.add("not_running_from_high_app1");
+    if (!proofproFits) blockers.add("proofpro_app_too_large_for_oem_slot");
+    if (!oemFits) blockers.add("oem_app_too_large_for_oem_slot");
+
+    doc["safe_to_convert"] = largeLayout && runningFromHighApp1 &&
+                             proofproFits && oemFits;
+#endif
+
+    String payload;
+    serializeJson(doc, payload);
+
+    String topic = _mqtt->fullTopic("events/standard");
+    _mqtt->publish(topic.c_str(), payload.c_str(), /*retained=*/false);
+    log_i("[EVENT/STD] migration preflight: %s", payload.c_str());
 }
 
 // ── publishEventAdv ───────────────────────────────────────────────────────────

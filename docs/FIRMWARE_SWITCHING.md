@@ -313,10 +313,19 @@ Phase 2: introspection only on hardware
   otadata, app partition, and app-header metadata.
 - Or publish MQTT command `{"diagnostics":"partitions"}` and read the
   `partition_diagnostics` event on `events/standard`.
+- Publish MQTT command `{"migration":"preflight"}` and read the
+  `migration_preflight` event on `events/standard`.
 - Confirm running partition label, subtype, address, and size.
 - Confirm next update partition label, subtype, address, and size.
 - Confirm OTA state for each app slot when available.
-- Print whether `smartpid_app0.bin` would fit in the inactive app slot.
+- Confirm `safe_to_convert` is false unless the device is running from the high
+  current-layout `app1` slot at `0x650000`.
+- Pass optional `proofpro_app_size` and `oem_app_size` fields to verify both
+  candidate images fit the original 1984K OEM app slots.
+
+The migration preflight is intentionally read-only. It never writes bootloader,
+partition-table, otadata, or app bytes. The actual bootloader/layout conversion
+path is not enabled in firmware yet.
 
 Phase 3: decide which boot baseline to test
 

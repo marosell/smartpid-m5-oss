@@ -28,6 +28,7 @@
 //   {"CHx cycle_ms": N}                     Relay total cycle time (ms)
 //   {"timezone_label": "...", "timezone_posix": "..."}  Safe clock config
 //   {"clock_24h": bool}                     Device display clock format
+//   {"migration": "preflight"}              Report bootloader-layout migration readiness
 
 #include <Arduino.h>
 #include "config.h"
@@ -101,6 +102,7 @@ private:
     void _cmdSetRelayCycleMs(int chIdx, int ms);   // {"CHx cycle_ms": N}
     void _cmdSetClockTimezone(const char* label, const char* posix);
     void _cmdSetClockFormat(bool clock24h);
+    void _cmdMigrationPreflight(uint32_t proofproAppSize, uint32_t oemAppSize);
 };
 
 extern CommandHandler cmdHandler;

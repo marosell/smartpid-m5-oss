@@ -270,8 +270,26 @@ void CommandHandler::handle(const uint8_t* payload, unsigned int len) {
             _tele->publishOutputDiagnostics("mqtt_command", *_ch[0], *_ch[1]);
         } else if (strcmp(diag, "partitions") == 0 || strcmp(diag, "flash") == 0) {
             _tele->publishPartitionDiagnostics("mqtt_command");
+        } else if (strcmp(diag, "migration_preflight") == 0) {
+            _cmdMigrationPreflight(doc["proofpro_app_size"].as<uint32_t>(),
+                                   doc["oem_app_size"].as<uint32_t>());
         } else {
             _tele->publishCommandError("diagnostics", "invalid_value", diag);
+        }
+    }
+
+    if (doc["migration"].is<const char*>()) {
+        const char* migration = doc["migration"].as<const char*>();
+        if (strcmp(migration, "preflight") == 0 ||
+            strcmp(migration, "oem_bootloader_layout_preflight") == 0) {
+            _cmdMigrationPreflight(doc["proofpro_app_size"].as<uint32_t>(),
+                                   doc["oem_app_size"].as<uint32_t>());
+        } else if (strcmp(migration, "oem_bootloader_layout") == 0) {
+            _cmdMigrationPreflight(doc["proofpro_app_size"].as<uint32_t>(),
+                                   doc["oem_app_size"].as<uint32_t>());
+            _tele->publishCommandError("migration", "writes_not_enabled", migration);
+        } else {
+            _tele->publishCommandError("migration", "invalid_value", migration);
         }
     }
 
@@ -1170,6 +1188,15 @@ void CommandHandler::_cmdSetClockFormat(bool clock24h) {
     if (_mqtt) _mqtt->publishConfig();
     display.notifyMqttChanged();
     log_i("[CMD] clock_24h → %s", clock24h ? "true" : "false");
+}
+
+void CommandHandler::_cmdMigrationPreflight(uint32_t proofproAppSize,
+                                            uint32_t oemAppSize) {
+    if (_tele) {
+        _tele->publishMigrationPreflight("mqtt_command",
+                                         proofproAppSize,
+                                         oemAppSize);
+    }
 }
 
 // ── tick ──────────────────────────────────────────────────────────────────────
