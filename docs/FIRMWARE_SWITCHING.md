@@ -327,6 +327,21 @@ The migration preflight is intentionally read-only. It never writes bootloader,
 partition-table, otadata, or app bytes. The actual bootloader/layout conversion
 path is not enabled in firmware yet.
 
+To prepare for a future conversion, ProofPro can be told to reboot into the high
+current-layout `app1` slot:
+
+```json
+{
+  "migration": "boot_high_app1",
+  "confirm": "YES_BOOT_HIGH_APP1"
+}
+```
+
+This command only changes the selected OTA boot partition and reboots. It does
+not write bootloader, partition table, otadata, or app payload bytes. The
+conversion preflight should report `running_from_high_app1: true` after this
+step succeeds.
+
 Phase 3: decide which boot baseline to test
 
 - If testing the current ProofPro bootloader first, write only the OEM app image

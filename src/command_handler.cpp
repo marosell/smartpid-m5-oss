@@ -9,6 +9,9 @@
 #include "output_control.h"
 #include "profiles.h"
 #include <ArduinoJson.h>
+#ifndef DESKTOP_BUILD
+#include <esp_ota_ops.h>
+#endif
 
 CommandHandler cmdHandler;
 static constexpr uint32_t WATCHDOG_DEFAULT_S = 30;
@@ -284,6 +287,8 @@ void CommandHandler::handle(const uint8_t* payload, unsigned int len) {
             strcmp(migration, "oem_bootloader_layout_preflight") == 0) {
             _cmdMigrationPreflight(doc["proofpro_app_size"].as<uint32_t>(),
                                    doc["oem_app_size"].as<uint32_t>());
+        } else if (strcmp(migration, "boot_high_app1") == 0) {
+            _cmdBootHighApp1(doc["confirm"].as<const char*>());
         } else if (strcmp(migration, "oem_bootloader_layout") == 0) {
             _cmdMigrationPreflight(doc["proofpro_app_size"].as<uint32_t>(),
                                    doc["oem_app_size"].as<uint32_t>());
@@ -1197,6 +1202,79 @@ void CommandHandler::_cmdMigrationPreflight(uint32_t proofproAppSize,
                                          proofproAppSize,
                                          oemAppSize);
     }
+}
+
+void CommandHandler::_cmdBootHighApp1(const char* confirm) {
+    static constexpr const char* REQUIRED_CONFIRM = "YES_BOOT_HIGH_APP1";
+
+    if (!confirm || strcmp(confirm, REQUIRED_CONFIRM) != 0) {
+        if (_tele) _tele->publishCommandError("migration", "confirmation_required", "boot_high_app1");
+        log_w("[CMD] boot_high_app1 rejected — confirmation required");
+        return;
+    }
+
+#ifdef DESKTOP_BUILD
+    if (_tele) _tele->publishCommandError("migration", "desktop_build", "boot_high_app1");
+    return;
+#else
+    const esp_partition_t* running = esp_ota_get_running_partition();
+    const esp_partition_t* app0 =
+        esp_partition_find_first(ESP_PARTITION_TYPE_APP,
+                                 ESP_PARTITION_SUBTYPE_APP_OTA_0,
+                                 nullptr);
+    const esp_partition_t* app1 =
+        esp_partition_find_first(ESP_PARTITION_TYPE_APP,
+                                 ESP_PARTITION_SUBTYPE_APP_OTA_1,
+                                 nullptr);
+
+    const bool largeLayout =
+        app0 && app1 &&
+        app0->address == 0x10000 && app0->size == 0x640000 &&
+        app1->address == 0x650000 && app1->size == 0x640000;
+    if (!largeLayout) {
+        if (_tele) _tele->publishCommandError("migration", "not_current_large_slot_layout", "boot_high_app1");
+        log_w("[CMD] boot_high_app1 rejected — not on current large-slot layout");
+        return;
+    }
+
+    if (running && running->address == 0x650000 && running->size == 0x640000) {
+        if (_tele) {
+            _tele->publishMigrationPreflight("already_high_app1");
+            _tele->publishEventTyped("already high app1", "migration_already_high_app1");
+        }
+        log_i("[CMD] boot_high_app1 ignored — already running from high app1");
+        return;
+    }
+
+    esp_ota_img_states_t state = ESP_OTA_IMG_UNDEFINED;
+    if (esp_ota_get_state_partition(app1, &state) == ESP_OK &&
+        (state == ESP_OTA_IMG_INVALID || state == ESP_OTA_IMG_ABORTED)) {
+        if (_tele) _tele->publishCommandError("migration", "app1_not_bootable", "boot_high_app1");
+        log_w("[CMD] boot_high_app1 rejected — app1 OTA state=%d", (int)state);
+        return;
+    }
+
+    esp_err_t err = esp_ota_set_boot_partition(app1);
+    if (err != ESP_OK) {
+        if (_tele) _tele->publishCommandError("migration", "set_boot_partition_failed", "boot_high_app1");
+        log_e("[CMD] boot_high_app1 failed — esp_ota_set_boot_partition err=0x%x", err);
+        return;
+    }
+
+    log_w("[CMD] boot_high_app1 accepted — forcing outputs safe and rebooting");
+    outputCtrl.forceAllOff();
+    if (_cfg) _cfg->saveRunState(0, 0, false, false);
+    if (_tele) {
+        _tele->publishEventTyped("boot high app1", "migration_boot_high_app1");
+        _tele->publishMigrationPreflight("boot_high_app1");
+    }
+    if (_mqtt) {
+        _mqtt->publishStatus();
+        _mqtt->loop();
+    }
+    delay(500);
+    ESP.restart();
+#endif
 }
 
 // ── tick ──────────────────────────────────────────────────────────────────────

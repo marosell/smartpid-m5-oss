@@ -475,6 +475,21 @@ Example response:
 `{"migration":"oem_bootloader_layout"}` currently performs the same preflight
 and then publishes a `command_error` with reason `writes_not_enabled`.
 
+Prepare for bootloader/layout conversion by rebooting into the high current
+`app1` slot:
+
+```json
+{
+  "migration": "boot_high_app1",
+  "confirm": "YES_BOOT_HIGH_APP1"
+}
+```
+
+This command does not write the bootloader or partition table. It only validates
+that the current large-slot layout is present, sets the next boot partition to
+`app1` at `0x650000`, forces outputs safe/off, and reboots. It rejects the
+command unless the confirmation string is exact.
+
 ### General commands
 
 ```json

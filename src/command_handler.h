@@ -29,6 +29,8 @@
 //   {"timezone_label": "...", "timezone_posix": "..."}  Safe clock config
 //   {"clock_24h": bool}                     Device display clock format
 //   {"migration": "preflight"}              Report bootloader-layout migration readiness
+//   {"migration": "boot_high_app1", "confirm": "YES_BOOT_HIGH_APP1"}
+//                                           Reboot into current-layout high app1 slot
 
 #include <Arduino.h>
 #include "config.h"
@@ -103,6 +105,7 @@ private:
     void _cmdSetClockTimezone(const char* label, const char* posix);
     void _cmdSetClockFormat(bool clock24h);
     void _cmdMigrationPreflight(uint32_t proofproAppSize, uint32_t oemAppSize);
+    void _cmdBootHighApp1(const char* confirm);
 };
 
 extern CommandHandler cmdHandler;
