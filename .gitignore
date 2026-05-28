@@ -12,6 +12,7 @@ compile_commands.json
 .DS_Store
 
 # Build
+build/
 *.o
 *.d
 __pycache__/
