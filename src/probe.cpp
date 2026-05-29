@@ -143,16 +143,17 @@ void ProbeReader::begin() {
 
     // DS18B20: initialise both 1-Wire buses and start first conversion.
     // We use non-blocking (setWaitForConversion=false) so the main loop
-    // isn't stalled by the ~750ms DS18B20 conversion time.
-    // By the time readTemp() is first called on the local 2s probe tick,
+    // isn't stalled by the conversion time. 11-bit resolution is enough for
+    // process display/control here and cuts conversion time to about 375ms.
+    // By the time readTemp() is first called on the local 1s probe tick,
     // the conversion is long done.
     _ds1.begin();
     _ds1.setWaitForConversion(false);  // non-blocking requestTemperatures()
-    _ds1.setResolution(12);            // 12-bit = 0.0625°C resolution, ~750ms
+    _ds1.setResolution(11);            // 11-bit = 0.125°C resolution, ~375ms
 
     _ds2.begin();
     _ds2.setWaitForConversion(false);
-    _ds2.setResolution(12);
+    _ds2.setResolution(11);
 
     // Start first conversion on both buses
     if (_ds1.getDeviceCount() > 0) {
@@ -398,7 +399,7 @@ float ProbeReader::_readDS18B20(int channel) {
     if (ds.getDeviceCount() == 0) {
         ds.begin();
         ds.setWaitForConversion(false);
-        ds.setResolution(12);
+        ds.setResolution(11);
         if (ds.getDeviceCount() == 0) {
             log_d("[PROBE] DS18B20 CH%d: no device found on GPIO%d",
                   channel, channel == 1 ? DS18B20_CH1_GPIO : DS18B20_CH2_GPIO);
@@ -415,9 +416,9 @@ float ProbeReader::_readDS18B20(int channel) {
 
     if (req) {
         // Conversion was requested on previous call (or begin()). Read it.
-        // isConversionComplete() returns true if ≥750ms have elapsed since
-        // requestTemperatures() was called. If called too soon, getTempCByIndex
-        // will return the previous result, which is fine.
+        // At 11-bit resolution, conversion completes in about 375ms. If called
+        // too soon, getTempCByIndex will return the previous result, which is
+        // fine.
         tempC = ds.getTempCByIndex(0);
     }
 

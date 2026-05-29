@@ -86,7 +86,7 @@ mosquitto_pub -h <broker-ip> -u proof -P test123 \
 ```
 
 Power telemetry publishes on `power/CH1` and `power/CH2` at the configured
-publish cadence. The current default is 6 seconds.
+publish cadence. The current default is 1 second.
 
 Program END publishes a device-level `events/standard` payload:
 

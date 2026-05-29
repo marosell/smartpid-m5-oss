@@ -571,7 +571,7 @@ Options: `OFF / WiFi / SD Card / WiFi + SD`
 (WiFi = MQTT publishing enabled; OFF = connected but silent.)
 
 **Sample Time:** `0:15` = MM:SS format from the OEM UI. The current custom
-ProofPro firmware defaults power telemetry to 6 seconds.
+ProofPro firmware defaults power telemetry to 1 second.
 
 ### 10.3 Status (IMG_2588)
 
@@ -901,7 +901,7 @@ when comparing decompile references against current source.
 - On state entry, do a full `fillScreen(COL_BG)` + draw header + draw footer + draw content
 - On live value updates (temp, time), redraw only the specific region using `fillRect()` to erase then redraw — do not full-screen redraw every second
 - Temperature and SP values change at the configured `sample_s`; current custom
-  ProofPro default is 6 seconds.
+  ProofPro default is 1 second.
 - Timer countup changes every second — redraw just the timer text region in the header
 
 ### Partial redraw regions (Running Screen 1)

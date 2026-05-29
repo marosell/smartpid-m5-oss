@@ -120,7 +120,7 @@ Clock notes:
 ### `power/CH1` and `power/CH2`
 
 Not retained. Published every configured sample interval while the channel is in
-power mode. Current default publish cadence is 6 seconds.
+power mode. Current default publish cadence is 1 second.
 
 ```json
 {
@@ -262,6 +262,14 @@ Known event strings/types:
 | `boot diagnostics` | `boot_diagnostics` | device |
 | `output diagnostics` | `output_diagnostics` | device |
 | `hardware warning` | `hardware_warning` | device |
+
+Audio announcements are generated locally by firmware and are not separate MQTT
+events:
+
+| Trigger | Pattern |
+|---|---|
+| `program_ended` | Three 2670 Hz tones, 3 seconds each, 1 second gaps |
+| `program_stopped` from `{"stop":true}` | Three 1800 Hz tones, 0.5 seconds each, 0.5 second gaps |
 
 Watchdog trip event:
 
@@ -999,3 +1007,32 @@ ProofPro workflow:
 {"CH1 maxpwm": 80}
 {"CH1 countdown": 120}
 ```
+
+## HTTP Interface
+
+When ProofPro is running on WiFi, firmware also exposes a small local HTTP
+server on port 80. This is a convenience and recovery surface; MQTT remains the
+primary Proof integration contract.
+
+Endpoints:
+
+| Method | Path | Meaning |
+|---|---|---|
+| `GET` | `/` | Minimal human-readable ProofPro page |
+| `GET` | `/healthz` | Plain `ok` health check |
+| `GET` | `/status` | JSON runtime/device status |
+| `GET` | `/config` | JSON retained/default program and relay config |
+| `POST` | `/commands` | Dispatch the request body as a normal ProofPro command JSON payload |
+
+Example:
+
+```bash
+curl http://10.0.1.60/status
+curl -X POST http://10.0.1.60/commands \
+  -H 'Content-Type: application/json' \
+  -d '{"status":true}'
+```
+
+`POST /commands` uses the same schema as MQTT `commands`. It returns `202` when
+the JSON payload was accepted for dispatch. Command-specific errors are still
+reported through the normal event path when MQTT is connected.

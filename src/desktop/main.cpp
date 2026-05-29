@@ -44,7 +44,7 @@ static void seedDesktopConfig() {
     strlcpy(cfg.mqtt_pass, "proof", sizeof(cfg.mqtt_pass));
     strlcpy(cfg.temp_unit, "F", sizeof(cfg.temp_unit));
     cfg.mqtt_port = 1883;
-    cfg.sample_s = 6;
+    cfg.sample_s = 1;
     cfg.ch1_sp = 131.0f;
     cfg.ch2_sp = 104.0f;
     cfg.pwm_ms = 3500;

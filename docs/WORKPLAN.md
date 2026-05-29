@@ -49,11 +49,11 @@ explicitly about OEM backups, decompile research, or firmware switching.
 | DC OUT 2 | Bench-confirmed GPIO 13 / slot 1 / DC OUT 2 |
 | RL1 | Bench-confirmed GPIO 26 / slot 2 / RL1 |
 | RL2 | Bench-confirmed GPIO 16 / slot 3 / RL2 |
-| DS18B20 | Bench-confirmed reasonable readings; sample every 2s |
+| DS18B20 | Bench-confirmed reasonable readings; sample every 1s |
 | K-Type | Bench-confirmed one probe reads correctly after route work |
 | PT100 3-wire | Bench-confirmed close to OEM with per-probe calibration |
 | PT100 2-wire | Bench-confirmed T2 2-wire route; specific terminal pairing matters |
-| Sensor publish cadence | sample every 2s, MQTT publish every 6s |
+| Sensor publish cadence | sample every 1s, MQTT publish every 1s |
 | Sensor error gating | values below 0C or above 120C display/publish as error |
 | OTA update path | OTA to `10.0.1.60` succeeds and avoids the USB flashing DC1 spike |
 | USB flashing hazard | `esptool --no-stub` with auto-reset caused DC1 to spike; `--before no-reset` stayed quiet but could not connect |
@@ -221,8 +221,10 @@ Implementation notes:
 - The bench unit has no onboard microphone.
 - The internal speaker path is controlled explicitly after boot to avoid boot
   pops/noise.
-- Run-ending audio should be implemented as a generated tone sequence once the
-  desired DSPR400 beep pattern is recorded and measured from the MacBook.
+- Program END audio is a generated DSPR400-style announcement: three 2670 Hz
+  tones, 3 seconds each, with 1 second gaps.
+- Explicit safe/off shutdown (`{"stop":true}`) audio is three 1800 Hz tones,
+  0.5 seconds each, with 0.5 second gaps.
 - A temporary test chirp command is available over MQTT as `{"chirp":true}` or
   `{"audio":"chirp"}` and is accepted regardless of Remote/END state.
 

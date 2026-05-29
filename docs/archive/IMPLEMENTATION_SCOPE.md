@@ -60,7 +60,7 @@
 > **6. PID sample time**
 > - Document implies `sample_s * 1000` for PID sample time
 > - **WRONG.** PID sample time is **1500ms** (config field: `pid_sample_ms`).
->   This is separate from the current 6s power telemetry interval (`sample_s = 6`).
+>   This is separate from the current 1s power telemetry interval (`sample_s = 1`).
 
 ---
 
@@ -170,7 +170,7 @@ binary layout (config doesn't survive OEM→OSS flash, which is acceptable).
 | `smartpid` | `mqtt_port` | UInt16 | 1883 | |
 | `smartpid` | `mqtt_user` | String | — | |
 | `smartpid` | `mqtt_pass` | String | — | |
-| `smartpid` | `sample_s` | UInt16 | 6 | Current custom ProofPro power telemetry default |
+| `smartpid` | `sample_s` | UInt16 | 1 | Current custom ProofPro power telemetry default |
 | `smartpid` | `temp_unit` | String | `"F"` | `"C"` or `"F"` |
 | `smartpid` | `ch1_sp` | Float | 131.0 | Default SP CH1 (= 55°C) |
 | `smartpid` | `ch2_sp` | Float | 104.0 | Default SP CH2 (= 40°C) |

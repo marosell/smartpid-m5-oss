@@ -164,8 +164,8 @@ Use a table. Include known facts:
 - Supported probes: DS18B20, K-Type, PT100 2-wire, PT100 3-wire, NTC path present
   but not fully bench validated.
 - MQTT: `smartpidM5/proofpro/{topic_id}/`.
-- Sensor sample target: 2 seconds.
-- MQTT publish cadence default: 6 seconds.
+- Sensor sample target: 1 second.
+- MQTT publish cadence default: 1 second.
 - Proof integration audit is a Proof-side database feature, not a firmware MQTT
   payload feature. Keep it out of the operator-facing specifications table
   unless the manual includes a separate integration appendix.

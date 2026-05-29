@@ -113,8 +113,8 @@ DC and relay terminals:
 
 Sensor cadence:
 
-- Sensor sample interval target: 2 seconds
-- MQTT publish interval target: 6 seconds
+- Sensor sample interval target: 1 second
+- MQTT publish interval target: 1 second
 
 Sensor error policy:
 

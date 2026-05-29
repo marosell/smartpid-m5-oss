@@ -15,7 +15,7 @@
 //   6. AP "SmartPID-XXXXXX" appears when WiFi credentials absent
 //
 // Phase 2 acceptance criteria:
-//   1. mosquitto_sub -t 'smartpidM5/pro/+/dynamic/+' receives CH1+CH2 on same tick every 15s
+//   1. mosquitto_sub -t 'smartpidM5/proofpro/+/power/+' receives CH1+CH2 on the configured publish cadence
 //      ONLY after {"start": "monitor"} or {"start": "standard"} — not on idle boot
 //   2. Monitor mode payload: exactly {time, temp, unit, runmode}
 //   3. Standard mode payload: all fields including SP, pwm, maxpwm, mode, runmode
@@ -59,6 +59,7 @@
 #include "display.h"
 #include "captive_portal.h"
 #include "hardware_profile.h"
+#include "proof_http_server.h"
 
 // ── Forward declarations ──────────────────────────────────────────────────────
 static void setupWiFi();
@@ -388,6 +389,7 @@ void setup() {
 
     telemetry.begin(cfg, mqttMgr);
     cmdHandler.begin(cfg, mqttMgr, telemetry, ch1, ch2);
+    proofHttpServer.begin(cfg, mqttMgr, telemetry, cmdHandler, ch1, ch2);
 
     // ── Auto-resume: deferred power-restored + resume sequence ───────────────
     // OEM bench timing (2026-05-23):
@@ -436,6 +438,7 @@ void loop() {
     M5.update();
     handleSerialInput();
     mqttMgr.loop();
+    proofHttpServer.loop();
     clockSyncLoop(cfg);
 
     // Phase 4: OTA
@@ -444,7 +447,7 @@ void loop() {
     // Phase 2+3: probe reads, PID update, command tick, telemetry, PWM output
     static unsigned long lastSampleMs = 0;
     unsigned long nowMs = millis();
-    static constexpr unsigned long kProbeSampleMs = 2000UL;
+    static constexpr unsigned long kProbeSampleMs = 1000UL;
     if (nowMs - lastSampleMs >= kProbeSampleMs) {
         lastSampleMs = nowMs;
         // Read probes (Phase 3)

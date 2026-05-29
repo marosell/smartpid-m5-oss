@@ -83,7 +83,7 @@ struct Config {
     char topic_id[15];     // scrambled 14-char MQTT ID (derived from serial_hex)
 
     // ── Telemetry ─────────────────────────────────────────────────────────────
-    uint16_t sample_s;      // MQTT publish interval in seconds (default: 6)
+    uint16_t sample_s;      // MQTT publish interval in seconds (default: 1)
     char     temp_unit[3];  // "F" or "C" (default: "F")
 
     // ── Set Points ────────────────────────────────────────────────────────────

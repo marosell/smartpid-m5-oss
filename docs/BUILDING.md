@@ -37,6 +37,13 @@ pio run -t upload --upload-port 10.0.1.60
 
 This builds and uploads `.pio/build/m5stack-core-esp32-16M-oem-layout/firmware.bin`.
 
+ProofPro also exposes a local HTTP server while running:
+
+```bash
+curl http://10.0.1.60/healthz
+curl http://10.0.1.60/status
+```
+
 Normal ProofPro firmware intentionally excludes the recovery package downloader,
 OEM app restore writer, and migration installer source. That code is retained
 under `src/recovery/` and compiled only by the special installer/recovery

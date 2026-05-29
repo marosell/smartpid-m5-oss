@@ -32,6 +32,25 @@ static Config* gRuntimeCfg = nullptr;
 static uint32_t gLastMqttMsgMs = 0;
 static bool gWatchdogFired = false;
 
+enum class AlertKind : uint8_t {
+    None,
+    ProgramEnd,
+    Shutdown,
+};
+
+struct AlertState {
+    AlertKind kind = AlertKind::None;
+    uint16_t frequencyHz = 0;
+    uint16_t onMs = 0;
+    uint16_t gapMs = 0;
+    uint8_t remaining = 0;
+    bool inGap = false;
+    uint32_t nextMs = 0;
+};
+
+static AlertState gAlert;
+static constexpr uint8_t ALERT_VOLUME = 96;
+
 static void setMqttRemoteActiveInternal(bool active) {
     if (gMqttRemoteActive != active) {
         gMqttRemoteActive = active;
@@ -187,10 +206,91 @@ static bool playTestChirp() {
 #endif
 }
 
+static bool beginAlertAudio() {
+#ifdef DESKTOP_BUILD
+    return false;
+#else
+    M5.Mic.end();
+    proofpro_hw::holdSpeakerQuiet();
+    delay(10);
+    proofpro_hw::configureSpeaker();
+    if (!M5.Speaker.isRunning()) {
+        M5.Speaker.setVolume(0);
+        if (!M5.Speaker.begin()) return false;
+    }
+    M5.Speaker.setVolume(ALERT_VOLUME);
+    return true;
+#endif
+}
+
+static void clearAlert() {
+#ifndef DESKTOP_BUILD
+    M5.Speaker.stop();
+#endif
+    gAlert = AlertState{};
+}
+
+static void startAlertBeep(uint32_t now) {
+    if (gAlert.remaining == 0) {
+        clearAlert();
+        return;
+    }
+#ifndef DESKTOP_BUILD
+    M5.Speaker.tone(gAlert.frequencyHz, gAlert.onMs);
+#endif
+    gAlert.remaining--;
+    gAlert.inGap = true;
+    gAlert.nextMs = now + gAlert.onMs;
+}
+
+static void requestAlert(AlertKind kind) {
+    if (kind == AlertKind::None) {
+        clearAlert();
+        return;
+    }
+
+    if (!beginAlertAudio()) {
+        log_w("[AUDIO] alert unavailable");
+        return;
+    }
+
+    gAlert.kind = kind;
+    gAlert.remaining = 3;
+    gAlert.inGap = false;
+    if (kind == AlertKind::ProgramEnd) {
+        gAlert.frequencyHz = 2670;
+        gAlert.onMs = 3000;
+        gAlert.gapMs = 1000;
+    } else {
+        gAlert.frequencyHz = 1800;
+        gAlert.onMs = 500;
+        gAlert.gapMs = 500;
+    }
+    startAlertBeep(millis());
+}
+
+static void serviceAlert(uint32_t now) {
+    if (gAlert.kind == AlertKind::None || now < gAlert.nextMs) return;
+    if (gAlert.inGap) {
+#ifndef DESKTOP_BUILD
+        M5.Speaker.stop();
+#endif
+        if (gAlert.remaining == 0) {
+            clearAlert();
+            return;
+        }
+        gAlert.inGap = false;
+        gAlert.nextMs = now + gAlert.gapMs;
+        return;
+    }
+    startAlertBeep(now);
+}
+
 static void publishDeviceProgramEnd(TelemetryPublisher* tele, MQTTManager* mqtt, const char* reason) {
     if (!tele) return;
     setMqttRemoteActiveInternal(false);
     tele->publishEventTyped("program ended", "program_ended", 0, reason);
+    requestAlert(AlertKind::ProgramEnd);
     if (mqtt) mqtt->publishStatus();
     log_i("[EVT] program ended (%s)", reason ? reason : "unknown");
 }
@@ -779,6 +879,7 @@ void CommandHandler::_applyPowerParams(int chIdx) {
 void CommandHandler::_cmdStop() {
     log_i("[CMD] stop");
     setMqttRemoteActiveInternal(false);
+    requestAlert(AlertKind::Shutdown);
     profiles.stop(0, *_ch[0]);
     profiles.stop(1, *_ch[1]);
     _ch[0]->stop();
@@ -1416,6 +1517,7 @@ void CommandHandler::_cmdRestoreSmartPidApp1(const char* confirm,
 //   • Publish event pulses set by output_control (accel end, finish latch)
 void CommandHandler::tick() {
     unsigned long now = millis();
+    serviceAlert(now);
     if (now - _lastTickMs < 1000UL) return;
     _lastTickMs = now;
 

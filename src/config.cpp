@@ -35,10 +35,12 @@ void Config::load() {
     }
 
     // Telemetry
-    sample_s = prefs.getUShort("sample_s", 6);
-    if (sample_s == 15) {
-        // Migrate the old default to the custom firmware's faster publish rate.
-        sample_s = 6;
+    sample_s = prefs.getUShort("sample_s", 1);
+    if (sample_s == 15 || sample_s == 6) {
+        // Migrate old defaults to the ProofPro live telemetry cadence.
+        sample_s = 1;
+    } else if (sample_s == 0) {
+        sample_s = 1;
     }
     prefs.getString("temp_unit", temp_unit, sizeof(temp_unit));
     if (strlen(temp_unit) == 0) {
