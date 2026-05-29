@@ -93,6 +93,27 @@ Future PDF export target:
 docs/PROOFPRO_USER_MANUAL.pdf
 ```
 
+Separate technical recovery appendix document:
+
+```text
+docs/PROOFPRO_USER_MANUAL-technicalrecovery.md
+```
+
+Future PDF export target:
+
+```text
+docs/PROOFPRO_USER_MANUAL-technicalrecovery.pdf
+```
+
+This separate document should collect operator-adjacent but technical recovery
+material that does not belong in the main user manual, including firmware
+switching, OEM layout migration, SmartPID restore, ProofPro return paths, USB
+recovery, installer builds, and otadata selector recovery. Use
+`docs/FIRMWARE_SWITCHING.md`, `docs/OEM_LAYOUT_MIGRATION_RUNBOOK.md`, and
+`docs/BUILDING.md` as the primary sources. Keep the main manual focused on
+normal operation and link to this `-technicalrecovery` document for recovery
+procedures.
+
 ## Proposed Manual Outline
 
 ### Title Page
@@ -428,7 +449,8 @@ complete integration schema.
 Do not copy migration, firmware restore, firmware switching, installer, or USB
 recovery commands into the operator manual. Those belong in technical runbooks
 such as `docs/FIRMWARE_SWITCHING.md` and
-`docs/OEM_LAYOUT_MIGRATION_RUNBOOK.md`.
+`docs/OEM_LAYOUT_MIGRATION_RUNBOOK.md`, and should be summarized in
+`docs/PROOFPRO_USER_MANUAL-technicalrecovery.md`.
 
 Minimum appendix contents:
 
