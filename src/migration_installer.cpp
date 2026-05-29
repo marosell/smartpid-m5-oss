@@ -86,6 +86,17 @@ static const esp_partition_t* oemLayoutApp1Partition() {
     }
     return app1;
 }
+
+static const esp_partition_t* oemLayoutEepromPartition() {
+    const esp_partition_t* eeprom =
+        esp_partition_find_first(ESP_PARTITION_TYPE_DATA,
+                                 static_cast<esp_partition_subtype_t>(0x99),
+                                 "eeprom");
+    if (!eeprom || eeprom->address != 0x3ff000 || eeprom->size != 0x1000) {
+        return nullptr;
+    }
+    return eeprom;
+}
 #endif
 
 #ifndef DESKTOP_BUILD
@@ -254,6 +265,7 @@ static uint32_t readU32Le(const uint8_t* bytes) {
 static constexpr ExpectedArtifact EXPECTED_ARTIFACTS[] = {
     {"proofpro_app0", 0x10000, 0x1f0000},
     {"smartpid_oem_app1", 0x200000, 0x1f0000},
+    {"smartpid_oem_eeprom", 0x3ff000, 0x1000},
     {"partition_table", 0x8000, 0x0c00},
     {"bootloader", 0x1000, 0x7000},
     {"otadata_boot_app0", 0xe000, 0x2000},
@@ -262,6 +274,11 @@ static constexpr ExpectedArtifact EXPECTED_ARTIFACTS[] = {
 static bool isAppArtifact(const char* role) {
     return strcmp(role, "proofpro_app0") == 0 ||
            strcmp(role, "smartpid_oem_app1") == 0;
+}
+
+static bool isOemRuntimeArtifact(const char* role) {
+    return strcmp(role, "smartpid_oem_app1") == 0 ||
+           strcmp(role, "smartpid_oem_eeprom") == 0;
 }
 
 static bool isMetadataArtifact(const char* role) {
@@ -683,8 +700,9 @@ static MigrationInstallResult validatePackageStream(const MigrationInstallReques
             return MigrationInstallResult::PACKAGE_INVALID;
         }
 
-        const bool writeArtifact = (writeApps && isAppArtifact(role)) ||
-                                   (writeSmartPidApp1 && strcmp(role, "smartpid_oem_app1") == 0) ||
+        const bool writeArtifact = (writeApps && (isAppArtifact(role) ||
+                                                  strcmp(role, "smartpid_oem_eeprom") == 0)) ||
+                                   (writeSmartPidApp1 && isOemRuntimeArtifact(role)) ||
                                    (writeMetadata && isMetadataArtifact(role));
 #if defined(PROOFPRO_ENABLE_OEM_LAYOUT_METADATA_INSTALL)
         BufferedMetadataArtifact* bufferedMetadata = nullptr;
@@ -708,8 +726,8 @@ static MigrationInstallResult validatePackageStream(const MigrationInstallReques
             }
         }
 #endif
-#if defined(PROOFPRO_ENABLE_OEM_LAYOUT_INSTALL) || defined(PROOFPRO_ENABLE_OEM_LAYOUT_METADATA_INSTALL) || defined(PROOFPRO_ENABLE_OEM_APP_RESTORE)
         const esp_partition_t* writePartition = nullptr;
+#if defined(PROOFPRO_ENABLE_OEM_LAYOUT_INSTALL) || defined(PROOFPRO_ENABLE_OEM_LAYOUT_METADATA_INSTALL) || defined(PROOFPRO_ENABLE_OEM_APP_RESTORE)
         if (writeSmartPidApp1 && strcmp(role, "smartpid_oem_app1") == 0) {
             writePartition = oemLayoutApp1Partition();
             if (!writePartition) {
@@ -722,6 +740,27 @@ static MigrationInstallResult validatePackageStream(const MigrationInstallReques
                     telemetry->publishMigrationInstallStatus(role,
                                                              "rejected",
                                                              "oem_app1_partition_missing",
+                                                             request.packageUrl,
+                                                             request.packageSha256,
+                                                             bytesDone,
+                                                             bytesTotal,
+                                                             writeStage);
+                }
+                return MigrationInstallResult::UNSAFE_STATE;
+            }
+        }
+        if (writeSmartPidApp1 && strcmp(role, "smartpid_oem_eeprom") == 0) {
+            writePartition = oemLayoutEepromPartition();
+            if (!writePartition) {
+                mbedtls_sha256_free(&packageCtx);
+                http.end();
+#if defined(PROOFPRO_ENABLE_OEM_LAYOUT_METADATA_INSTALL)
+                freeMetadataBuffers(metadataBuffers, 3);
+#endif
+                if (telemetry) {
+                    telemetry->publishMigrationInstallStatus(role,
+                                                             "rejected",
+                                                             "oem_eeprom_partition_missing",
                                                              request.packageUrl,
                                                              request.packageSha256,
                                                              bytesDone,

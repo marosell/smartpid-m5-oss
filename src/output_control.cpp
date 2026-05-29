@@ -218,6 +218,7 @@ void OutputController::_updatePowerDirect(int chIdx, ChannelState& ch,
         pwmState.pinHigh = false;
         writeOutputPin(relayPin, false);
         ch.relay_state = false;
+        ch.relay_command = false;
         ch.power_pct = 0;
         return;
     }

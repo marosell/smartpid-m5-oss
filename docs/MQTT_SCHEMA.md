@@ -220,6 +220,10 @@ Device-level ProofPro END example:
 ```
 
 `program_ended` is device-level for ProofPro and does not include `channel`.
+Future firmware may include an optional `source` field on firmware-originated
+events. Proof must preserve that field when present and continue to accept the
+event when it is absent. Current firmware does not require Proof to send or
+expect `source`.
 
 `program_ended.reason` is one of:
 
@@ -296,6 +300,68 @@ General command rejection event:
   "value": "CH3"
 }
 ```
+
+### Proof Integration Logging
+
+Proof persists its own audit trail for outbound MQTT commands and
+firmware-event handling. These records are not additional MQTT messages emitted
+by firmware, but they are part of the expected ProofPro integration contract.
+
+For every outbound MQTT command Proof sends to `commands`, Proof should persist a
+durable equipment audit record with:
+
+- timestamp
+- run_id, when associated with a run
+- device_id
+- topic
+- payload
+- origin
+- trigger
+
+Recommended `origin` values:
+
+| Origin | Meaning |
+|---|---|
+| `operator` | Direct operator action in Proof UI |
+| `automation` | Proof automation or run logic |
+| `restore` | Reconnect/reboot restore flow |
+| `safety` | Proof-side safety action |
+| `heartbeat` | Periodic active-session heartbeat |
+| `system` | System/settings synchronization or service action |
+
+Recommended `trigger` values should name the reason for the command, for
+example:
+
+| Trigger | Typical command source |
+|---|---|
+| `run_start` | Operator starts a ProofPro run |
+| `manual_stop_button` | Operator presses stop |
+| `relay_toggle_button` | Operator toggles RL1/RL2 |
+| `reconnect_restore` | Proof restores an active run after reconnect |
+| `heartbeat_tick` | Proof heartbeat loop |
+| `settings_sync` | Proof writes synchronized settings |
+| `program_end_cleanup` | Proof cleanup after firmware END |
+
+When an outbound command is tied to a run, Proof should also write a run event
+with type `mqtt_command_sent`.
+
+Proof-side provenance conventions currently verified in Proof:
+
+| Flow | Origin | Trigger |
+|---|---|---|
+| Run start | `operator` | `run_start` |
+| Heartbeat | `heartbeat` | `heartbeat_tick` |
+| Reconnect restore | `restore` | `reconnect_restore` |
+| Relay toggle | `operator` | `relay_toggle_button` |
+| Settings sync | `operator` or `system` | `settings_sync` |
+
+When Proof receives a firmware `program_ended` event, Proof should persist a
+decision event with type `proofpro_program_end_decision`. That event should
+record what Proof did next, such as `run_marked_complete`,
+`ignored_duplicate_end`, `sent_stop`, `sent_reset`, `continued_heartbeat`,
+`restored_program_after_reconnect`, or `no_action`. Include the firmware event
+payload, current run_id/device_id, and the optional firmware `source` value as
+`firmware_source` when present.
 
 Boot/output diagnostic events:
 
@@ -563,8 +629,8 @@ Possible command errors from this command include:
 - `flash_verify_failed`
 - `writes_not_enabled`
 
-Current firmware also publishes a structured status event while rejecting a real
-write stage:
+Normal ProofPro firmware publishes a structured status event while rejecting a
+conversion write stage that is not enabled in the current build:
 
 ```json
 {
@@ -614,10 +680,11 @@ package:
 
 This command is only enabled in the OEM-layout ProofPro build. It requires
 ProofPro to be running from OEM `app0`, forces outputs safe/off first, downloads
-and verifies the full package, writes only the `smartpid_oem_app1` artifact to
-OEM `app1` at `0x200000`, readback-verifies it through the ESP partition API,
-and leaves ProofPro running. It does not write bootloader, partition table,
-otadata, or ProofPro `app0`.
+and verifies the full package, writes `smartpid_oem_app1` to OEM `app1` at
+`0x200000`, writes `smartpid_oem_eeprom` to the OEM `eeprom` partition at
+`0x3ff000`, readback-verifies both through the ESP partition API, and leaves
+ProofPro running. It does not write bootloader, partition table, otadata, or
+ProofPro `app0`.
 
 Possible command errors include:
 
@@ -653,6 +720,20 @@ all outputs safe/off, publishes `firmware_switching`, and reboots. If SmartPID
 is booted, ProofPro MQTT will go offline until ProofPro is restored or selected
 again by an external path.
 
+Important: `firmware_switch:"proofpro"` is available only while ProofPro is
+running. After `firmware_switch:"smartpid"` boots the OEM app, the OEM app does
+not implement the ProofPro command schema and cannot receive this command.
+Current bench recovery back to ProofPro requires manually entering ESP32 ROM
+download mode with GPIO0 held low and writing only the 8 KB otadata selector:
+
+```bash
+esptool --chip esp32 -p /dev/cu.usbserial-XXXX -b 460800 \
+  write-flash 0xe000 build/migration/oem-layout/otadata_boot_proofpro_app0.bin
+```
+
+This recovery write does not modify either app image, the bootloader, the
+partition table, or OEM EEPROM.
+
 Bench result, 2026-05-28:
 
 - ProofPro restored OEM SmartPID to `app1` and readback SHA-256 matched the
@@ -660,11 +741,15 @@ Bench result, 2026-05-28:
   `08cd03b15ca0d71bb47767b3c953ff8e83e89bf15c733a8d5fa3a8113f8634c1`.
 - `firmware_switch:"smartpid"` booted SmartPID successfully. The device
   published retained status on `smartpidM5/pro/{topic_id}/status`.
-- The OEM SmartPID UI displayed `Not Authorized`; that is an OEM app state, not
-  a ProofPro error.
+- The first SmartPID boot test displayed `Not Authorized` because only the app
+  image had been restored. Decompile review showed the OEM app requires an
+  authorization byte from the OEM `eeprom` partition; the package and restore
+  command now include `smartpid_oem_eeprom`.
 - A normal PlatformIO/ArduinoOTA push of ProofPro over the running OEM app did
   not connect to port 3232. Treat Proof-over-OEM OTA as not proven until the OEM
   update path is understood or a resident launcher/recovery path exists.
+- Manual GPIO0-low ROM download mode plus the 8 KB otadata selector write
+  successfully returned the device to ProofPro `app0`.
 
 ### General commands
 

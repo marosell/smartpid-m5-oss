@@ -101,6 +101,7 @@ mosquitto_pub -h 10.0.1.203 -u proof -P proof \
 | Remote ready | `remote_state:"RDY"` | Remote ready | Commands accepted, watchdog not active yet |
 | Remote active | `remote_state:"ON"` | Remote on | Proof is controlling; heartbeat expected |
 | Program ended | `program_ended.reason` | END condition | Reasons: `finish_timer`, `finish_temp`, `finish` |
+| Command provenance | Proof audit `origin` / `trigger` | Audit trail | Distinguishes operator, heartbeat, restore, system actions |
 
 ## Dynamic Heat-Up Test Matrix
 
@@ -117,7 +118,7 @@ boiling.
 | E. Finish temp source CH2 | 175-200F | `finish_temp:190`, `finish_temp_source:"CH2"`, `timer_s:300`, `finish_action:"end"` | `dFSP=190F`; finish source CH2; timer longer than expected | CH2 alone can trigger `program_ended.reason:"finish_temp"` |
 | F. Cycle relay | Any stable temp | CH1 or CH2 `relay_mode:"cycle"`, `on_ms:1000`, `cycle_ms:5000`, then `CHx relay:true` | Cycle/reflux relay; ON 1 sec, total 5 sec | `relay_engaged:true`; physical `relay` blinks; local disengage stays off |
 | G. Watchdog | Any safe state | Remote enabled, `watchdog_s:30`; stop Proof heartbeat | Watchdog/remote safety if available | After >30s without heartbeat: DC1/DC2 0, RL1/RL2 off, `watchdog_safe`, Remote `RDY` |
-| H. Reboot restore | Any safe state | Active Proof run, Auto Resume ON | Auto Resume ON | Device publishes `controller_rebooted`; Proof re-sends program and `start:"power"` |
+| H. Reboot restore | Any safe state | Active Proof run, Auto Resume ON | Auto Resume ON | Device publishes `controller_rebooted`; Proof re-sends program and `program_running:true` |
 
 ## Program Command Payloads
 
@@ -288,6 +289,8 @@ Pass criteria:
 - [ ] Remote OFF prevents output/program commands.
 - [ ] RDY means commandable.
 - [ ] ON means active Proof session and watchdog-protected.
+- [ ] Proof audit logs heartbeat commands with `origin:"heartbeat"` and
+      `trigger:"heartbeat_tick"`, not as operator commands.
 
 ## 3. Proof Remote Relay Flow
 
@@ -325,11 +328,13 @@ Pass criteria:
 - [ ] Set at least one relay to `acc_element` if testing AccElement.
 - [ ] Start programmed run.
 - [ ] Confirm status shows `ACCEL`.
-- [ ] Confirm DC tile blinks between selected run percent and accel percent.
+- [ ] Confirm DC tile primary value shows actual accel power.
+- [ ] Confirm queued post-accel run power appears separately as small secondary text.
 - [ ] Confirm AccElement relay engages while accel is active.
 - [ ] Heat or simulate until selected probe reaches `accel_temp`.
 - [ ] Confirm status changes to `RUN`.
-- [ ] Confirm DC tile stops accel blinking and shows steady selected run percent.
+- [ ] Confirm queued run power becomes the primary actual power value after
+      acceleration ends.
 - [ ] Confirm AccElement relay turns off.
 - [ ] Confirm telemetry publishes `accel_complete`.
 - [ ] Confirm only `element` DC outputs change to `post_accel_power`.
@@ -398,6 +403,8 @@ Pass criteria:
 - [ ] Confirm Proof detects the reboot/reconnect.
 - [ ] Confirm Proof re-sends the active program payload.
 - [ ] Confirm Proof re-sends `{"program_running":true}` and intended power/relay state.
+- [ ] Confirm Proof audit logs restore commands with `origin:"restore"` and
+      `trigger:"reconnect_restore"`.
 - [ ] Confirm the controller returns to the intended active run state.
 
 Pass criteria:
@@ -405,6 +412,8 @@ Pass criteria:
 - [ ] Auto Resume is discoverable from MQTT.
 - [ ] Proof does not rely on delayed firmware Auto Resume as the only restore path.
 - [ ] Controller reboot does not leave the power controller idle during an active Proof run.
+- [ ] Reconnect restore is distinguishable from a manual/operator run start in
+      Proof audit history.
 
 ## 7. Cycle Relay Mode
 
@@ -427,6 +436,34 @@ Pass criteria:
 
 - [ ] Cycle timing follows configured `on_ms` / `cycle_ms`.
 - [ ] `relay_engaged` means armed; `relay` means actual physical state.
+
+## 7a. Proof Audit and END Decisions
+
+- [ ] Start a ProofPro run from Proof.
+- [ ] Confirm Proof writes an equipment audit record for the outbound start
+      command with timestamp, run_id, device_id, topic, payload, origin, and
+      trigger.
+- [ ] Confirm the run also has a `mqtt_command_sent` event for the outbound
+      start command.
+- [ ] Confirm run start uses `origin:"operator"` and `trigger:"run_start"`.
+- [ ] Toggle a relay from Proof.
+- [ ] Confirm relay command audit uses `origin:"operator"` and
+      `trigger:"relay_toggle_button"`.
+- [ ] Let firmware publish `program_ended`.
+- [ ] Confirm Proof writes `proofpro_program_end_decision`.
+- [ ] Confirm the decision event includes the firmware event payload and current
+      run_id/device_id.
+- [ ] If firmware event includes optional `source`, confirm Proof preserves it
+      as `firmware_source`.
+- [ ] If firmware event omits `source`, confirm Proof handles it without error.
+
+Pass criteria:
+
+- [ ] Every outbound Proof MQTT command has durable provenance.
+- [ ] Operator commands, heartbeat commands, reconnect restore, and settings
+      sync can be distinguished in Proof audit history.
+- [ ] Firmware END handling records Proof's next decision instead of only the
+      incoming firmware event.
 
 ## 8. Probe Regression
 

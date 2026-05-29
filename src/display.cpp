@@ -1368,7 +1368,8 @@ void DisplayManager::_handleRunningOverview(UIEvent ev) {
 static void drawPowerStatusBox(int x, int y, int w, int h,
                                const char* label, const char* value,
                                uint16_t valueColor, bool selected = false,
-                               bool disabled = false) {
+                               bool disabled = false,
+                               const char* secondaryValue = nullptr) {
     const uint16_t bg = disabled ? COL_DISABLED_BG : COL_BG;
     const uint16_t border = disabled ? COL_DISABLED : (selected ? COL_SP : COL_DIVIDER);
     const uint16_t labelColor = disabled ? COL_DISABLED : COL_TEXT;
@@ -1381,6 +1382,12 @@ static void drawPowerStatusBox(int x, int y, int w, int h,
     M5.Display.setTextSize(1);
     M5.Display.setTextColor(labelColor, bg);
     M5.Display.drawString(label, x + 6, y + 5);
+    if (secondaryValue && secondaryValue[0] != '\0') {
+        M5.Display.setTextDatum(lgfx::top_right);
+        M5.Display.setTextSize(1);
+        M5.Display.setTextColor(disabled ? COL_DISABLED : COL_SP, bg);
+        M5.Display.drawString(secondaryValue, x + w - 6, y + 5);
+    }
     M5.Display.setTextDatum(lgfx::middle_center);
     M5.Display.setTextSize(2);
     M5.Display.setTextColor(outValueColor, bg);
@@ -1426,27 +1433,30 @@ void DisplayManager::_redrawPowerStatusValues() {
     drawPowerStatusBox(8, 86, 74, 50, label, v, COL_TEMP);
 
     const bool ended = _ch1->finishEnd || _ch2->finishEnd || _ch1->finishLatch || _ch2->finishLatch;
-    const bool dcBlinkAccel = ((millis() / 700UL) % 2UL) == 1UL;
     const bool dc1Enabled = dcOutputEnabled(_cfg->pwr_dc1_mode);
     const bool dc2Enabled = dcOutputEnabled(_cfg->pwr_dc2_mode);
-    const uint8_t dc1DisplayPct = !dc1Enabled ? 0
-                                 : (ended ? _ch1->power_pct
-                                 : (_ch1->accelPhaseActive && dcBlinkAccel ? _ch1->power_pct : _ch1->distill_power_pct));
-    const uint8_t dc2DisplayPct = !dc2Enabled ? 0
-                                 : (ended ? _ch2->power_pct
-                                 : (_ch2->accelPhaseActive && dcBlinkAccel ? _ch2->power_pct : _ch2->distill_power_pct));
+    const uint8_t dc1DisplayPct = dc1Enabled ? _ch1->power_pct : 0;
+    const uint8_t dc2DisplayPct = dc2Enabled ? _ch2->power_pct : 0;
+    char dc1Secondary[16] = "";
+    char dc2Secondary[16] = "";
+    if (dc1Enabled && _ch1->programRunning && _ch1->accelPhaseActive) {
+        snprintf(dc1Secondary, sizeof(dc1Secondary), "%u%%", (unsigned)_ch1->distill_power_pct);
+    }
+    if (dc2Enabled && _ch2->programRunning && _ch2->accelPhaseActive) {
+        snprintf(dc2Secondary, sizeof(dc2Secondary), "%u%%", (unsigned)_ch2->distill_power_pct);
+    }
 
     if (dc1Enabled) snprintf(v, sizeof(v), "%u%%", (unsigned)dc1DisplayPct);
     else            strlcpy(v, "OFF", sizeof(v));
     drawPowerStatusBox(92, 28, 66, 50, "DC1", v,
                        dc1Enabled ? (dc1DisplayPct ? COL_WARN : COL_TEXT) : COL_DIVIDER,
-                       _powerSel == 0, !dc1Enabled);
+                       _powerSel == 0, !dc1Enabled, dc1Secondary);
 
     if (dc2Enabled) snprintf(v, sizeof(v), "%u%%", (unsigned)dc2DisplayPct);
     else            strlcpy(v, "OFF", sizeof(v));
     drawPowerStatusBox(92, 86, 66, 50, "DC2", v,
                        dc2Enabled ? (dc2DisplayPct ? COL_WARN : COL_TEXT) : COL_DIVIDER,
-                       _powerSel == 1, !dc2Enabled);
+                       _powerSel == 1, !dc2Enabled, dc2Secondary);
 
     const bool rl1Enabled = (_cfg->pwr_relay1_mode != (uint8_t)RelayMode::OFF);
     const bool rl2Enabled = (_cfg->pwr_relay2_mode != (uint8_t)RelayMode::OFF);

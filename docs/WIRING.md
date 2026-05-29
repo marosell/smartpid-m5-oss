@@ -12,8 +12,8 @@ in the ignored `firmware-oem/` archive.
 - Topic ID: `791402d5ac0fe1`
 - Device IP during bench: `10.0.1.60`
 - MQTT broker during bench: `10.0.1.203:1883`
-- Firmware env: `m5stack-core-esp32-16M`
-- Bench dates covered here: 2026-05-25 to 2026-05-27
+- Firmware env: `m5stack-core-esp32-16M-oem-layout`
+- Bench dates covered here: 2026-05-25 to 2026-05-28
 
 ## Safety Notes
 
@@ -27,6 +27,9 @@ in the ignored `firmware-oem/` archive.
 - USB auto-reset/download entry can briefly energize DC OUT 1 / GPIO12 before
   firmware can run. OTA is the normal update path. Do not USB-flash with a
   heater or other hazardous load connected to DC OUT 1.
+- Manual ESP32 ROM download mode was confirmed by pulling GPIO0 low during
+  reset. Use that method for bench recovery only, with hazardous loads
+  disconnected.
 - The bench unit has no onboard microphone. Run-ending audio should be a
   generated tone sequence played through the speaker, not a recorded/listened
   microphone feature.
@@ -243,8 +246,8 @@ behavior that should be retested on hardware before release.
 Build and OTA:
 
 ```bash
-pio run -e m5stack-core-esp32-16M
-pio run -e m5stack-core-esp32-16M -t upload --upload-port 10.0.1.60
+pio run
+pio run -t upload --upload-port 10.0.1.60
 pio device monitor --port /dev/cu.usbserial-58690003391 --baud 115200
 ```
 

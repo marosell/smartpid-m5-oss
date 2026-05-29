@@ -6,6 +6,33 @@ ProofPro layout to the OEM-compatible bootloader/partition layout.
 Do not use USB flashing for this procedure. Keep DC1/DC2/RL1/RL2 disconnected
 from real loads.
 
+## Current Build Baseline
+
+Converted hardware now uses the OEM-compatible partition table as the normal
+ProofPro target:
+
+```bash
+pio run
+pio run -t upload --upload-port <device-ip>
+```
+
+`platformio.ini` defaults to `m5stack-core-esp32-16M-oem-layout`. Agents should
+not build or OTA `m5stack-core-esp32-16M` to converted hardware unless they are
+intentionally reverting to the legacy large-slot layout.
+
+Expected converted layout:
+
+```text
+app0    0x010000  0x1f0000  ProofPro
+app1    0x200000  0x1f0000  OEM SmartPID
+eeprom  0x3ff000  0x001000  OEM authorization/settings data
+```
+
+The current safe update path is OTA while ProofPro is running. If the device is
+booted into OEM SmartPID, ProofPro MQTT commands and ArduinoOTA are not
+available from ProofPro. The proven recovery path is manual GPIO0-low ROM
+download mode followed by writing only the 8 KB otadata selector at `0xe000`.
+
 ## Current Package
 
 Generated package:
@@ -17,14 +44,15 @@ build/migration/oem-layout/proofpro_oem_layout_migration.ppmig
 Package SHA-256:
 
 ```text
-88474ce279c5778014569749304a7d14056f5a858ae28ff0e84e28619eba3b65
+acfeec52fd548043fb7b96593bb65d8026a82fa4c03af92d0d9ddbf1918633f1
 ```
 
 Artifacts:
 
 ```text
-proofpro_app0       @ 0x10000   1628624 bytes
-smartpid_oem_app1  @ 0x200000  2031616 bytes
+proofpro_app0          @ 0x10000   1633936 bytes
+smartpid_oem_app1     @ 0x200000  2031616 bytes
+smartpid_oem_eeprom   @ 0x3ff000     4096 bytes
 partition_table    @ 0x8000       3072 bytes
 bootloader         @ 0x1000      17104 bytes
 otadata_boot_app0  @ 0xe000       8192 bytes
@@ -82,7 +110,7 @@ With normal firmware running, validate package download and hashes:
 ```bash
 mosquitto_pub -h 10.0.1.203 -u proof -P proof \
   -t 'smartpidM5/proofpro/{topic_id}/commands' \
-  -m '{"migration":"install_oem_bootloader_layout","confirm":"YES_INSTALL_OEM_LAYOUT","write_stage":"validate_only","package_url":"http://10.0.1.203:8080/proofpro_oem_layout_migration.ppmig","package_sha256":"88474ce279c5778014569749304a7d14056f5a858ae28ff0e84e28619eba3b65"}'
+  -m '{"migration":"install_oem_bootloader_layout","confirm":"YES_INSTALL_OEM_LAYOUT","write_stage":"validate_only","package_url":"http://10.0.1.203:8080/proofpro_oem_layout_migration.ppmig","package_sha256":"acfeec52fd548043fb7b96593bb65d8026a82fa4c03af92d0d9ddbf1918633f1"}'
 ```
 
 Expected result:
@@ -108,7 +136,7 @@ Then write and readback-verify only the app regions:
 ```bash
 mosquitto_pub -h 10.0.1.203 -u proof -P proof \
   -t 'smartpidM5/proofpro/{topic_id}/commands' \
-  -m '{"migration":"install_oem_bootloader_layout","confirm":"YES_INSTALL_OEM_LAYOUT_APPS","write_stage":"apps","package_url":"http://10.0.1.203:8080/proofpro_oem_layout_migration.ppmig","package_sha256":"88474ce279c5778014569749304a7d14056f5a858ae28ff0e84e28619eba3b65"}'
+  -m '{"migration":"install_oem_bootloader_layout","confirm":"YES_INSTALL_OEM_LAYOUT_APPS","write_stage":"apps","package_url":"http://10.0.1.203:8080/proofpro_oem_layout_migration.ppmig","package_sha256":"acfeec52fd548043fb7b96593bb65d8026a82fa4c03af92d0d9ddbf1918633f1"}'
 ```
 
 Expected result:
@@ -116,6 +144,7 @@ Expected result:
 ```text
 proofpro_app0 status=verified reason=flash_readback_verified
 smartpid_oem_app1 status=verified reason=flash_readback_verified
+smartpid_oem_eeprom status=verified reason=flash_readback_verified
 phase=writer status=verified reason=apps_written
 ```
 
@@ -144,7 +173,7 @@ Then write and readback-verify boot metadata:
 ```bash
 mosquitto_pub -h 10.0.1.203 -u proof -P proof \
   -t 'smartpidM5/proofpro/{topic_id}/commands' \
-  -m '{"migration":"install_oem_bootloader_layout","confirm":"YES_INSTALL_OEM_LAYOUT_METADATA","write_stage":"metadata","package_url":"http://10.0.1.203:8080/proofpro_oem_layout_migration.ppmig","package_sha256":"88474ce279c5778014569749304a7d14056f5a858ae28ff0e84e28619eba3b65"}'
+  -m '{"migration":"install_oem_bootloader_layout","confirm":"YES_INSTALL_OEM_LAYOUT_METADATA","write_stage":"metadata","package_url":"http://10.0.1.203:8080/proofpro_oem_layout_migration.ppmig","package_sha256":"acfeec52fd548043fb7b96593bb65d8026a82fa4c03af92d0d9ddbf1918633f1"}'
 ```
 
 Expected result:

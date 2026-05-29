@@ -39,6 +39,8 @@ OTA_DATA_SIZE = 0x2000
 OEM_APP0_OFFSET = 0x10000
 OEM_APP1_OFFSET = 0x200000
 OEM_APP_SLOT_SIZE = 0x1F0000
+OEM_EEPROM_OFFSET = 0x3FF000
+OEM_EEPROM_SIZE = 0x1000
 PACKAGE_MAGIC = b"PPMIG001"
 PACKAGE_HEADER_SIZE = 12
 
@@ -143,18 +145,21 @@ def main() -> int:
     otadata_out = out_dir / f"otadata_boot_{args.boot_app}_{boot_slot}.bin"
     proofpro_out = out_dir / "proofpro_oem_layout_app0.bin"
     oem_app_out = out_dir / "smartpid_oem_app1.bin"
+    eeprom_out = out_dir / "smartpid_oem_eeprom.bin"
     package_out = out_dir / "proofpro_oem_layout_migration.ppmig"
 
     write_bytes(bootloader_out, bootloader)
     copy_file(OEM_PARTITIONS, partitions_out)
     copy_file(PROOFPRO_OEM_APP, proofpro_out)
     copy_file(OEM_APP, oem_app_out)
+    write_bytes(eeprom_out, full[OEM_EEPROM_OFFSET : OEM_EEPROM_OFFSET + OEM_EEPROM_SIZE])
 
     write_bytes(otadata_out, make_otadata(boot_slot))
 
     artifacts = [
         artifact(proofpro_out, OEM_APP0_OFFSET, "proofpro_app0", OEM_APP_SLOT_SIZE),
         artifact(oem_app_out, OEM_APP1_OFFSET, "smartpid_oem_app1", OEM_APP_SLOT_SIZE),
+        artifact(eeprom_out, OEM_EEPROM_OFFSET, "smartpid_oem_eeprom", OEM_EEPROM_SIZE),
         artifact(partitions_out, OEM_PARTITION_TABLE_OFFSET, "partition_table", OEM_PARTITION_TABLE_SIZE),
         artifact(bootloader_out, OEM_BOOTLOADER_OFFSET, "bootloader", OEM_BOOTLOADER_WINDOW_SIZE),
         artifact(otadata_out, OTA_DATA_OFFSET, f"otadata_boot_{boot_slot}", OTA_DATA_SIZE),
@@ -195,6 +200,11 @@ def main() -> int:
                 "offset": OEM_APP1_OFFSET,
                 "size": OEM_APP_SLOT_SIZE,
                 "payload": "smartpid_oem_app1",
+            },
+            "eeprom": {
+                "offset": OEM_EEPROM_OFFSET,
+                "size": OEM_EEPROM_SIZE,
+                "payload": "smartpid_oem_eeprom",
             },
         },
         "boot_app": args.boot_app,

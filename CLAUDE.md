@@ -7,6 +7,7 @@ short and current. The canonical human docs are:
 - `docs/WIRING.md` - hardware, wiring, probe, and bench facts
 - `docs/MQTT_SCHEMA.md` - current ProofPro MQTT topic and command schema
 - `docs/WORKPLAN.md` - active status and next bench tests
+- `docs/BUILDING.md` - current build target, OTA command, installer builds
 - `docs/COMMISSIONING.md` - first boot, captive portal, OTA update flow
 - `docs/FIRMWARE_SWITCHING.md` - research note for OEM/custom switching
 
@@ -31,6 +32,7 @@ and safety behavior. Do not copy old phase plans blindly; archived specs under
 | Item | Current value |
 |---|---|
 | PlatformIO board | `m5stack-core-esp32-16M` |
+| Normal hardware env | `m5stack-core-esp32-16M-oem-layout` |
 | Device class | M5Stack Basic/Gray-class ESP32, not Core2 |
 | Display | ILI9341 320x240 landscape |
 | Buttons | 3 mechanical buttons, no touch |
@@ -55,8 +57,8 @@ DC OUT 1 is LOW. OTA updates do not exercise the USB boot strapping path.
 ## Build And Test
 
 ```bash
-pio run -e m5stack-core-esp32-16M
-pio run -e m5stack-core-esp32-16M -t upload --upload-port 10.0.1.60
+pio run
+pio run -t upload --upload-port 10.0.1.60
 pio device monitor --port /dev/cu.usbserial-58690003391 --baud 115200
 pio test -e test
 ```
@@ -84,6 +86,9 @@ pio run -e desktop
 - Watchdog is device-level and only active while Remote is enabled. Retained
   status publishes `watchdog_enabled` and `watchdog_s`; a trip forces DC1/DC2 to
   0% and RL1/RL2 off.
+- Proof persists outbound MQTT command provenance in its own audit records with
+  origin/trigger values. Firmware does not currently require those provenance
+  fields in MQTT command payloads.
 
 ## Source Layout
 
@@ -129,5 +134,5 @@ When old research conflicts with active docs, use this authority order:
   the current built-in captive portal.
 - Do not change GPIO/output mapping without updating `docs/WIRING.md`.
 - Do not touch `firmware-oem/` during normal implementation.
-- Do not commit unless `pio run -e m5stack-core-esp32-16M` succeeds.
+- Do not commit unless `pio run` succeeds for the default hardware environment.
 - Do not add `Co-Authored-By` trailers to commits.

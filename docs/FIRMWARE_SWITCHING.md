@@ -3,8 +3,33 @@
 Goal: allow normal users to move between ProofPro custom firmware and the OEM
 SmartPID firmware without the manual USB flashing loop used during development.
 
-Status: research/design note. Do not implement until the bench recovery checklist
-is ready and the device is in a safe electrical state.
+Status: partially implemented bench path. The current hardware baseline is the
+OEM-compatible partition table with ProofPro in `app0` and OEM SmartPID in
+`app1`. ProofPro can switch to SmartPID. SmartPID cannot switch back to
+ProofPro, so bidirectional user switching is not complete until a launcher,
+recovery app, or OEM-side return path exists.
+
+## Current Build Baseline
+
+Use the OEM-layout environment for all normal ProofPro hardware builds:
+
+```bash
+pio run
+pio run -t upload --upload-port <device-ip>
+```
+
+`platformio.ini` defaults to `m5stack-core-esp32-16M-oem-layout`; that target
+uses `partitions_oem.csv`:
+
+```text
+app0    ota_0   0x010000  0x1f0000  ProofPro
+app1    ota_1   0x200000  0x1f0000  OEM SmartPID
+eeprom  data    0x3ff000  0x001000  OEM authorization/settings data
+```
+
+Do not OTA the legacy `m5stack-core-esp32-16M` environment to converted
+hardware. It uses the old large-slot development layout and does not match the
+current device.
 
 ## Local assets
 
@@ -36,15 +61,14 @@ Current ProofPro app size is about 1.50 MB. The OEM app image is about 1.94 MB.
 Both fit inside the original OEM 1984K OTA app slots and inside the current
 ProofPro 6400K OTA app slots.
 
-ProofPro now has a dedicated OEM-layout build target:
+ProofPro now uses the OEM-layout build target by default:
 
 ```bash
 pio run -e m5stack-core-esp32-16M-oem-layout
 ```
 
 That target uses `partitions_oem.csv` and fails the build if ProofPro grows past
-the original 1984K OEM app slot. On 2026-05-28, ProofPro used 1,500,019 bytes of
-the 2,031,616-byte slot, leaving about 531 KB of headroom.
+the original 1984K OEM app slot.
 
 Original OEM app partitions:
 
@@ -158,8 +182,8 @@ selected app can accept normal app OTA updates
 
 Pros:
 
-- Best compatibility path for manually replacing ProofPro with OEM SmartPID and
-  back again.
+- Best compatibility path for keeping ProofPro and OEM SmartPID resident on the
+  same device.
 - Does not require a custom bootloader.
 - Keeps normal OTA updates scoped to app partitions.
 - Preserves the older-bootloader/newer-app compatibility direction documented
@@ -169,12 +193,14 @@ Cons:
 
 - Requires a controlled first-time conversion flash if the device is already on
   the current ProofPro bootloader/partition table.
-- Once OEM is running, ProofPro is not running.
+- Once OEM is running, ProofPro is not running and cannot receive MQTT commands.
 - OEM cannot offer a ProofPro-specific return UI unless its OTA updater accepts
-  the ProofPro app image.
-- OEM OTA behavior is still unknown and must be tested before relying on it.
+  the ProofPro app image or we add a launcher/recovery path.
+- Bench testing on 2026-05-28 showed OEM ArduinoOTA port `3232` was not
+  reachable; treat Proof-over-OEM OTA as unproven.
 
-Use this as the next bench spike before designing a launcher.
+This is the current hardware baseline, but it is one-way from the user
+perspective until a launcher/recovery design is implemented.
 
 ### Option C: current ProofPro bootloader with OEM app in inactive slot
 
@@ -259,7 +285,8 @@ Never let a normal OTA update target the bootloader or partition table.
 Recommended policy:
 
 - ProofPro updates write only the ProofPro app slot.
-- OEM image updates write only the OEM app slot.
+- OEM image updates write only the OEM app slot and the OEM `eeprom` data
+  partition required by SmartPID authorization.
 - Recovery/launcher updates require an explicit installer/recovery workflow.
 - OEM firmware must be treated as a bootable payload, not as the firmware update
   manager.
@@ -283,8 +310,9 @@ app payload to OEM `app1` without touching boot metadata:
 
 This command is compiled only for the OEM-layout ProofPro environment with
 `PROOFPRO_ENABLE_OEM_APP_RESTORE`. It requires ProofPro to be running from OEM
-`app0`, validates the package, writes only `smartpid_oem_app1` to `0x200000`,
-readback-verifies it, and leaves the device booted in ProofPro.
+`app0`, validates the package, writes `smartpid_oem_app1` to `0x200000` and
+`smartpid_oem_eeprom` to `0x3ff000`, readback-verifies both regions, and leaves
+the device booted in ProofPro.
 
 Once the desired app images are present, ProofPro can select the next boot slot:
 
@@ -298,6 +326,22 @@ requires the OEM app-slot layout, verifies that the target partition is not
 marked invalid/aborted, forces all outputs safe/off, publishes
 `firmware_switching`, and reboots. Booting SmartPID intentionally takes ProofPro
 MQTT offline until another path returns the unit to ProofPro.
+
+Important limitation: `firmware_switch:"proofpro"` is useful only while
+ProofPro is already running. After `firmware_switch:"smartpid"` boots the OEM
+app, this command is no longer available because the OEM app does not implement
+the ProofPro command schema.
+
+Proven bench recovery from SmartPID back to ProofPro:
+
+```bash
+esptool --chip esp32 -p /dev/cu.usbserial-XXXX -b 460800 \
+  write-flash 0xe000 build/migration/oem-layout/otadata_boot_proofpro_app0.bin
+```
+
+This requires manual ESP32 ROM download mode: hold GPIO0 low, reset, then run
+the command. It writes only the 8 KB OTA selector and leaves ProofPro, SmartPID,
+bootloader, partition table, and OEM EEPROM untouched.
 
 ## Critical safety rules
 
@@ -337,7 +381,7 @@ eeprom   data/0x99 0x3ff000  4K
 ```
 
 - Confirm current ProofPro and OEM app images both fit in 1984K app slots by
-  running `pio run -e m5stack-core-esp32-16M-oem-layout`.
+  running `pio run`.
 
 Phase 2: introspection only on hardware
 
@@ -370,16 +414,14 @@ ota_seq = 2 -> app1 -> OEM SmartPID image
 ```
 
 The package generator now emits a real 8 KB `otadata` artifact for the selected
-boot app, but the manifest remains `safe_to_flash: false` because firmware-side
-conversion writes are still disabled.
+boot app.
 
 The generator also emits `proofpro_oem_layout_migration.ppmig`, a single-file
 package with a fixed magic header, an embedded JSON manifest, and the artifact
-payloads in manifest order. The artifact order follows the future safe write
-sequence: ProofPro app0, OEM app1, partition table, bootloader, then otadata.
-Firmware should eventually stream this package from HTTP or another local
-transport, verify each artifact hash and size, then write the validated payload
-to the planned flash offset.
+payloads in manifest order. The artifact order follows the safe write sequence:
+ProofPro app0, OEM app1, OEM EEPROM data, partition table, bootloader, then
+otadata. Firmware streams this package from HTTP, verifies each artifact hash
+and size, then writes only the stage enabled by the command/build flags.
 
 The firmware preflight event also includes the planned OEM-layout offsets and
 write sequence. That plan is read-only documentation from the device; it is not
@@ -398,9 +440,10 @@ The reserved install command shape is:
 ```
 
 `write_stage` is an explicit safety stage. Supported values are
-`validate_only`, `apps`, `metadata`, and `all`. Current production firmware only
-allows `validate_only` to complete. Any real write stage validates the package
-first and then rejects before flash writes with `writes_not_enabled`.
+`validate_only`, `apps`, `metadata`, and `all`. Normal OEM-layout ProofPro builds
+support `firmware_restore:"smartpid_app1"` for SmartPID app/EEPROM restore.
+Destructive layout conversion stages remain limited to explicit installer
+builds.
 
 The confirmation string is stage-specific:
 
@@ -414,10 +457,10 @@ all           -> disabled
 A special installer build may be compiled with `PROOFPRO_ENABLE_OEM_LAYOUT_INSTALL`.
 That build enables only `write_stage: "apps"`: it forces outputs off, erases the
 future OEM-layout app regions, streams `proofpro_app0` to `0x10000`, streams
-`smartpid_oem_app1` to `0x200000`, and verifies both regions by readback
-SHA-256. The installer validates the full package first, then opens it again for
-the app write/readback pass. It still does not write the bootloader, partition
-table, or otadata.
+`smartpid_oem_app1` to `0x200000`, streams `smartpid_oem_eeprom` to `0x3ff000`,
+and verifies all three regions by readback SHA-256. The installer validates the
+full package first, then opens it again for the app/data write/readback pass. It
+still does not write the bootloader, partition table, or otadata.
 
 Build that special app-stage installer with:
 
@@ -458,13 +501,12 @@ normal flash driver for cache/interrupt safety, verify bootloader,
 partition-table, and otadata by readback SHA-256, then reboot immediately into
 the OEM-layout `app0`.
 
-Current firmware validates the confirmation string and package fields, requires
-the device to be running from current-layout high `app1`, downloads the package,
-verifies the outer package SHA-256, parses the manifest, and verifies every
-artifact hash and size while streaming. With `write_stage: "validate_only"` it
-publishes a final `migration_install` status of `validated`. In production
-builds, `apps`, `metadata`, or `all` publish a `migration_install` rejection and
-a `command_error` because the destructive writer is not enabled.
+Current firmware validates the confirmation string and package fields, downloads
+the package, verifies the outer package SHA-256, parses the manifest, and
+verifies every artifact hash and size while streaming. With
+`write_stage: "validate_only"` it publishes a final `migration_install` status
+of `validated`. Destructive conversion stages require the corresponding
+installer build flags.
 
 To prepare for a future conversion, ProofPro can be told to reboot into the high
 current-layout `app1` slot:
@@ -523,12 +565,16 @@ The OEM-compatible bootloader/partition baseline can boot both app payloads:
 
 - ProofPro runs from OEM `app0`.
 - ProofPro can restore the OEM SmartPID payload into OEM `app1`.
+- ProofPro must also restore the OEM `eeprom` partition at `0x3ff000`. The OEM
+  app reads its authorization byte from this partition; without it the app boots
+  into the `Not Authorized` lockout screen instead of the normal OEM menu.
 - Partition diagnostics confirmed SmartPID `app1` readback SHA-256:
   `08cd03b15ca0d71bb47767b3c953ff8e83e89bf15c733a8d5fa3a8113f8634c1`.
 - `firmware_switch:"smartpid"` selected OEM `app1` and rebooted into SmartPID.
 - SmartPID published retained status on `smartpidM5/pro/{topic_id}/status`.
-- The SmartPID display showed `Not Authorized`; this appears to be an OEM
-  application authorization state.
+- The first SmartPID boot test restored only the app image, so the SmartPID
+  display showed `Not Authorized`. Decompile review traced this to an expected
+  boot authorization byte `0x11` read from the OEM `eeprom` partition.
 
 The reverse update path is not proven:
 

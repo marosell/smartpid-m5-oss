@@ -469,12 +469,15 @@ void TelemetryPublisher::publishMigrationPreflight(const char* reason,
     targetLayout["proofpro_app0_size"] = 0x1f0000;
     targetLayout["smartpid_app1_offset"] = 0x200000;
     targetLayout["smartpid_app1_size"] = 0x1f0000;
+    targetLayout["smartpid_eeprom_offset"] = 0x3ff000;
+    targetLayout["smartpid_eeprom_size"] = 0x1000;
 
     JsonArray writePlan = doc["write_plan"].to<JsonArray>();
     writePlan.add("require_running_from_current_high_app1");
     writePlan.add("force_outputs_safe_off");
     writePlan.add("write_verify_proofpro_oem_layout_app0");
     writePlan.add("write_verify_smartpid_oem_app1");
+    writePlan.add("write_verify_smartpid_oem_eeprom");
     writePlan.add("write_verify_oem_partition_table");
     writePlan.add("write_verify_oem_bootloader");
     writePlan.add("write_verify_otadata_selecting_proofpro_app0");

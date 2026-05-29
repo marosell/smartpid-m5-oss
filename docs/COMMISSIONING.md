@@ -5,6 +5,17 @@ No temporary source edits are required for normal first boot.
 
 ## Step 1 - Flash firmware
 
+The current hardware build is the OEM-compatible ProofPro layout:
+
+```bash
+pio run
+pio run -t upload --upload-port <device-ip>
+```
+
+`platformio.ini` defaults to `m5stack-core-esp32-16M-oem-layout`, so plain
+`pio run` builds the correct hardware image for converted devices. Use
+`m5stack-core-esp32-16M` only for intentional legacy large-slot work.
+
 USB flashing is not the normal update path for an installed ProofPro. Bench
 testing on 2026-05-27 showed that ESP32 USB auto-reset/download entry can
 briefly energize DC OUT 1 / GPIO12 before firmware or the bootloader can take
@@ -13,13 +24,9 @@ control. `esptool --no-stub` still caused the DC1 spike, while
 connect.
 
 Use OTA for routine updates. If USB flashing is unavoidable, disconnect any
-hazardous loads from DC1/DC2/RL1/RL2 first and complete the safety checks in
-`README.md` and `docs/WIRING.md`.
-
-```bash
-cd /path/to/smartpid-m5-oss
-pio run -t upload
-```
+hazardous loads from DC1/DC2/RL1/RL2 first. On the current bench unit, reliable
+USB download mode required manually pulling ESP32 GPIO0 low, resetting, and
+verifying ROM download mode with `esptool ... flash-id` before any write.
 
 ## Step 2 - Configure WiFi and MQTT
 
@@ -110,7 +117,9 @@ After first flash and successful WiFi setup:
 pio run -t upload --upload-port <device-ip>
 ```
 
-Device hostname: `smartpid-m5` via mDNS.
+Device hostname: `smartpid-m5` via mDNS. This command uses the default
+OEM-layout environment and uploads the correct ProofPro image for the current
+hardware layout.
 
 Before and after OTA, firmware forces DC1/DC2/RL1/RL2 low and logs GPIO
 readback. This is especially important for DC OUT 1, which is GPIO12 and also

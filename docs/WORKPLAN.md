@@ -38,7 +38,7 @@ explicitly about OEM backups, decompile research, or firmware switching.
 
 | Area | Status |
 |---|---|
-| Build target | `m5stack-core-esp32-16M` builds clean |
+| Build target | `m5stack-core-esp32-16M-oem-layout` is the current default hardware build |
 | OTA | OTA to `10.0.1.60` succeeds |
 | Display | M5Stack Basic/Gray class display is stable with M5Unified/M5GFX path |
 | Screen flicker | Power screen redraw flicker resolved with partial redraw strategy |
@@ -96,8 +96,9 @@ configured as `off`, `manual_on_off`, `acc_element`, `remote_other`, or `cycle`.
 - Acceleration is a temporary override of element output power.
 - Auxiliary DC outputs are excluded from acceleration and post-accel program
   power; they stay off unless directly commanded.
-- During acceleration, DC tiles blink between the user/MQTT-selected percent and
-  the acceleration percent.
+- During acceleration, DC tiles show the actual driven acceleration power as the
+  primary value. The queued post-accel run power is shown separately as a small
+  secondary value until acceleration ends.
 - When acceleration ends, the device leaves accel as one program phase, DC
   outputs configured as `element` return to `post_accel_power`, AccElement
   relays drop out, and the status tile changes from `ACCEL` to `RUN`.
@@ -170,6 +171,13 @@ Live relay telemetry is synchronized with retained relay config on boot and
 before accepted remote relay commands. Proof should still treat live telemetry
 as the authority for actual relay output state.
 
+Proof now persists outbound MQTT command provenance in its own database audit
+trail. Firmware MQTT payloads do not currently require provenance fields, but
+Proof records timestamp, run/device identity, topic, payload, origin, and
+trigger for every command it sends. Proof also records a
+`proofpro_program_end_decision` event after firmware `program_ended`, preserving
+an optional future firmware `source` field as `firmware_source` when present.
+
 ### Audio
 
 - The bench unit has no onboard microphone.
@@ -212,6 +220,8 @@ as the authority for actual relay output state.
    - Remote state begins `RDY`.
    - Proof relay command changes Remote to `ON` and toggles the relay.
    - Telemetry reports both `relay_engaged` and physical `relay`.
+   - Proof audit shows `origin:"operator"` and
+     `trigger:"relay_toggle_button"` for the outbound command.
 
 ## Recently cleared
 
@@ -222,6 +232,8 @@ as the authority for actual relay output state.
 | MQTT Remote gating | Cleared. Remote gates MQTT start/output/program commands, and the setting is persisted as `remote_en`. |
 | Accel status hang | Cleared. Accel completion now ends the device accel phase, restores steady programmed output display, and returns status to `RUN`. |
 | Relay config/live mismatch | Cleared. Runtime relay mode syncs from retained config on boot and before relay commands; relay mode updates are no longer blocked by prior `off` mode. |
+| Proof outbound command audit | Cleared in Proof. Outbound MQTT commands persist timestamp, run_id, device_id, topic, payload, origin, and trigger; run-associated commands also create `mqtt_command_sent` events. |
+| Proof END decision logging | Cleared in Proof. Firmware `program_ended` now creates a `proofpro_program_end_decision` event and preserves optional firmware `source` as `firmware_source`. |
 
 ---
 
@@ -233,7 +245,7 @@ as the authority for actual relay output state.
 | PT100 2-wire CH1 route | T2 confirmed; CH1 still needs the same wiring test |
 | NTC | Code path present, but no current NTC probe available for bench validation |
 | Relay cycle mode | Settings/UI present; needs a focused bench pass |
-| Proof remote relay regression | Latest sync fix needs Proof-side retest |
+| Proof remote relay regression | Proof display/audit handling updated; needs final hardware retest with current firmware |
 | Run-ending tone | Need DSPR400 beep recording/frequency timing before implementing synthesized notification |
 | MQTT schema doc | Canonical human-readable schema is updated; Proof migration summary lives in `docs/PROOF_MQTT_SCHEMA_CHANGES_2026-05-27.md` |
 | Production release tag | Wait until watchdog, Proof relay regression, program END regression, and PT100 2-wire CH1 tests pass |
@@ -243,8 +255,8 @@ as the authority for actual relay output state.
 ## Build and upload commands
 
 ```bash
-pio run -e m5stack-core-esp32-16M
-pio run -e m5stack-core-esp32-16M -t upload --upload-port 10.0.1.60
+pio run
+pio run -t upload --upload-port 10.0.1.60
 pio device monitor --port /dev/cu.usbserial-58690003391 --baud 115200
 ```
 

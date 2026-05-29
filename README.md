@@ -6,7 +6,8 @@ acceleration phase, watchdog, run timer, relay modes, Remote-gated MQTT control,
 and the custom Power UI. Legacy OEM MQTT command compatibility is retained where
 it is still useful.
 
-Built with PlatformIO + Arduino for ESP32 (`m5stack-core-esp32-16M`).
+Built with PlatformIO + Arduino for ESP32. The current hardware build target is
+`m5stack-core-esp32-16M-oem-layout`, which uses the OEM-compatible app slots.
 
 ---
 
@@ -22,7 +23,8 @@ Built with PlatformIO + Arduino for ESP32 (`m5stack-core-esp32-16M`).
 
 > **Core2 vs Gray:** Early OEM binary strings referenced Core2; the physical device
 > is confirmed M5Stack Gray. Same ESP32 silicon — difference is carrier board only.
-> `board = m5stack-core-esp32-16M` in platformio.ini is the current build target.
+> `board = m5stack-core-esp32-16M` is the board definition. The current firmware
+> environment is `m5stack-core-esp32-16M-oem-layout`.
 
 ---
 
@@ -66,7 +68,8 @@ smartpid-m5-oss/
 ├── reference/              Vendor PDFs, reports, and integration references
 ├── scripts/                Utility script notes
 ├── platformio.ini          Build config
-├── partitions.csv          Partition table (matches OEM layout)
+├── partitions_oem.csv      Current hardware partition table
+├── partitions.csv          Legacy large-slot development partition table
 └── CLAUDE.md               AI assistant context for this project
 ```
 
@@ -74,10 +77,24 @@ smartpid-m5-oss/
 
 ## Build
 
+See [docs/BUILDING.md](docs/BUILDING.md) for the current build target and
+recovery rules.
+
 ```bash
 cd smartpid-m5-oss
-pio run                            # compile only — verify before flashing
+pio run                            # current hardware build: OEM layout
+pio run -e desktop                 # desktop emulator build
 pio device monitor                 # serial console (115200 baud)
+```
+
+For hardware agents: do not use `m5stack-core-esp32-16M` for normal ProofPro
+hardware builds unless you are intentionally working on the legacy large-slot
+layout. Converted devices use the OEM-compatible layout:
+
+```text
+app0  ota_0  0x010000  0x1f0000  ProofPro
+app1  ota_1  0x200000  0x1f0000  OEM SmartPID
+eeprom data   0x3ff000  0x1000    OEM authorization/settings data
 ```
 
 ---
@@ -100,10 +117,10 @@ Before connecting USB:
 2. Measure GPIO 12 / DC OUT 1 terminal with voltmeter → must read **0V**
 3. If it reads >0.5V, stop and diagnose before proceeding
 
-```bash
-pio run -t upload        # auto-detects port
-# or: pio run -t upload --upload-port /dev/tty.XXXX
-```
+USB flashing is not the normal path for converted devices. If it is unavoidable,
+manually pull ESP32 GPIO0 low, reset into ROM download mode, and verify with
+`esptool --chip esp32 -p /dev/cu.usbserial-XXXX flash-id` before writing. Keep
+hazardous loads disconnected from DC1/DC2/RL1/RL2.
 
 ---
 
@@ -114,6 +131,8 @@ pio run -t upload --upload-port 10.0.1.60
 ```
 
 ArduinoOTA is always active when WiFi is connected. No USB needed after initial flash.
+Because `default_envs` is `m5stack-core-esp32-16M-oem-layout`, this command
+builds and uploads the correct OEM-layout ProofPro image.
 
 ---
 
@@ -122,7 +141,7 @@ ArduinoOTA is always active when WiFi is connected. No USB needed after initial 
 After a successful flash + bench test, save the binary alongside the commit:
 
 ```bash
-cp .pio/build/m5stack-core-esp32-16M/firmware.bin \
+cp .pio/build/m5stack-core-esp32-16M-oem-layout/firmware.bin \
    firmware-releases/smartpid-m5-oss-$(git rev-parse --short HEAD).bin
 git add firmware-releases/
 git commit -m "Release: archive verified firmware $(git rev-parse --short HEAD)"
@@ -146,13 +165,11 @@ Full command reference is in [docs/MQTT_SCHEMA.md](docs/MQTT_SCHEMA.md).
 
 ## Restoring OEM firmware
 
-```bash
-# Restore app0 only (preserves WiFi/MQTT NVS config)
-esptool --port /dev/tty.XXXX --baud 230400 \
-    write-flash 0x10000 firmware-oem/smartpid_app0.bin
-```
-
-Full restore procedure in [firmware-oem/README.md](firmware-oem/README.md).
+Current converted devices keep OEM SmartPID in `app1` and the OEM authorization
+EEPROM bytes in the `eeprom` partition. Use
+[docs/OEM_LAYOUT_MIGRATION_RUNBOOK.md](docs/OEM_LAYOUT_MIGRATION_RUNBOOK.md)
+and [docs/FIRMWARE_SWITCHING.md](docs/FIRMWARE_SWITCHING.md) before changing
+firmware slots.
 
 ---
 
