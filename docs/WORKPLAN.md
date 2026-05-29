@@ -178,6 +178,38 @@ trigger for every command it sends. Proof also records a
 `proofpro_program_end_decision` event after firmware `program_ended`, preserving
 an optional future firmware `source` field as `firmware_source` when present.
 
+### Local HTTP status page
+
+Planned small addition: a read-only HTTP status server during normal WiFi client
+operation, separate from the existing captive portal. The goal is quick browser
+health visibility at the device IP without adding another control surface.
+
+Proposed endpoints:
+
+- `/` - compact human-readable status page.
+- `/status.json` - machine-readable JSON status.
+
+Initial fields:
+
+- WiFi connected/disconnected, SSID, IP address, RSSI.
+- MQTT connected/disconnected and broker host/port.
+- Firmware version and schema version.
+- Remote state (`OFF` / `RDY` / `ON`).
+- Watchdog enabled/timeout.
+- Uptime.
+- Optional current DC/relay readback if it can be shared without duplicating
+  telemetry logic.
+
+Implementation notes:
+
+- Use arduino-esp32 built-in `WebServer`, already linked by the captive portal.
+- Keep it read-only: no settings, output commands, reset, OTA, or migration
+  actions.
+- Run only after normal WiFi client connection; do not interfere with captive
+  portal AP mode.
+- Estimated size: about 100-200 lines and roughly 2-8 KB additional firmware
+  image space because `WebServer` and `ArduinoJson` are already present.
+
 ### Audio
 
 - The bench unit has no onboard microphone.
@@ -246,6 +278,7 @@ an optional future firmware `source` field as `firmware_source` when present.
 | NTC | Code path present, but no current NTC probe available for bench validation |
 | Relay cycle mode | Settings/UI present; needs a focused bench pass |
 | Proof remote relay regression | Proof display/audit handling updated; needs final hardware retest with current firmware |
+| Local HTTP status page | Planned read-only browser health check for WiFi/MQTT/device status |
 | Run-ending tone | Need DSPR400 beep recording/frequency timing before implementing synthesized notification |
 | MQTT schema doc | Canonical human-readable schema is updated; Proof migration summary lives in `docs/PROOF_MQTT_SCHEMA_CHANGES_2026-05-27.md` |
 | Production release tag | Wait until watchdog, Proof relay regression, program END regression, and PT100 2-wire CH1 tests pass |
