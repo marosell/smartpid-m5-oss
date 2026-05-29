@@ -55,6 +55,26 @@ static bool runningFromCurrentHighApp1() {
 #endif
 }
 
+static bool runningFromOemLayoutApp0() {
+#ifdef DESKTOP_BUILD
+    return false;
+#else
+    const esp_partition_t* running = esp_ota_get_running_partition();
+    const esp_partition_t* app0 =
+        esp_partition_find_first(ESP_PARTITION_TYPE_APP,
+                                 ESP_PARTITION_SUBTYPE_APP_OTA_0,
+                                 nullptr);
+    const esp_partition_t* app1 =
+        esp_partition_find_first(ESP_PARTITION_TYPE_APP,
+                                 ESP_PARTITION_SUBTYPE_APP_OTA_1,
+                                 nullptr);
+    return running && app0 && app1 &&
+           running->address == 0x10000 && running->size == 0x1f0000 &&
+           app0->address == 0x10000 && app0->size == 0x1f0000 &&
+           app1->address == 0x200000 && app1->size == 0x1f0000;
+#endif
+}
+
 #ifndef DESKTOP_BUILD
 static void sha256ToHex(const uint8_t digest[32], char out[65]) {
     static const char* hex = "0123456789abcdef";
@@ -374,7 +394,8 @@ static MigrationInstallResult writeBufferedMetadata(BufferedMetadataArtifact* bu
 static MigrationInstallResult validatePackageStream(const MigrationInstallRequest& request,
                                                     TelemetryPublisher* telemetry,
                                                     bool enableAppWrites,
-                                                    bool enableMetadataWrites) {
+                                                    bool enableMetadataWrites,
+                                                    bool enableSmartPidApp1Write = false) {
     const char* writeStage = requestedWriteStage(request);
 #if defined(PROOFPRO_ENABLE_OEM_LAYOUT_INSTALL)
     const bool writeApps = enableAppWrites && strcmp(writeStage, "apps") == 0;
@@ -387,6 +408,12 @@ static MigrationInstallResult validatePackageStream(const MigrationInstallReques
 #else
     (void)enableMetadataWrites;
     const bool writeMetadata = false;
+#endif
+#if defined(PROOFPRO_ENABLE_OEM_APP_RESTORE)
+    const bool writeSmartPidApp1 = enableSmartPidApp1Write;
+#else
+    (void)enableSmartPidApp1Write;
+    const bool writeSmartPidApp1 = false;
 #endif
 
     HTTPClient http;
@@ -587,6 +614,7 @@ static MigrationInstallResult validatePackageStream(const MigrationInstallReques
         }
 
         const bool writeArtifact = (writeApps && isAppArtifact(role)) ||
+                                   (writeSmartPidApp1 && strcmp(role, "smartpid_oem_app1") == 0) ||
                                    (writeMetadata && isMetadataArtifact(role));
 #if defined(PROOFPRO_ENABLE_OEM_LAYOUT_METADATA_INSTALL)
         BufferedMetadataArtifact* bufferedMetadata = nullptr;
@@ -914,5 +942,74 @@ MigrationInstallResult migrationInstallOemLayout(const MigrationInstallRequest& 
                                                  writeStage);
     }
     return MigrationInstallResult::WRITES_DISABLED;
+#endif
+}
+
+MigrationInstallResult migrationRestoreSmartPidApp1(const MigrationInstallRequest& request,
+                                                    TelemetryPublisher* telemetry) {
+    if (!validPackageUrl(request.packageUrl)) {
+        if (telemetry) {
+            telemetry->publishMigrationInstallStatus("smartpid_oem_app1",
+                                                     "rejected",
+                                                     "invalid_package_url",
+                                                     request.packageUrl,
+                                                     request.packageSha256);
+        }
+        return MigrationInstallResult::INVALID_REQUEST;
+    }
+    if (!validSha256Hex(request.packageSha256)) {
+        if (telemetry) {
+            telemetry->publishMigrationInstallStatus("smartpid_oem_app1",
+                                                     "rejected",
+                                                     "invalid_package_sha256",
+                                                     request.packageUrl,
+                                                     request.packageSha256);
+        }
+        return MigrationInstallResult::INVALID_REQUEST;
+    }
+    if (!runningFromOemLayoutApp0()) {
+        if (telemetry) {
+            telemetry->publishMigrationInstallStatus("smartpid_oem_app1",
+                                                     "rejected",
+                                                     "not_running_from_oem_app0",
+                                                     request.packageUrl,
+                                                     request.packageSha256);
+        }
+        return MigrationInstallResult::UNSAFE_STATE;
+    }
+
+#ifdef DESKTOP_BUILD
+    return MigrationInstallResult::UNSAFE_STATE;
+#else
+    MigrationInstallResult validation = validatePackageStream(request, telemetry, false, false);
+    if (validation != MigrationInstallResult::ACCEPTED) return validation;
+
+#if defined(PROOFPRO_ENABLE_OEM_APP_RESTORE)
+    MigrationInstallResult writeResult = validatePackageStream(request, telemetry, false, false, true);
+    if (writeResult != MigrationInstallResult::ACCEPTED) return writeResult;
+    if (telemetry) {
+        telemetry->publishMigrationInstallStatus("smartpid_oem_app1",
+                                                 "verified",
+                                                 "smartpid_oem_app1_written",
+                                                 request.packageUrl,
+                                                 request.packageSha256,
+                                                 0,
+                                                 0,
+                                                 "smartpid_app1");
+    }
+    return MigrationInstallResult::ACCEPTED;
+#else
+    if (telemetry) {
+        telemetry->publishMigrationInstallStatus("smartpid_oem_app1",
+                                                 "rejected",
+                                                 "writes_not_enabled",
+                                                 request.packageUrl,
+                                                 request.packageSha256,
+                                                 0,
+                                                 0,
+                                                 "smartpid_app1");
+    }
+    return MigrationInstallResult::WRITES_DISABLED;
+#endif
 #endif
 }

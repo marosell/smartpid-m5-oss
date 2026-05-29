@@ -33,6 +33,10 @@
 //                                           Reboot into current-layout high app1 slot
 //   {"migration": "install_oem_bootloader_layout", ...}
 //                                           Reserved package install command; writes disabled
+//   {"firmware_restore": "smartpid_app1", ...}
+//                                           Restore SmartPID image to OEM app1
+//   {"firmware_switch": "smartpid"/"proofpro", "confirm": "..."}
+//                                           Boot the selected OEM-layout app slot
 
 #include <Arduino.h>
 #include "config.h"
@@ -112,6 +116,10 @@ private:
                                        const char* packageSha256,
                                        const char* writeStage);
     void _cmdBootHighApp1(const char* confirm);
+    void _cmdRestoreSmartPidApp1(const char* confirm,
+                                 const char* packageUrl,
+                                 const char* packageSha256);
+    void _cmdFirmwareSwitch(const char* target, const char* confirm);
 };
 
 extern CommandHandler cmdHandler;

@@ -267,6 +267,38 @@ Recommended policy:
 
 Normal users should not be asked to choose offsets or run esptool commands.
 
+## OEM-Layout Runtime Commands
+
+After conversion, the normal ProofPro OEM-layout build can restore the SmartPID
+app payload to OEM `app1` without touching boot metadata:
+
+```json
+{
+  "firmware_restore": "smartpid_app1",
+  "confirm": "YES_RESTORE_SMARTPID_APP1",
+  "package_url": "http://10.0.1.203:8080/proofpro_oem_layout_migration.ppmig",
+  "package_sha256": "..."
+}
+```
+
+This command is compiled only for the OEM-layout ProofPro environment with
+`PROOFPRO_ENABLE_OEM_APP_RESTORE`. It requires ProofPro to be running from OEM
+`app0`, validates the package, writes only `smartpid_oem_app1` to `0x200000`,
+readback-verifies it, and leaves the device booted in ProofPro.
+
+Once the desired app images are present, ProofPro can select the next boot slot:
+
+```json
+{"firmware_switch":"smartpid","confirm":"YES_BOOT_SMARTPID"}
+{"firmware_switch":"proofpro","confirm":"YES_BOOT_PROOFPRO"}
+```
+
+`smartpid` maps to OEM `app1`; `proofpro` maps to OEM `app0`. The switch command
+requires the OEM app-slot layout, verifies that the target partition is not
+marked invalid/aborted, forces all outputs safe/off, publishes
+`firmware_switching`, and reboots. Booting SmartPID intentionally takes ProofPro
+MQTT offline until another path returns the unit to ProofPro.
+
 ## Critical safety rules
 
 Before any switching experiment:

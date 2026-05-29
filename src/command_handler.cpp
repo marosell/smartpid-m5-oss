@@ -304,6 +304,22 @@ void CommandHandler::handle(const uint8_t* payload, unsigned int len) {
         }
     }
 
+    if (doc["firmware_restore"].is<const char*>()) {
+        const char* restore = doc["firmware_restore"].as<const char*>();
+        if (strcmp(restore, "smartpid_app1") == 0) {
+            _cmdRestoreSmartPidApp1(doc["confirm"].as<const char*>(),
+                                    doc["package_url"].as<const char*>(),
+                                    doc["package_sha256"].as<const char*>());
+        } else {
+            _tele->publishCommandError("firmware_restore", "invalid_value", restore);
+        }
+    }
+
+    if (doc["firmware_switch"].is<const char*>()) {
+        _cmdFirmwareSwitch(doc["firmware_switch"].as<const char*>(),
+                           doc["confirm"].as<const char*>());
+    }
+
     const bool chirpBool = doc["chirp"].is<bool>() && doc["chirp"].as<bool>();
     const bool chirpAudio = doc["audio"].is<const char*>() &&
                             strcmp(doc["audio"].as<const char*>(), "chirp") == 0;
@@ -1326,6 +1342,131 @@ void CommandHandler::_cmdBootHighApp1(const char* confirm) {
         _tele->publishEventTyped("boot high app1", "migration_boot_high_app1");
         _tele->publishMigrationPreflight("boot_high_app1");
     }
+    if (_mqtt) {
+        _mqtt->publishStatus();
+        _mqtt->loop();
+    }
+    delay(500);
+    ESP.restart();
+#endif
+}
+
+void CommandHandler::_cmdRestoreSmartPidApp1(const char* confirm,
+                                             const char* packageUrl,
+                                             const char* packageSha256) {
+    static constexpr const char* REQUIRED_CONFIRM = "YES_RESTORE_SMARTPID_APP1";
+
+    if (!confirm || strcmp(confirm, REQUIRED_CONFIRM) != 0) {
+        if (_tele) _tele->publishCommandError("firmware_restore", "confirmation_required", "smartpid_app1");
+        log_w("[CMD] firmware_restore smartpid_app1 rejected — confirmation required");
+        return;
+    }
+
+    outputCtrl.forceAllOff();
+    if (_cfg) _cfg->saveRunState(0, 0, false, false);
+    if (_mqtt) {
+        _mqtt->publishStatus();
+        _mqtt->loop();
+    }
+
+    MigrationInstallRequest request;
+    request.packageUrl = packageUrl;
+    request.packageSha256 = packageSha256;
+    request.writeStage = "smartpid_app1";
+    MigrationInstallResult result = migrationRestoreSmartPidApp1(request, _tele);
+    if (result == MigrationInstallResult::ACCEPTED) {
+        log_w("[CMD] firmware_restore smartpid_app1 accepted");
+        return;
+    }
+
+    const char* reason = "restore_failed";
+    switch (result) {
+        case MigrationInstallResult::INVALID_REQUEST: reason = "invalid_package"; break;
+        case MigrationInstallResult::UNSAFE_STATE: reason = "unsafe_state"; break;
+        case MigrationInstallResult::DOWNLOAD_FAILED: reason = "download_failed"; break;
+        case MigrationInstallResult::PACKAGE_INVALID: reason = "package_invalid"; break;
+        case MigrationInstallResult::FLASH_WRITE_FAILED: reason = "flash_write_failed"; break;
+        case MigrationInstallResult::FLASH_VERIFY_FAILED: reason = "flash_verify_failed"; break;
+        case MigrationInstallResult::WRITES_DISABLED: reason = "writes_not_enabled"; break;
+        default: break;
+    }
+    if (_tele) _tele->publishCommandError("firmware_restore", reason, "smartpid_app1");
+    log_w("[CMD] firmware_restore smartpid_app1 rejected result=%d", (int)result);
+}
+
+void CommandHandler::_cmdFirmwareSwitch(const char* target, const char* confirm) {
+    if (!target || target[0] == '\0') {
+        if (_tele) _tele->publishCommandError("firmware_switch", "invalid_value");
+        return;
+    }
+
+    const bool toProofPro = strcmp(target, "proofpro") == 0;
+    const bool toSmartPid = strcmp(target, "smartpid") == 0;
+    if (!toProofPro && !toSmartPid) {
+        if (_tele) _tele->publishCommandError("firmware_switch", "invalid_value", target);
+        return;
+    }
+
+    const char* requiredConfirm = toSmartPid ? "YES_BOOT_SMARTPID" : "YES_BOOT_PROOFPRO";
+    if (!confirm || strcmp(confirm, requiredConfirm) != 0) {
+        if (_tele) _tele->publishCommandError("firmware_switch", "confirmation_required", target);
+        log_w("[CMD] firmware_switch %s rejected — confirmation required", target);
+        return;
+    }
+
+#ifdef DESKTOP_BUILD
+    if (_tele) _tele->publishCommandError("firmware_switch", "desktop_build", target);
+    return;
+#else
+    const esp_partition_subtype_t subtype =
+        toSmartPid ? ESP_PARTITION_SUBTYPE_APP_OTA_1 : ESP_PARTITION_SUBTYPE_APP_OTA_0;
+    const esp_partition_t* running = esp_ota_get_running_partition();
+    const esp_partition_t* app0 =
+        esp_partition_find_first(ESP_PARTITION_TYPE_APP,
+                                 ESP_PARTITION_SUBTYPE_APP_OTA_0,
+                                 nullptr);
+    const esp_partition_t* app1 =
+        esp_partition_find_first(ESP_PARTITION_TYPE_APP,
+                                 ESP_PARTITION_SUBTYPE_APP_OTA_1,
+                                 nullptr);
+    const esp_partition_t* targetPart =
+        esp_partition_find_first(ESP_PARTITION_TYPE_APP, subtype, nullptr);
+
+    const bool oemLayout =
+        app0 && app1 &&
+        app0->address == 0x10000 && app0->size == 0x1f0000 &&
+        app1->address == 0x200000 && app1->size == 0x1f0000;
+    if (!oemLayout || !targetPart) {
+        if (_tele) _tele->publishCommandError("firmware_switch", "not_oem_layout", target);
+        log_w("[CMD] firmware_switch %s rejected — not on OEM layout", target);
+        return;
+    }
+
+    if (running && running->address == targetPart->address && running->size == targetPart->size) {
+        if (_tele) _tele->publishEventTyped("firmware already selected", "firmware_switch_already", 0, target);
+        log_i("[CMD] firmware_switch %s ignored — already running target", target);
+        return;
+    }
+
+    esp_ota_img_states_t state = ESP_OTA_IMG_UNDEFINED;
+    if (esp_ota_get_state_partition(targetPart, &state) == ESP_OK &&
+        (state == ESP_OTA_IMG_INVALID || state == ESP_OTA_IMG_ABORTED)) {
+        if (_tele) _tele->publishCommandError("firmware_switch", "target_not_bootable", target);
+        log_w("[CMD] firmware_switch %s rejected — target OTA state=%d", target, (int)state);
+        return;
+    }
+
+    esp_err_t err = esp_ota_set_boot_partition(targetPart);
+    if (err != ESP_OK) {
+        if (_tele) _tele->publishCommandError("firmware_switch", "set_boot_partition_failed", target);
+        log_e("[CMD] firmware_switch %s failed — esp_ota_set_boot_partition err=0x%x", target, err);
+        return;
+    }
+
+    log_w("[CMD] firmware_switch %s accepted — forcing outputs safe and rebooting", target);
+    outputCtrl.forceAllOff();
+    if (_cfg) _cfg->saveRunState(0, 0, false, false);
+    if (_tele) _tele->publishEventTyped("firmware switch", "firmware_switching", 0, target);
     if (_mqtt) {
         _mqtt->publishStatus();
         _mqtt->loop();

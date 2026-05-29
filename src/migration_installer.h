@@ -24,3 +24,6 @@ enum class MigrationInstallResult {
 
 MigrationInstallResult migrationInstallOemLayout(const MigrationInstallRequest& request,
                                                  TelemetryPublisher* telemetry);
+
+MigrationInstallResult migrationRestoreSmartPidApp1(const MigrationInstallRequest& request,
+                                                    TelemetryPublisher* telemetry);

@@ -599,6 +599,59 @@ that the current large-slot layout is present, sets the next boot partition to
 `app1` at `0x650000`, forces outputs safe/off, and reboots. It rejects the
 command unless the confirmation string is exact.
 
+After the device has been converted to the OEM-compatible layout, ProofPro can
+restore the SmartPID app payload to OEM `app1` from the verified migration
+package:
+
+```json
+{
+  "firmware_restore": "smartpid_app1",
+  "confirm": "YES_RESTORE_SMARTPID_APP1",
+  "package_url": "http://10.0.1.203:8080/proofpro_oem_layout_migration.ppmig",
+  "package_sha256": "..."
+}
+```
+
+This command is only enabled in the OEM-layout ProofPro build. It requires
+ProofPro to be running from OEM `app0`, forces outputs safe/off first, downloads
+and verifies the full package, writes only the `smartpid_oem_app1` artifact to
+OEM `app1` at `0x200000`, readback-verifies it, and leaves ProofPro running.
+It does not write bootloader, partition table, otadata, or ProofPro `app0`.
+
+Possible command errors include:
+
+- `confirmation_required`
+- `invalid_package`
+- `unsafe_state`
+- `download_failed`
+- `package_invalid`
+- `flash_write_failed`
+- `flash_verify_failed`
+- `writes_not_enabled`
+
+On the OEM-compatible layout, ProofPro can also request a boot switch:
+
+```json
+{
+  "firmware_switch": "smartpid",
+  "confirm": "YES_BOOT_SMARTPID"
+}
+```
+
+```json
+{
+  "firmware_switch": "proofpro",
+  "confirm": "YES_BOOT_PROOFPRO"
+}
+```
+
+`firmware_switch:"smartpid"` selects OEM `app1`; `firmware_switch:"proofpro"`
+selects OEM `app0`. The command validates that the OEM app-slot layout is
+present, checks that the target partition is not marked invalid/aborted, forces
+all outputs safe/off, publishes `firmware_switching`, and reboots. If SmartPID
+is booted, ProofPro MQTT will go offline until ProofPro is restored or selected
+again by an external path.
+
 ### General commands
 
 ```json
