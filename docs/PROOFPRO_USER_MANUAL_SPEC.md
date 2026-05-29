@@ -233,13 +233,14 @@ Figure 3. Example SSR wiring for DC OUT
 Figure 4. Example acceleration relay/contactor wiring
 ```
 
-### 4. Operation Modes
+### 4. ProofPro Workflow
 
 Explain:
 
-- Monitor: read-only telemetry, no output.
-- Standard/Advanced: legacy/OEM-compatible modes.
-- Power Direct: primary ProofPro workflow.
+- Power screen / Power Direct is the primary ProofPro workflow.
+- Monitor, Standard, and Advanced are legacy/OEM-compatible concepts only. Do
+  not present them as normal operator workflows unless the current UI/source
+  explicitly exposes them.
 
 State clearly that current ProofPro product workflow uses Power Direct with:
 
@@ -304,14 +305,14 @@ Recommended tables:
 | ProofPro label | MQTT key | Range / values | Default / note |
 |---|---|---|---|
 | Accel Mode | `acc_mode` | true/false | Enables acceleration phase |
-| Accel Temp | `accel_temp` | temp | DSPR400 `dAST` |
+| Accel Temp | `accel_temp` | temp; `0` disables temperature transition | DSPR400 `dAST` |
 | Accel Power | `accel_power` | 0-100% | DSPR400 `dOUT` |
 | Run Power | `post_accel_power` | 0-100% | DSPR400 dial/run power |
 | Timer Start Temp | `timer_start_temp` | temp | DSPR400 `dtSP` |
 | Timer | `timer_s` | seconds | finish timer duration |
-| Finish Temp | `finish_temp` | temp | DSPR400 `dFSP` |
+| Finish Temp | `finish_temp` | temp; `0` disables finish-by-temp | DSPR400 `dFSP` |
 | Finish Temp Source | `finish_temp_source` | CH1/CH2 | selects probe for finish temp |
-| Finish Action | `finish_action` | continue/end | end latches outputs safe/off |
+| Finish Action | `finish_action` | continue/end/shutoff | `end` latches outputs safe/off; `shutoff` is accepted as an alias for `end` |
 
 #### 7.2 DC Output Modes
 
@@ -354,13 +355,13 @@ Explain:
 
 #### 7.5 Clock / Timezone
 
-| Setting | MQTT key | Notes |
+| Setting | MQTT command key / readback field | Notes |
 |---|---|---|
-| Timezone label | `timezone_label` | IANA-style label such as America/New_York |
-| POSIX timezone | `timezone_posix` | ESP32 POSIX TZ string, not IANA |
-| NTP enabled | `ntp_enabled` | true/false |
-| NTP host | `ntp_host` | hostname such as pool.ntp.org |
-| 24-hour clock | `clock_24h` | true/false |
+| Timezone label | command/readback: `timezone_label` | IANA-style label such as America/New_York |
+| POSIX timezone | command/readback: `timezone_posix` | ESP32 POSIX TZ string, not IANA |
+| NTP enabled | readback/local setting: `ntp_enabled` | retained config/local UI setting; not currently an MQTT command key |
+| NTP host | readback/local setting: `ntp_host` | retained config/local UI setting; not currently an MQTT command key |
+| 24-hour clock | command/readback: `clock_24h` | true/false |
 
 ### 8. Application Examples
 
