@@ -20,8 +20,8 @@ Required ProofPro context:
 - `README.md` - project overview, hardware target, modes, build/OTA notes.
 - `docs/BUILDING.md` - current PlatformIO target, OTA command, installer builds,
   and USB recovery cautions.
-- `docs/MQTT_SCHEMA.md` - canonical ProofPro MQTT schema. Include this as an
-  appendix in the manual.
+- `docs/MQTT_SCHEMA.md` - canonical ProofPro MQTT schema. Use it as the source
+  for the shortened operator/API appendix.
 - `docs/WORKPLAN.md` - current firmware behavior and open validation state.
 - `docs/WIRING.md` - canonical wiring, output map, probe facts, and safety notes.
 - `docs/COMMISSIONING.md` - first boot, captive portal, MQTT setup, OTA workflow.
