@@ -135,8 +135,9 @@ Use a table. Include known facts:
 - Display: ILI9341 320x240.
 - Buttons: three mechanical buttons.
 - Firmware environment: `m5stack-core-esp32-16M-oem-layout`.
-- Modes: Monitor, Standard, Advanced, Power Direct; note ProofPro workflow uses
-  Power Direct.
+- Primary workflow: ProofPro Power screen / Power Direct control. Do not frame
+  Monitor, Standard, and Advanced as normal operator modes; mention them only as
+  legacy/OEM compatibility or internal background if needed.
 - Outputs: DC1, DC2, RL1, RL2.
 - DC output voltage from bench: about 4.8 V carrier DC rail.
 - Supported probes: DS18B20, K-Type, PT100 2-wire, PT100 3-wire, NTC path present
@@ -144,9 +145,9 @@ Use a table. Include known facts:
 - MQTT: `smartpidM5/proofpro/{topic_id}/`.
 - Sensor sample target: 2 seconds.
 - MQTT publish cadence default: 6 seconds.
-- Proof integration audit: Proof records outbound MQTT command provenance
-  (`origin` and `trigger`) in its own database; these are Proof audit records,
-  not firmware MQTT payload fields.
+- Proof integration audit is a Proof-side database feature, not a firmware MQTT
+  payload feature. Keep it out of the operator-facing specifications table
+  unless the manual includes a separate integration appendix.
 
 ### 2. Front Panel And Power Screen
 
@@ -176,11 +177,12 @@ Important display semantics:
 - Relay tile physical ON/OFF follows actual relay state.
 - Managed relay armed/engaged state is distinct from physical relay output.
 
-Button summary:
+Button guidance:
 
-- BtnA: Up / decrement.
-- BtnB: Select / Menu / confirm.
-- BtnC: Down / back / increment depending on screen.
+- Treat the on-screen footer labels as authoritative for each screen.
+- In value editors, BtnA generally decrements and BtnC increments.
+- BtnB selects/confirms in normal navigation.
+- BtnB hold is Back where supported.
 
 ### 3. Wiring And Terminals
 
@@ -318,12 +320,14 @@ Include notes:
 
 | Setting | MQTT key | Range |
 |---|---|---|
-| Watchdog Enabled | `watchdog_enabled` | true/false |
+| Watchdog Enabled | `watchdog_enabled` | true/false; disabling is rejected while Remote is enabled |
 | Watchdog Timeout | `watchdog_s` | 30-60 seconds |
 
 Explain:
 
 - Watchdog is active only during Remote `ON`.
+- Enabling Remote forces watchdog enabled.
+- Disable/unarm is accepted only when Remote is OFF.
 - Trip forces DC1/DC2 to 0% and RL1/RL2 off.
 - Heartbeat cadence from Proof is 10 seconds.
 
@@ -333,6 +337,8 @@ Explain:
 |---|---|---|
 | Timezone label | `timezone_label` | IANA-style label such as America/New_York |
 | POSIX timezone | `timezone_posix` | ESP32 POSIX TZ string, not IANA |
+| NTP enabled | `ntp_enabled` | true/false |
+| NTP host | `ntp_host` | hostname such as pool.ntp.org |
 | 24-hour clock | `clock_24h` | true/false |
 
 ### 8. Application Examples
@@ -413,11 +419,16 @@ Summarize:
 - OTA update process.
 - Avoid USB flashing with hazardous loads attached.
 
-### Appendix A. ProofPro MQTT Schema
+### Appendix A. ProofPro MQTT Operator/API Reference
 
-Include the current schema from `docs/MQTT_SCHEMA.md`, either directly copied
-and lightly formatted or summarized with a note that `docs/MQTT_SCHEMA.md` is
-canonical.
+Include a shortened operator/API reference, not a full copy of
+`docs/MQTT_SCHEMA.md`. State that `docs/MQTT_SCHEMA.md` is canonical for the
+complete integration schema.
+
+Do not copy migration, firmware restore, firmware switching, installer, or USB
+recovery commands into the operator manual. Those belong in technical runbooks
+such as `docs/FIRMWARE_SWITCHING.md` and
+`docs/OEM_LAYOUT_MIGRATION_RUNBOOK.md`.
 
 Minimum appendix contents:
 
@@ -437,7 +448,6 @@ Minimum appendix contents:
   - program settings,
   - relay modes/commands,
   - watchdog,
-  - diagnostics,
   - clock/timezone.
 - Field semantics:
   - `power` vs `run_target_power`,
@@ -445,6 +455,17 @@ Minimum appendix contents:
   - `remote_state`,
   - `program_running`,
   - `ended` and `latched`.
+
+### Appendix B. Proof Integration Audit
+
+Optional. Include only if the manual has an integrator/API audience. Omit from a
+pure operator manual.
+
+This appendix must clearly state that Proof audit records are Proof-side
+database records, not firmware MQTT payload fields.
+
+If included, cover:
+
 - Proof-side command provenance/audit expectations:
   - outbound command audit fields,
   - `origin` and `trigger` examples,
@@ -452,12 +473,12 @@ Minimum appendix contents:
   - `proofpro_program_end_decision`,
   - optional firmware `source` preserved as `firmware_source` when present.
 
-### Appendix B. DSPR400 Vocabulary Cross-Reference
+### Appendix C. DSPR400 Vocabulary Cross-Reference
 
 Create a complete cross-reference table from DSPR400 parameter names to
 ProofPro names and MQTT keys.
 
-### Appendix C. Validation Status
+### Appendix D. Validation Status
 
 Based on current docs, state which items are bench confirmed and which still
 need validation. Do not overclaim.
@@ -496,12 +517,10 @@ final artwork. Suggested placeholders:
 
 ## Open Questions For The Manual Author
 
-- Should the manual include installer/firmware switching commands, or should
-  those remain in technical runbooks only?
-- Should the MQTT appendix be full canonical schema or shortened operator/API
-  reference?
 - Which screenshots/figures should be captured from the actual device?
 - Should Proof-side UI screens be included, or should this be device-only?
+- Should Proof integration audit details be included as Appendix B, or omitted
+  from the first operator-focused manual?
 - Proof already preserves an optional firmware event `source` as
   `firmware_source` in its own decision events. Do not document `source` as a
   required firmware field until firmware emits it.
