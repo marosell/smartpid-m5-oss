@@ -615,8 +615,9 @@ package:
 This command is only enabled in the OEM-layout ProofPro build. It requires
 ProofPro to be running from OEM `app0`, forces outputs safe/off first, downloads
 and verifies the full package, writes only the `smartpid_oem_app1` artifact to
-OEM `app1` at `0x200000`, readback-verifies it, and leaves ProofPro running.
-It does not write bootloader, partition table, otadata, or ProofPro `app0`.
+OEM `app1` at `0x200000`, readback-verifies it through the ESP partition API,
+and leaves ProofPro running. It does not write bootloader, partition table,
+otadata, or ProofPro `app0`.
 
 Possible command errors include:
 
@@ -651,6 +652,19 @@ present, checks that the target partition is not marked invalid/aborted, forces
 all outputs safe/off, publishes `firmware_switching`, and reboots. If SmartPID
 is booted, ProofPro MQTT will go offline until ProofPro is restored or selected
 again by an external path.
+
+Bench result, 2026-05-28:
+
+- ProofPro restored OEM SmartPID to `app1` and readback SHA-256 matched the
+  packaged SmartPID app image:
+  `08cd03b15ca0d71bb47767b3c953ff8e83e89bf15c733a8d5fa3a8113f8634c1`.
+- `firmware_switch:"smartpid"` booted SmartPID successfully. The device
+  published retained status on `smartpidM5/pro/{topic_id}/status`.
+- The OEM SmartPID UI displayed `Not Authorized`; that is an OEM app state, not
+  a ProofPro error.
+- A normal PlatformIO/ArduinoOTA push of ProofPro over the running OEM app did
+  not connect to port 3232. Treat Proof-over-OEM OTA as not proven until the OEM
+  update path is understood or a resident launcher/recovery path exists.
 
 ### General commands
 

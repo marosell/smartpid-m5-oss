@@ -8,9 +8,48 @@
 #ifndef DESKTOP_BUILD
 #include <esp_ota_ops.h>
 #include <esp_partition.h>
+#include <mbedtls/sha256.h>
 #endif
 
 TelemetryPublisher telemetry;
+
+#ifndef DESKTOP_BUILD
+static void sha256ToHex(const uint8_t digest[32], char out[65]) {
+    static const char* hex = "0123456789abcdef";
+    for (size_t i = 0; i < 32; ++i) {
+        out[i * 2] = hex[(digest[i] >> 4) & 0x0f];
+        out[i * 2 + 1] = hex[digest[i] & 0x0f];
+    }
+    out[64] = '\0';
+}
+
+static bool hashPartitionPrefix(const esp_partition_t* part, char outHex[65]) {
+    if (!part) return false;
+
+    uint8_t buf[1024];
+    mbedtls_sha256_context ctx;
+    mbedtls_sha256_init(&ctx);
+    mbedtls_sha256_starts(&ctx, 0);
+
+    size_t offset = 0;
+    while (offset < part->size) {
+        size_t chunk = part->size - offset;
+        if (chunk > sizeof(buf)) chunk = sizeof(buf);
+        if (esp_partition_read(part, offset, buf, chunk) != ESP_OK) {
+            mbedtls_sha256_free(&ctx);
+            return false;
+        }
+        mbedtls_sha256_update(&ctx, buf, chunk);
+        offset += chunk;
+    }
+
+    uint8_t digest[32];
+    mbedtls_sha256_finish(&ctx, digest);
+    mbedtls_sha256_free(&ctx);
+    sha256ToHex(digest, outHex);
+    return true;
+}
+#endif
 
 static uint32_t telemetryTimerRemainingSeconds(const ChannelState& ch) {
     if (ch.timerFrozen) return ch.timerFrozenRemaining_s;
@@ -388,6 +427,10 @@ void TelemetryPublisher::publishPartitionDiagnostics(const char* reason) {
         esp_ota_img_states_t state;
         if (esp_ota_get_state_partition(part, &state) == ESP_OK) {
             app["ota_state"] = (int)state;
+        }
+        char shaHex[65] = {};
+        if (hashPartitionPrefix(part, shaHex)) {
+            app["sha256"] = shaHex;
         }
         it = esp_partition_next(it);
     }

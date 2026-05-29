@@ -517,12 +517,32 @@ Phase 6: decide final architecture
 - If users need a friendly chooser or guaranteed return path from OEM, design a
   SafeBoot/launcher partition before public release.
 
+## Bench results, 2026-05-28
+
+The OEM-compatible bootloader/partition baseline can boot both app payloads:
+
+- ProofPro runs from OEM `app0`.
+- ProofPro can restore the OEM SmartPID payload into OEM `app1`.
+- Partition diagnostics confirmed SmartPID `app1` readback SHA-256:
+  `08cd03b15ca0d71bb47767b3c953ff8e83e89bf15c733a8d5fa3a8113f8634c1`.
+- `firmware_switch:"smartpid"` selected OEM `app1` and rebooted into SmartPID.
+- SmartPID published retained status on `smartpidM5/pro/{topic_id}/status`.
+- The SmartPID display showed `Not Authorized`; this appears to be an OEM
+  application authorization state.
+
+The reverse update path is not proven:
+
+- PlatformIO/ArduinoOTA from SmartPID back to ProofPro did not connect to
+  `10.0.1.60:3232`.
+- MQTT status remained available on the OEM topic, so the failure is not simply
+  loss of WiFi.
+- Do not claim Proof-over-OEM OTA support until the OEM update mechanism is
+  understood or a resident launcher/recovery path exists.
+
 ## Open questions
 
-- Does the current ProofPro bootloader reject the older OEM ESP-IDF 3.3.5 app?
-- Does the OEM bootloader boot current ProofPro ESP-IDF 5.5.4 app reliably?
-- Does the OEM app boot correctly from `ota_1`, or does it assume the original
-  `0x10000` placement?
+- Can the OEM update path install ProofPro without USB, or is a resident
+  launcher/recovery app required?
 - Does the OEM firmware touch `otadata` or OTA APIs?
 - Does OEM firmware behave safely with the current ProofPro partition table?
 - Does shared NVS cause OEM or ProofPro config confusion?

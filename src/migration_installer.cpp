@@ -76,6 +76,19 @@ static bool runningFromOemLayoutApp0() {
 }
 
 #ifndef DESKTOP_BUILD
+static const esp_partition_t* oemLayoutApp1Partition() {
+    const esp_partition_t* app1 =
+        esp_partition_find_first(ESP_PARTITION_TYPE_APP,
+                                 ESP_PARTITION_SUBTYPE_APP_OTA_1,
+                                 nullptr);
+    if (!app1 || app1->address != 0x200000 || app1->size != 0x1f0000) {
+        return nullptr;
+    }
+    return app1;
+}
+#endif
+
+#ifndef DESKTOP_BUILD
 static void sha256ToHex(const uint8_t digest[32], char out[65]) {
     static const char* hex = "0123456789abcdef";
     for (size_t i = 0; i < 32; ++i) {
@@ -112,6 +125,13 @@ struct ExpectedArtifact {
     uint32_t offset;
     uint32_t maxSize;
 };
+
+static bool erasePartitionRegion(const esp_partition_t* part, uint32_t size);
+static bool writePartitionBuffer(const esp_partition_t* part,
+                                 uint32_t offset,
+                                 const uint8_t* data,
+                                 uint32_t size);
+static bool hashPartitionRegion(const esp_partition_t* part, uint32_t size, char outHex[65]);
 
 #if defined(PROOFPRO_ENABLE_OEM_LAYOUT_METADATA_INSTALL)
 struct BufferedMetadataArtifact {
@@ -160,6 +180,7 @@ static MigrationInstallResult readHashAndMaybeWrite(Stream& stream,
                                                     const ExpectedArtifact& artifact,
                                                     size_t len,
                                                     bool writeArtifact,
+                                                    const esp_partition_t* writePartition,
 #if defined(PROOFPRO_ENABLE_OEM_LAYOUT_METADATA_INSTALL)
                                                     BufferedMetadataArtifact* bufferedMetadata,
 #endif
@@ -181,13 +202,18 @@ static MigrationInstallResult readHashAndMaybeWrite(Stream& stream,
         mbedtls_sha256_update(&packageCtx, buf, chunk);
         mbedtls_sha256_update(&artifactCtx, buf, chunk);
 
-#if defined(PROOFPRO_ENABLE_OEM_LAYOUT_INSTALL) || defined(PROOFPRO_ENABLE_OEM_LAYOUT_METADATA_INSTALL)
+#if defined(PROOFPRO_ENABLE_OEM_LAYOUT_INSTALL) || defined(PROOFPRO_ENABLE_OEM_LAYOUT_METADATA_INSTALL) || defined(PROOFPRO_ENABLE_OEM_APP_RESTORE)
         if (writeArtifact) {
 #if defined(PROOFPRO_ENABLE_OEM_LAYOUT_METADATA_INSTALL)
             if (bufferedMetadata) {
                 memcpy(bufferedMetadata->data + artifactOffset, buf, chunk);
             } else
 #endif
+            if (writePartition) {
+                if (!writePartitionBuffer(writePartition, artifactOffset, buf, chunk)) {
+                    return MigrationInstallResult::FLASH_WRITE_FAILED;
+                }
+            } else
             {
                 if (esp_flash_write(nullptr, buf, artifact.offset + artifactOffset, chunk) != ESP_OK) {
                     return MigrationInstallResult::FLASH_WRITE_FAILED;
@@ -267,7 +293,7 @@ static BufferedMetadataArtifact* findBufferedMetadata(BufferedMetadataArtifact* 
 }
 #endif
 
-#if defined(PROOFPRO_ENABLE_OEM_LAYOUT_INSTALL) || defined(PROOFPRO_ENABLE_OEM_LAYOUT_METADATA_INSTALL)
+#if defined(PROOFPRO_ENABLE_OEM_LAYOUT_INSTALL) || defined(PROOFPRO_ENABLE_OEM_LAYOUT_METADATA_INSTALL) || defined(PROOFPRO_ENABLE_OEM_APP_RESTORE)
 static bool eraseFlashRegion(uint32_t offset, uint32_t size) {
     constexpr uint32_t sectorSize = 0x1000;
     const uint32_t eraseSize = (size + sectorSize - 1) & ~(sectorSize - 1);
@@ -278,6 +304,22 @@ static bool eraseFlashRegion(uint32_t offset, uint32_t size) {
         delay(1);
     }
     return true;
+}
+
+static bool erasePartitionRegion(const esp_partition_t* part, uint32_t size) {
+    if (!part || size > part->size) return false;
+    constexpr uint32_t sectorSize = 0x1000;
+    uint32_t eraseSize = (size + sectorSize - 1) & ~(sectorSize - 1);
+    if (eraseSize > part->size) eraseSize = part->size;
+    return esp_partition_erase_range(part, 0, eraseSize) == ESP_OK;
+}
+
+static bool writePartitionBuffer(const esp_partition_t* part,
+                                 uint32_t offset,
+                                 const uint8_t* data,
+                                 uint32_t size) {
+    if (!part || offset + size > part->size) return false;
+    return esp_partition_write(part, offset, data, size) == ESP_OK;
 }
 
 static bool hashFlashRegion(uint32_t offset, uint32_t size, char outHex[65]) {
@@ -300,6 +342,34 @@ static bool hashFlashRegion(uint32_t offset, uint32_t size, char outHex[65]) {
     }
 
     uint8_t digest[32] = {};
+    mbedtls_sha256_finish(&ctx, digest);
+    mbedtls_sha256_free(&ctx);
+    sha256ToHex(digest, outHex);
+    return true;
+}
+
+static bool hashPartitionRegion(const esp_partition_t* part, uint32_t size, char outHex[65]) {
+    if (!part || size > part->size) return false;
+
+    uint8_t buf[1024];
+    mbedtls_sha256_context ctx;
+    mbedtls_sha256_init(&ctx);
+    mbedtls_sha256_starts(&ctx, 0);
+
+    uint32_t done = 0;
+    while (done < size) {
+        uint32_t chunk = size - done;
+        if (chunk > sizeof(buf)) chunk = sizeof(buf);
+        if (esp_partition_read(part, done, buf, chunk) != ESP_OK) {
+            mbedtls_sha256_free(&ctx);
+            return false;
+        }
+        mbedtls_sha256_update(&ctx, buf, chunk);
+        done += chunk;
+        delay(1);
+    }
+
+    uint8_t digest[32];
     mbedtls_sha256_finish(&ctx, digest);
     mbedtls_sha256_free(&ctx);
     sha256ToHex(digest, outHex);
@@ -638,7 +708,30 @@ static MigrationInstallResult validatePackageStream(const MigrationInstallReques
             }
         }
 #endif
-#if defined(PROOFPRO_ENABLE_OEM_LAYOUT_INSTALL) || defined(PROOFPRO_ENABLE_OEM_LAYOUT_METADATA_INSTALL)
+#if defined(PROOFPRO_ENABLE_OEM_LAYOUT_INSTALL) || defined(PROOFPRO_ENABLE_OEM_LAYOUT_METADATA_INSTALL) || defined(PROOFPRO_ENABLE_OEM_APP_RESTORE)
+        const esp_partition_t* writePartition = nullptr;
+        if (writeSmartPidApp1 && strcmp(role, "smartpid_oem_app1") == 0) {
+            writePartition = oemLayoutApp1Partition();
+            if (!writePartition) {
+                mbedtls_sha256_free(&packageCtx);
+                http.end();
+#if defined(PROOFPRO_ENABLE_OEM_LAYOUT_METADATA_INSTALL)
+                freeMetadataBuffers(metadataBuffers, 3);
+#endif
+                if (telemetry) {
+                    telemetry->publishMigrationInstallStatus(role,
+                                                             "rejected",
+                                                             "oem_app1_partition_missing",
+                                                             request.packageUrl,
+                                                             request.packageSha256,
+                                                             bytesDone,
+                                                             bytesTotal,
+                                                             writeStage);
+                }
+                return MigrationInstallResult::UNSAFE_STATE;
+            }
+        }
+
         if (writeArtifact && !writeMetadata) {
             if (telemetry) {
                 telemetry->publishMigrationInstallStatus(role,
@@ -650,9 +743,15 @@ static MigrationInstallResult validatePackageStream(const MigrationInstallReques
                                                          bytesTotal,
                                                          writeStage);
             }
-            if (!eraseFlashRegion(expected.offset, expected.maxSize)) {
+            const bool erased = writePartition
+                ? erasePartitionRegion(writePartition, expected.maxSize)
+                : eraseFlashRegion(expected.offset, expected.maxSize);
+            if (!erased) {
                 mbedtls_sha256_free(&packageCtx);
                 http.end();
+#if defined(PROOFPRO_ENABLE_OEM_LAYOUT_METADATA_INSTALL)
+                freeMetadataBuffers(metadataBuffers, 3);
+#endif
                 if (telemetry) {
                     telemetry->publishMigrationInstallStatus(role,
                                                              "rejected",
@@ -675,6 +774,7 @@ static MigrationInstallResult validatePackageStream(const MigrationInstallReques
                                                                   expected,
                                                                   size,
                                                                   writeArtifact,
+                                                                  writePartition,
 #if defined(PROOFPRO_ENABLE_OEM_LAYOUT_METADATA_INSTALL)
                                                                   bufferedMetadata,
 #endif
@@ -715,10 +815,13 @@ static MigrationInstallResult validatePackageStream(const MigrationInstallReques
             return MigrationInstallResult::PACKAGE_INVALID;
         }
 
-#if defined(PROOFPRO_ENABLE_OEM_LAYOUT_INSTALL) || defined(PROOFPRO_ENABLE_OEM_LAYOUT_METADATA_INSTALL)
+#if defined(PROOFPRO_ENABLE_OEM_LAYOUT_INSTALL) || defined(PROOFPRO_ENABLE_OEM_LAYOUT_METADATA_INSTALL) || defined(PROOFPRO_ENABLE_OEM_APP_RESTORE)
         if (writeArtifact && !writeMetadata) {
             char flashHex[65] = {};
-            if (!hashFlashRegion(expected.offset, size, flashHex)) {
+            const bool hashed = writePartition
+                ? hashPartitionRegion(writePartition, size, flashHex)
+                : hashFlashRegion(expected.offset, size, flashHex);
+            if (!hashed) {
                 mbedtls_sha256_free(&packageCtx);
                 http.end();
 #if defined(PROOFPRO_ENABLE_OEM_LAYOUT_METADATA_INSTALL)
