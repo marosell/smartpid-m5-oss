@@ -7,6 +7,7 @@
 #include <esp_ota_ops.h>
 #include <esp_partition.h>
 #include <esp_flash.h>
+#include <esp_flash_internal.h>
 #include <mbedtls/sha256.h>
 #include <new>
 #endif
@@ -92,6 +93,15 @@ struct ExpectedArtifact {
     uint32_t maxSize;
 };
 
+#if defined(PROOFPRO_ENABLE_OEM_LAYOUT_METADATA_INSTALL)
+struct BufferedMetadataArtifact {
+    const ExpectedArtifact* expected = nullptr;
+    uint8_t* data = nullptr;
+    uint32_t size = 0;
+    char sha256[65] = {};
+};
+#endif
+
 static bool readAndHash(Stream& stream,
                         size_t len,
                         mbedtls_sha256_context& packageCtx,
@@ -130,6 +140,9 @@ static MigrationInstallResult readHashAndMaybeWrite(Stream& stream,
                                                     const ExpectedArtifact& artifact,
                                                     size_t len,
                                                     bool writeArtifact,
+#if defined(PROOFPRO_ENABLE_OEM_LAYOUT_METADATA_INSTALL)
+                                                    BufferedMetadataArtifact* bufferedMetadata,
+#endif
                                                     mbedtls_sha256_context& packageCtx,
                                                     mbedtls_sha256_context& artifactCtx,
                                                     uint32_t& bytesDone,
@@ -150,8 +163,15 @@ static MigrationInstallResult readHashAndMaybeWrite(Stream& stream,
 
 #if defined(PROOFPRO_ENABLE_OEM_LAYOUT_INSTALL) || defined(PROOFPRO_ENABLE_OEM_LAYOUT_METADATA_INSTALL)
         if (writeArtifact) {
-            if (esp_flash_write(nullptr, buf, artifact.offset + artifactOffset, chunk) != ESP_OK) {
-                return MigrationInstallResult::FLASH_WRITE_FAILED;
+#if defined(PROOFPRO_ENABLE_OEM_LAYOUT_METADATA_INSTALL)
+            if (bufferedMetadata) {
+                memcpy(bufferedMetadata->data + artifactOffset, buf, chunk);
+            } else
+#endif
+            {
+                if (esp_flash_write(nullptr, buf, artifact.offset + artifactOffset, chunk) != ESP_OK) {
+                    return MigrationInstallResult::FLASH_WRITE_FAILED;
+                }
             }
         }
 #else
@@ -204,6 +224,29 @@ static bool isMetadataArtifact(const char* role) {
            strcmp(role, "otadata_boot_app0") == 0;
 }
 
+#if defined(PROOFPRO_ENABLE_OEM_LAYOUT_METADATA_INSTALL)
+static void freeMetadataBuffers(BufferedMetadataArtifact* buffers, size_t count) {
+    for (size_t i = 0; i < count; ++i) {
+        delete[] buffers[i].data;
+        buffers[i].data = nullptr;
+        buffers[i].size = 0;
+        buffers[i].expected = nullptr;
+        buffers[i].sha256[0] = '\0';
+    }
+}
+
+static BufferedMetadataArtifact* findBufferedMetadata(BufferedMetadataArtifact* buffers,
+                                                      size_t count,
+                                                      const char* role) {
+    for (size_t i = 0; i < count; ++i) {
+        if (buffers[i].expected && strcmp(buffers[i].expected->role, role) == 0) {
+            return &buffers[i];
+        }
+    }
+    return nullptr;
+}
+#endif
+
 #if defined(PROOFPRO_ENABLE_OEM_LAYOUT_INSTALL) || defined(PROOFPRO_ENABLE_OEM_LAYOUT_METADATA_INSTALL)
 static bool eraseFlashRegion(uint32_t offset, uint32_t size) {
     constexpr uint32_t sectorSize = 0x1000;
@@ -242,6 +285,90 @@ static bool hashFlashRegion(uint32_t offset, uint32_t size, char outHex[65]) {
     sha256ToHex(digest, outHex);
     return true;
 }
+
+#if defined(PROOFPRO_ENABLE_OEM_LAYOUT_METADATA_INSTALL)
+static bool writeFlashBuffer(uint32_t offset, const uint8_t* data, uint32_t size) {
+    uint32_t done = 0;
+    while (done < size) {
+        uint32_t chunk = size - done;
+        if (chunk > 1024) chunk = 1024;
+        if (esp_flash_write(nullptr, data + done, offset + done, chunk) != ESP_OK) {
+            return false;
+        }
+        done += chunk;
+        delay(1);
+    }
+    return true;
+}
+
+static MigrationInstallResult writeBufferedMetadata(BufferedMetadataArtifact* buffers,
+                                                    size_t count,
+                                                    TelemetryPublisher* telemetry,
+                                                    const MigrationInstallRequest& request) {
+    static constexpr const char* WRITE_ORDER[] = {
+        "bootloader",
+        "partition_table",
+        "otadata_boot_app0",
+    };
+
+    for (const char* role : WRITE_ORDER) {
+        if (!findBufferedMetadata(buffers, count, role)) {
+            return MigrationInstallResult::PACKAGE_INVALID;
+        }
+    }
+
+    if (esp_flash_set_dangerous_write_protection(esp_flash_default_chip, false) != ESP_OK) {
+        Serial.println("[MIGRATION] failed to disable dangerous-write protection");
+        return MigrationInstallResult::FLASH_WRITE_FAILED;
+    }
+
+    if (telemetry) {
+        telemetry->publishMigrationInstallStatus("metadata_critical",
+                                                 "writing",
+                                                 "critical_flash_write",
+                                                 request.packageUrl,
+                                                 request.packageSha256,
+                                                 0,
+                                                 0,
+                                                 requestedWriteStage(request));
+    }
+    delay(500);
+
+    for (const char* role : WRITE_ORDER) {
+        BufferedMetadataArtifact* item = findBufferedMetadata(buffers, count, role);
+        if (!item || !item->expected || !item->data) {
+            return MigrationInstallResult::PACKAGE_INVALID;
+        }
+        Serial.printf("[MIGRATION] metadata write begin: %s offset=0x%lx size=%lu\n",
+                      role,
+                      static_cast<unsigned long>(item->expected->offset),
+                      static_cast<unsigned long>(item->size));
+        if (!eraseFlashRegion(item->expected->offset, item->expected->maxSize)) {
+            Serial.printf("[MIGRATION] metadata erase failed: %s\n", role);
+            esp_flash_set_dangerous_write_protection(esp_flash_default_chip, true);
+            return MigrationInstallResult::FLASH_WRITE_FAILED;
+        }
+        if (!writeFlashBuffer(item->expected->offset, item->data, item->size)) {
+            Serial.printf("[MIGRATION] metadata write failed: %s\n", role);
+            esp_flash_set_dangerous_write_protection(esp_flash_default_chip, true);
+            return MigrationInstallResult::FLASH_WRITE_FAILED;
+        }
+        char flashHex[65] = {};
+        if (!hashFlashRegion(item->expected->offset, item->size, flashHex) ||
+            strcmp(flashHex, item->sha256) != 0) {
+            Serial.printf("[MIGRATION] metadata verify failed: %s\n", role);
+            esp_flash_set_dangerous_write_protection(esp_flash_default_chip, true);
+            return MigrationInstallResult::FLASH_VERIFY_FAILED;
+        }
+        Serial.printf("[MIGRATION] metadata write verified: %s\n", role);
+    }
+
+    Serial.println("[MIGRATION] metadata complete; restarting into OEM layout");
+    delay(250);
+    ESP.restart();
+    return MigrationInstallResult::ACCEPTED;
+}
+#endif
 #endif
 
 static MigrationInstallResult validatePackageStream(const MigrationInstallRequest& request,
@@ -300,6 +427,10 @@ static MigrationInstallResult validatePackageStream(const MigrationInstallReques
     mbedtls_sha256_init(&packageCtx);
     mbedtls_sha256_starts(&packageCtx, 0);
     uint32_t bytesDone = 0;
+#if defined(PROOFPRO_ENABLE_OEM_LAYOUT_METADATA_INSTALL)
+    BufferedMetadataArtifact metadataBuffers[3];
+    size_t metadataBufferCount = 0;
+#endif
 
     uint8_t header[PACKAGE_HEADER_SIZE] = {};
     if (!readExact(*stream, header, sizeof(header))) {
@@ -457,8 +588,30 @@ static MigrationInstallResult validatePackageStream(const MigrationInstallReques
 
         const bool writeArtifact = (writeApps && isAppArtifact(role)) ||
                                    (writeMetadata && isMetadataArtifact(role));
+#if defined(PROOFPRO_ENABLE_OEM_LAYOUT_METADATA_INSTALL)
+        BufferedMetadataArtifact* bufferedMetadata = nullptr;
+        if (writeMetadata && isMetadataArtifact(role)) {
+            if (metadataBufferCount >= 3) {
+                mbedtls_sha256_free(&packageCtx);
+                http.end();
+                freeMetadataBuffers(metadataBuffers, 3);
+                return MigrationInstallResult::PACKAGE_INVALID;
+            }
+            bufferedMetadata = &metadataBuffers[metadataBufferCount++];
+            bufferedMetadata->expected = &expected;
+            bufferedMetadata->size = size;
+            strncpy(bufferedMetadata->sha256, expectedSha, sizeof(bufferedMetadata->sha256) - 1);
+            bufferedMetadata->data = new (std::nothrow) uint8_t[size];
+            if (!bufferedMetadata->data) {
+                mbedtls_sha256_free(&packageCtx);
+                http.end();
+                freeMetadataBuffers(metadataBuffers, 3);
+                return MigrationInstallResult::DOWNLOAD_FAILED;
+            }
+        }
+#endif
 #if defined(PROOFPRO_ENABLE_OEM_LAYOUT_INSTALL) || defined(PROOFPRO_ENABLE_OEM_LAYOUT_METADATA_INSTALL)
-        if (writeArtifact) {
+        if (writeArtifact && !writeMetadata) {
             if (telemetry) {
                 telemetry->publishMigrationInstallStatus(role,
                                                          "erasing",
@@ -494,6 +647,9 @@ static MigrationInstallResult validatePackageStream(const MigrationInstallReques
                                                                   expected,
                                                                   size,
                                                                   writeArtifact,
+#if defined(PROOFPRO_ENABLE_OEM_LAYOUT_METADATA_INSTALL)
+                                                                  bufferedMetadata,
+#endif
                                                                   packageCtx,
                                                                   artifactCtx,
                                                                   bytesDone,
@@ -507,12 +663,18 @@ static MigrationInstallResult validatePackageStream(const MigrationInstallReques
         if (readResult != MigrationInstallResult::ACCEPTED) {
             mbedtls_sha256_free(&packageCtx);
             http.end();
+#if defined(PROOFPRO_ENABLE_OEM_LAYOUT_METADATA_INSTALL)
+            freeMetadataBuffers(metadataBuffers, 3);
+#endif
             return readResult;
         }
         sha256ToHex(artifactDigest, artifactHex);
         if (strcmp(artifactHex, expectedSha) != 0) {
             mbedtls_sha256_free(&packageCtx);
             http.end();
+#if defined(PROOFPRO_ENABLE_OEM_LAYOUT_METADATA_INSTALL)
+            freeMetadataBuffers(metadataBuffers, 3);
+#endif
             if (telemetry) {
                 telemetry->publishMigrationInstallStatus(role,
                                                          "rejected",
@@ -526,11 +688,14 @@ static MigrationInstallResult validatePackageStream(const MigrationInstallReques
         }
 
 #if defined(PROOFPRO_ENABLE_OEM_LAYOUT_INSTALL) || defined(PROOFPRO_ENABLE_OEM_LAYOUT_METADATA_INSTALL)
-        if (writeArtifact) {
+        if (writeArtifact && !writeMetadata) {
             char flashHex[65] = {};
             if (!hashFlashRegion(expected.offset, size, flashHex)) {
                 mbedtls_sha256_free(&packageCtx);
                 http.end();
+#if defined(PROOFPRO_ENABLE_OEM_LAYOUT_METADATA_INSTALL)
+                freeMetadataBuffers(metadataBuffers, 3);
+#endif
                 if (telemetry) {
                     telemetry->publishMigrationInstallStatus(role,
                                                              "rejected",
@@ -546,6 +711,9 @@ static MigrationInstallResult validatePackageStream(const MigrationInstallReques
             if (strcmp(flashHex, expectedSha) != 0) {
                 mbedtls_sha256_free(&packageCtx);
                 http.end();
+#if defined(PROOFPRO_ENABLE_OEM_LAYOUT_METADATA_INSTALL)
+                freeMetadataBuffers(metadataBuffers, 3);
+#endif
                 if (telemetry) {
                     telemetry->publishMigrationInstallStatus(role,
                                                              "rejected",
@@ -575,6 +743,9 @@ static MigrationInstallResult validatePackageStream(const MigrationInstallReques
     if (contentLength > 0 && bytesDone != (uint32_t)contentLength) {
         mbedtls_sha256_free(&packageCtx);
         http.end();
+#if defined(PROOFPRO_ENABLE_OEM_LAYOUT_METADATA_INSTALL)
+        freeMetadataBuffers(metadataBuffers, 3);
+#endif
         if (telemetry) {
             telemetry->publishMigrationInstallStatus("package",
                                                      "rejected",
@@ -594,6 +765,9 @@ static MigrationInstallResult validatePackageStream(const MigrationInstallReques
     http.end();
     sha256ToHex(packageDigest, packageHex);
     if (strcmp(packageHex, request.packageSha256) != 0) {
+#if defined(PROOFPRO_ENABLE_OEM_LAYOUT_METADATA_INSTALL)
+        freeMetadataBuffers(metadataBuffers, 3);
+#endif
         if (telemetry) {
             telemetry->publishMigrationInstallStatus("package",
                                                      "rejected",
@@ -605,6 +779,16 @@ static MigrationInstallResult validatePackageStream(const MigrationInstallReques
         }
         return MigrationInstallResult::PACKAGE_INVALID;
     }
+
+#if defined(PROOFPRO_ENABLE_OEM_LAYOUT_METADATA_INSTALL)
+    if (writeMetadata) {
+        MigrationInstallResult metadataResult =
+            writeBufferedMetadata(metadataBuffers, metadataBufferCount, telemetry, request);
+        freeMetadataBuffers(metadataBuffers, 3);
+        return metadataResult;
+    }
+    freeMetadataBuffers(metadataBuffers, 3);
+#endif
 
     if (telemetry) {
         telemetry->publishMigrationInstallStatus("package",

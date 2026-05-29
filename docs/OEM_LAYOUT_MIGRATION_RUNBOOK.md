@@ -127,12 +127,18 @@ Only continue after Stage 2 succeeds.
 
 Required confirmation string: `YES_INSTALL_OEM_LAYOUT_METADATA`
 
-OTA the metadata-stage installer build:
+Because ArduinoOTA writes the inactive OTA slot, do not OTA the metadata-only
+installer from high `app1` after Stage 2; that would overwrite the staged
+ProofPro `app0` image. Use the staged installer build instead, loading it into
+both current-layout slots, then rerun the app stage before metadata:
 
 ```text
-.pio/build/m5stack-core-esp32-16M-installer-metadata/firmware.bin
+.pio/build/m5stack-core-esp32-16M-installer-staged/firmware.bin
 ```
 
+After the staged installer is running from high `app1`, rerun Stage 2 with
+`write_stage: "apps"` and confirm both app regions verify again. Each staged
+installer OTA overwrites the inactive app slot, so this rerun is mandatory.
 Then write and readback-verify boot metadata:
 
 ```bash
@@ -144,14 +150,35 @@ mosquitto_pub -h 10.0.1.203 -u proof -P proof \
 Expected result:
 
 ```text
-partition_table status=verified reason=flash_readback_verified
-bootloader status=verified reason=flash_readback_verified
-otadata_boot_app0 status=verified reason=flash_readback_verified
-phase=writer status=verified reason=metadata_written
+metadata_critical status=writing reason=critical_flash_write
+[serial] metadata write verified: bootloader
+[serial] metadata write verified: partition_table
+[serial] metadata write verified: otadata_boot_app0
+[serial] metadata complete; restarting into OEM layout
 ```
 
-After metadata succeeds, reboot the device. It should boot ProofPro from the
-OEM-layout `app0` slot.
+The metadata writer disables ESP-IDF dangerous-write protection only inside the
+critical metadata write section, writes bootloader -> partition table -> otadata,
+verifies each artifact by readback SHA-256, and immediately reboots. Do not
+expect a final MQTT `metadata_written` event after the critical marker; the
+successful completion is confirmed by the serial breadcrumbs and the reboot.
+
+After reboot, request partition diagnostics:
+
+```bash
+mosquitto_pub -h 10.0.1.203 -u proof -P proof \
+  -t 'smartpidM5/proofpro/{topic_id}/commands' \
+  -m '{"diagnostics":"partitions"}'
+```
+
+Expected live layout:
+
+```text
+running app0 address=0x10000 size=0x1f0000
+next_update app1 address=0x200000 size=0x1f0000
+```
+
+It should boot ProofPro from the OEM-layout `app0` slot.
 
 ## Hard Stop Conditions
 

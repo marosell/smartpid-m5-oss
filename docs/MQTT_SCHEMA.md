@@ -540,6 +540,15 @@ writes and readback-verifies only `partition_table`, `bootloader`, and
 `otadata_boot_app0` after a full package validation pass. Use it only after the
 app-stage write/readback has succeeded.
 
+For the final conversion sequence, use the staged installer build that enables
+both separately-confirmed `apps` and `metadata` stages. Load it into both
+current-layout OTA slots, rerun `write_stage: "apps"`, then run
+`write_stage: "metadata"` from current-layout high `app1`. Metadata publishes a
+`metadata_critical` event before the protected boot metadata writes, verifies the
+bootloader, partition table, and otadata over serial/readback, then reboots into
+OEM-layout `app0`. A final MQTT `metadata_written` event is not expected after
+the critical marker.
+
 `write_stage: "all"` remains disabled. Production firmware rejects all real
 write stages.
 

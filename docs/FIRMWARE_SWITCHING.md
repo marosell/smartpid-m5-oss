@@ -385,8 +385,7 @@ future OEM-layout app regions, streams `proofpro_app0` to `0x10000`, streams
 `smartpid_oem_app1` to `0x200000`, and verifies both regions by readback
 SHA-256. The installer validates the full package first, then opens it again for
 the app write/readback pass. It still does not write the bootloader, partition
-table, or otadata. `metadata` and `all` remain reserved until those stages are
-explicitly reviewed.
+table, or otadata.
 
 Build that special app-stage installer with:
 
@@ -409,6 +408,23 @@ Build the metadata-stage installer with:
 ```bash
 pio run -e m5stack-core-esp32-16M-installer-metadata
 ```
+
+The proven migration sequence uses the staged installer environment after the
+app-stage write has succeeded. Because ArduinoOTA always writes the inactive
+slot, load the staged installer into both current-layout slots, rerun
+`write_stage: "apps"` to restore the OEM-layout app images, then run
+`write_stage: "metadata"` from current-layout high `app1`.
+
+```bash
+pio run -e m5stack-core-esp32-16M-installer-staged
+```
+
+The staged installer enables the separately-confirmed `apps` and `metadata`
+stages but still rejects `write_stage: "all"`. Metadata writes temporarily
+disable ESP-IDF dangerous-write protection inside the critical section, use the
+normal flash driver for cache/interrupt safety, verify bootloader,
+partition-table, and otadata by readback SHA-256, then reboot immediately into
+the OEM-layout `app0`.
 
 Current firmware validates the confirmation string and package fields, requires
 the device to be running from current-layout high `app1`, downloads the package,
