@@ -178,6 +178,12 @@ trigger for every command it sends. Proof also records a
 `proofpro_program_end_decision` event after firmware `program_ended`, preserving
 an optional future firmware `source` field as `firmware_source` when present.
 
+Normal ProofPro firmware no longer compiles the recovery package downloader,
+OEM app restore writer, or MQTT firmware-switch command. That code is retained
+under `src/recovery/` for special installer/recovery builds. The normal runtime
+build has only a hidden serial two-step `restore-smartpid` command to select
+the existing OEM SmartPID app slot after printing warnings.
+
 ### Local HTTP status page
 
 Planned small addition: a read-only HTTP status server during normal WiFi client
@@ -266,6 +272,7 @@ Implementation notes:
 | Relay config/live mismatch | Cleared. Runtime relay mode syncs from retained config on boot and before relay commands; relay mode updates are no longer blocked by prior `off` mode. |
 | Proof outbound command audit | Cleared in Proof. Outbound MQTT commands persist timestamp, run_id, device_id, topic, payload, origin, and trigger; run-associated commands also create `mqtt_command_sent` events. |
 | Proof END decision logging | Cleared in Proof. Firmware `program_ended` now creates a `proofpro_program_end_decision` event and preserves optional firmware `source` as `firmware_source`. |
+| Normal firmware recovery slimming | Cleared. Package restore/migration code moved to recovery-only builds; normal build uses serial-only guarded SmartPID boot selection. |
 
 ---
 

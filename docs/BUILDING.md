@@ -37,6 +37,11 @@ pio run -t upload --upload-port 10.0.1.60
 
 This builds and uploads `.pio/build/m5stack-core-esp32-16M-oem-layout/firmware.bin`.
 
+Normal ProofPro firmware intentionally excludes the recovery package downloader,
+OEM app restore writer, and migration installer source. That code is retained
+under `src/recovery/` and compiled only by the special installer/recovery
+environments below.
+
 ## Desktop Emulator
 
 ```bash
@@ -55,6 +60,31 @@ pio run -e m5stack-core-esp32-16M-installer-metadata
 ```
 
 Use them only with `docs/OEM_LAYOUT_MIGRATION_RUNBOOK.md`.
+
+These builds are the place to compile recovery package validation/write support.
+Do not use them as normal distilling firmware.
+
+## Serial-Only SmartPID Boot Selection
+
+Normal ProofPro firmware keeps a hidden serial-only path to boot the existing
+OEM SmartPID app slot. It is not exposed over MQTT or the device UI.
+
+From the serial monitor:
+
+```text
+restore-smartpid
+```
+
+Read the printed warnings. To confirm within 120 seconds:
+
+```text
+yes restore-smartpid
+```
+
+This command forces outputs safe/off, selects OEM `app1`, and restarts. It does
+not download, restore, erase, migrate, or write firmware. Once OEM SmartPID is
+running, ProofPro cannot switch itself back; use the ROM/otadata recovery path
+below to return to ProofPro.
 
 ## USB Recovery
 

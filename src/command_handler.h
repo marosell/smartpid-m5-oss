@@ -28,15 +28,8 @@
 //   {"CHx cycle_ms": N}                     Relay total cycle time (ms)
 //   {"timezone_label": "...", "timezone_posix": "..."}  Safe clock config
 //   {"clock_24h": bool}                     Device display clock format
-//   {"migration": "preflight"}              Report bootloader-layout migration readiness
-//   {"migration": "boot_high_app1", "confirm": "YES_BOOT_HIGH_APP1"}
-//                                           Reboot into current-layout high app1 slot
-//   {"migration": "install_oem_bootloader_layout", ...}
-//                                           Reserved package install command; writes disabled
-//   {"firmware_restore": "smartpid_app1", ...}
-//                                           Restore SmartPID image to OEM app1
-//   {"firmware_switch": "smartpid"/"proofpro", "confirm": "..."}
-//                                           Boot the selected OEM-layout app slot
+// Recovery/migration MQTT commands are compiled only into special installer
+// builds. Normal ProofPro firmware does not expose firmware switching over MQTT.
 
 #include <Arduino.h>
 #include "config.h"
@@ -110,6 +103,9 @@ private:
     void _cmdSetRelayCycleMs(int chIdx, int ms);   // {"CHx cycle_ms": N}
     void _cmdSetClockTimezone(const char* label, const char* posix);
     void _cmdSetClockFormat(bool clock24h);
+#if defined(PROOFPRO_ENABLE_OEM_LAYOUT_INSTALL) || \
+    defined(PROOFPRO_ENABLE_OEM_LAYOUT_METADATA_INSTALL) || \
+    defined(PROOFPRO_ENABLE_OEM_APP_RESTORE)
     void _cmdMigrationPreflight(uint32_t proofproAppSize, uint32_t oemAppSize);
     void _cmdMigrationInstallOemLayout(const char* confirm,
                                        const char* packageUrl,
@@ -119,7 +115,7 @@ private:
     void _cmdRestoreSmartPidApp1(const char* confirm,
                                  const char* packageUrl,
                                  const char* packageSha256);
-    void _cmdFirmwareSwitch(const char* target, const char* confirm);
+#endif
 };
 
 extern CommandHandler cmdHandler;

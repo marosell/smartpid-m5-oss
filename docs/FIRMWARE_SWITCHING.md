@@ -294,43 +294,31 @@ Recommended policy:
 
 Normal users should not be asked to choose offsets or run esptool commands.
 
-## OEM-Layout Runtime Commands
+## OEM-Layout Runtime Switch
 
-After conversion, the normal ProofPro OEM-layout build can restore the SmartPID
-app payload to OEM `app1` without touching boot metadata:
+Normal ProofPro OEM-layout firmware does not include package restore/migration
+writers and does not expose firmware switching over MQTT or the UI. The old
+restore/migration implementation is retained under `src/recovery/` for special
+installer/recovery builds only.
 
-```json
-{
-  "firmware_restore": "smartpid_app1",
-  "confirm": "YES_RESTORE_SMARTPID_APP1",
-  "package_url": "http://10.0.1.203:8080/proofpro_oem_layout_migration.ppmig",
-  "package_sha256": "..."
-}
+Once the desired app images are present, normal ProofPro can select OEM
+SmartPID only through a hidden serial command. From the serial monitor:
+
+```text
+restore-smartpid
 ```
 
-This command is compiled only for the OEM-layout ProofPro environment with
-`PROOFPRO_ENABLE_OEM_APP_RESTORE`. It requires ProofPro to be running from OEM
-`app0`, validates the package, writes `smartpid_oem_app1` to `0x200000` and
-`smartpid_oem_eeprom` to `0x3ff000`, readback-verifies both regions, and leaves
-the device booted in ProofPro.
+ProofPro prints the applicable warnings. To confirm within 120 seconds, type:
 
-Once the desired app images are present, ProofPro can select the next boot slot:
-
-```json
-{"firmware_switch":"smartpid","confirm":"YES_BOOT_SMARTPID"}
-{"firmware_switch":"proofpro","confirm":"YES_BOOT_PROOFPRO"}
+```text
+yes restore-smartpid
 ```
 
-`smartpid` maps to OEM `app1`; `proofpro` maps to OEM `app0`. The switch command
-requires the OEM app-slot layout, verifies that the target partition is not
-marked invalid/aborted, forces all outputs safe/off, publishes
-`firmware_switching`, and reboots. Booting SmartPID intentionally takes ProofPro
-MQTT offline until another path returns the unit to ProofPro.
-
-Important limitation: `firmware_switch:"proofpro"` is useful only while
-ProofPro is already running. After `firmware_switch:"smartpid"` boots the OEM
-app, this command is no longer available because the OEM app does not implement
-the ProofPro command schema.
+The command requires the OEM app-slot layout, verifies OEM `app1` is not marked
+invalid/aborted, forces all outputs safe/off, selects OEM `app1`, and reboots.
+It does not download, restore, erase, migrate, or write firmware. Booting
+SmartPID intentionally takes ProofPro MQTT and OTA offline until another path
+returns the unit to ProofPro.
 
 Proven bench recovery from SmartPID back to ProofPro:
 
@@ -441,9 +429,9 @@ The reserved install command shape is:
 
 `write_stage` is an explicit safety stage. Supported values are
 `validate_only`, `apps`, `metadata`, and `all`. Normal OEM-layout ProofPro builds
-support `firmware_restore:"smartpid_app1"` for SmartPID app/EEPROM restore.
-Destructive layout conversion stages remain limited to explicit installer
-builds.
+do not compile the package downloader/writer or
+`firmware_restore:"smartpid_app1"`. App restore and destructive layout
+conversion stages remain limited to explicit installer/recovery builds.
 
 The confirmation string is stage-specific:
 
@@ -570,7 +558,9 @@ The OEM-compatible bootloader/partition baseline can boot both app payloads:
   into the `Not Authorized` lockout screen instead of the normal OEM menu.
 - Partition diagnostics confirmed SmartPID `app1` readback SHA-256:
   `08cd03b15ca0d71bb47767b3c953ff8e83e89bf15c733a8d5fa3a8113f8634c1`.
-- `firmware_switch:"smartpid"` selected OEM `app1` and rebooted into SmartPID.
+- The serial `restore-smartpid` flow supersedes the earlier MQTT
+  `firmware_switch` test path. The earlier bench switch test selected OEM
+  `app1` and rebooted into SmartPID.
 - SmartPID published retained status on `smartpidM5/pro/{topic_id}/status`.
 - The first SmartPID boot test restored only the app image, so the SmartPID
   display showed `Not Authorized`. Decompile review traced this to an expected

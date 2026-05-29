@@ -38,6 +38,7 @@
 #include <ArduinoJson.h>
 #include <Preferences.h>
 #include <esp_ota_ops.h>    // esp_ota_set_boot_partition — OTA boot-loop rollback
+#include <esp_partition.h>
 #include "clock_sync.h"
 #include <esp_system.h>
 #ifndef DESKTOP_BUILD
@@ -82,6 +83,8 @@ static bool getBootTraceMode();
 static void setBootTraceMode(bool enabled);
 static void bootTracePause(const char* stage);
 static void printFlashMetadata();
+static void printRestoreSmartPidWarning();
+static void serialConfirmRestoreSmartPid();
 static void forceProbeSample();
 static void applyOutputsNow();
 static void serialSetDc1(int pct);
@@ -167,6 +170,8 @@ static bool          gRawOutputOverride = false;
 static bool          gBootDiagnosticsPublished = false;
 static bool          gProbeInitEnabled = true;
 static bool          gBootTraceEnabled = false;
+static bool          gRestoreSmartPidArmed = false;
+static uint32_t      gRestoreSmartPidArmedMs = 0;
 struct BootPinSnapshot {
     int gpio0 = LOW;
     int gpio2 = LOW;
@@ -728,6 +733,14 @@ static void handleSerialCommand(String line) {
         printFlashMetadata();
         return;
     }
+    if (lower == "restore-smartpid") {
+        printRestoreSmartPidWarning();
+        return;
+    }
+    if (lower == "yes restore-smartpid" || lower == "yes, restore-smartpid") {
+        serialConfirmRestoreSmartPid();
+        return;
+    }
     if (serialHandleCalibration(lower)) {
         forceProbeSample();
         printBenchStatus("cal");
@@ -836,6 +849,91 @@ static void printSerialHelp() {
     Serial.println("  out all 0|1           raw all off/on; all off exits override");
     Serial.println("  alloff                stop both channels and force outputs off");
     Serial.println("  {json...}             pass OEM-format JSON to MQTT command handler");
+}
+
+static void printRestoreSmartPidWarning() {
+    gRestoreSmartPidArmed = true;
+    gRestoreSmartPidArmedMs = millis();
+    Serial.println();
+    Serial.println("DANGER: restore-smartpid will reboot this controller into OEM SmartPID.");
+    Serial.println("ProofPro will stop running. ProofPro MQTT, OTA, and UI controls will go offline.");
+    Serial.println("ProofPro cannot switch itself back once OEM SmartPID is running.");
+    Serial.println("Returning to ProofPro requires the documented ROM/otadata recovery path.");
+    Serial.println("Before continuing: make sure all hazardous loads are disconnected or independently safe.");
+    Serial.println("This command does not restore, erase, download, or rewrite firmware.");
+    Serial.println("It only selects the existing OEM SmartPID app slot and restarts.");
+    Serial.println();
+    Serial.println("To confirm within 120 seconds, type exactly:");
+    Serial.println("  yes restore-smartpid");
+    Serial.println();
+}
+
+static void serialConfirmRestoreSmartPid() {
+#ifdef DESKTOP_BUILD
+    Serial.println("{\"type\":\"restore_smartpid\",\"status\":\"rejected\",\"reason\":\"desktop_build\"}");
+    return;
+#else
+    if (!gRestoreSmartPidArmed || millis() - gRestoreSmartPidArmedMs > 120000UL) {
+        gRestoreSmartPidArmed = false;
+        Serial.println("{\"type\":\"restore_smartpid\",\"status\":\"rejected\",\"reason\":\"confirmation_not_armed\"}");
+        Serial.println("Type restore-smartpid first to read the warning and arm confirmation.");
+        return;
+    }
+    gRestoreSmartPidArmed = false;
+
+    const esp_partition_t* running = esp_ota_get_running_partition();
+    const esp_partition_t* app0 =
+        esp_partition_find_first(ESP_PARTITION_TYPE_APP,
+                                 ESP_PARTITION_SUBTYPE_APP_OTA_0,
+                                 nullptr);
+    const esp_partition_t* app1 =
+        esp_partition_find_first(ESP_PARTITION_TYPE_APP,
+                                 ESP_PARTITION_SUBTYPE_APP_OTA_1,
+                                 nullptr);
+
+    const bool oemLayout =
+        app0 && app1 &&
+        app0->address == 0x10000 && app0->size == 0x1f0000 &&
+        app1->address == 0x200000 && app1->size == 0x1f0000;
+    if (!oemLayout) {
+        Serial.println("{\"type\":\"restore_smartpid\",\"status\":\"rejected\",\"reason\":\"not_oem_layout\"}");
+        return;
+    }
+
+    if (running && running->address == app1->address && running->size == app1->size) {
+        Serial.println("{\"type\":\"restore_smartpid\",\"status\":\"ignored\",\"reason\":\"already_running_smartpid_slot\"}");
+        return;
+    }
+
+    esp_ota_img_states_t state = ESP_OTA_IMG_UNDEFINED;
+    if (esp_ota_get_state_partition(app1, &state) == ESP_OK &&
+        (state == ESP_OTA_IMG_INVALID || state == ESP_OTA_IMG_ABORTED)) {
+        Serial.printf("{\"type\":\"restore_smartpid\",\"status\":\"rejected\",\"reason\":\"target_not_bootable\",\"ota_state\":%d}\n",
+                      (int)state);
+        return;
+    }
+
+    serialAllOff();
+    cfg.saveRunState(0, 0, false, false);
+
+    esp_err_t err = esp_ota_set_boot_partition(app1);
+    if (err != ESP_OK) {
+        Serial.printf("{\"type\":\"restore_smartpid\",\"status\":\"rejected\",\"reason\":\"set_boot_partition_failed\",\"esp_err\":%d}\n",
+                      (int)err);
+        return;
+    }
+
+    telemetry.publishEventTyped("firmware switch", "firmware_switching", 0, "smartpid_serial");
+    if (mqttMgr.connected()) {
+        mqttMgr.publishStatus();
+        mqttMgr.loop();
+    }
+
+    Serial.println("{\"type\":\"restore_smartpid\",\"status\":\"accepted\",\"target\":\"smartpid\",\"rebooting\":true}");
+    Serial.flush();
+    delay(500);
+    ESP.restart();
+#endif
 }
 
 static void printAudioDiagnostics(const char* reason) {

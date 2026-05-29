@@ -6,12 +6,18 @@
 #include "hardware_profile.h"
 #endif
 #include "display.h"
-#include "migration_installer.h"
 #include "output_control.h"
 #include "profiles.h"
 #include <ArduinoJson.h>
 #ifndef DESKTOP_BUILD
 #include <esp_ota_ops.h>
+#endif
+
+#if defined(PROOFPRO_ENABLE_OEM_LAYOUT_INSTALL) || \
+    defined(PROOFPRO_ENABLE_OEM_LAYOUT_METADATA_INSTALL) || \
+    defined(PROOFPRO_ENABLE_OEM_APP_RESTORE)
+#define PROOFPRO_ENABLE_MQTT_RECOVERY_COMMANDS 1
+#include "recovery/migration_installer.h"
 #endif
 
 CommandHandler cmdHandler;
@@ -274,14 +280,19 @@ void CommandHandler::handle(const uint8_t* payload, unsigned int len) {
             _tele->publishOutputDiagnostics("mqtt_command", *_ch[0], *_ch[1]);
         } else if (strcmp(diag, "partitions") == 0 || strcmp(diag, "flash") == 0) {
             _tele->publishPartitionDiagnostics("mqtt_command");
-        } else if (strcmp(diag, "migration_preflight") == 0) {
+        }
+#if defined(PROOFPRO_ENABLE_MQTT_RECOVERY_COMMANDS)
+        else if (strcmp(diag, "migration_preflight") == 0) {
             _cmdMigrationPreflight(doc["proofpro_app_size"].as<uint32_t>(),
                                    doc["oem_app_size"].as<uint32_t>());
-        } else {
+        }
+#endif
+        else {
             _tele->publishCommandError("diagnostics", "invalid_value", diag);
         }
     }
 
+#if defined(PROOFPRO_ENABLE_MQTT_RECOVERY_COMMANDS)
     if (doc["migration"].is<const char*>()) {
         const char* migration = doc["migration"].as<const char*>();
         if (strcmp(migration, "preflight") == 0 ||
@@ -315,10 +326,7 @@ void CommandHandler::handle(const uint8_t* payload, unsigned int len) {
         }
     }
 
-    if (doc["firmware_switch"].is<const char*>()) {
-        _cmdFirmwareSwitch(doc["firmware_switch"].as<const char*>(),
-                           doc["confirm"].as<const char*>());
-    }
+#endif
 
     const bool chirpBool = doc["chirp"].is<bool>() && doc["chirp"].as<bool>();
     const bool chirpAudio = doc["audio"].is<const char*>() &&
@@ -1217,6 +1225,7 @@ void CommandHandler::_cmdSetClockFormat(bool clock24h) {
     log_i("[CMD] clock_24h → %s", clock24h ? "true" : "false");
 }
 
+#if defined(PROOFPRO_ENABLE_MQTT_RECOVERY_COMMANDS)
 void CommandHandler::_cmdMigrationPreflight(uint32_t proofproAppSize,
                                             uint32_t oemAppSize) {
     if (_tele) {
@@ -1394,87 +1403,7 @@ void CommandHandler::_cmdRestoreSmartPidApp1(const char* confirm,
     log_w("[CMD] firmware_restore smartpid_app1 rejected result=%d", (int)result);
 }
 
-void CommandHandler::_cmdFirmwareSwitch(const char* target, const char* confirm) {
-    if (!target || target[0] == '\0') {
-        if (_tele) _tele->publishCommandError("firmware_switch", "invalid_value");
-        return;
-    }
-
-    const bool toProofPro = strcmp(target, "proofpro") == 0;
-    const bool toSmartPid = strcmp(target, "smartpid") == 0;
-    if (!toProofPro && !toSmartPid) {
-        if (_tele) _tele->publishCommandError("firmware_switch", "invalid_value", target);
-        return;
-    }
-
-    const char* requiredConfirm = toSmartPid ? "YES_BOOT_SMARTPID" : "YES_BOOT_PROOFPRO";
-    if (!confirm || strcmp(confirm, requiredConfirm) != 0) {
-        if (_tele) _tele->publishCommandError("firmware_switch", "confirmation_required", target);
-        log_w("[CMD] firmware_switch %s rejected — confirmation required", target);
-        return;
-    }
-
-#ifdef DESKTOP_BUILD
-    if (_tele) _tele->publishCommandError("firmware_switch", "desktop_build", target);
-    return;
-#else
-    const esp_partition_subtype_t subtype =
-        toSmartPid ? ESP_PARTITION_SUBTYPE_APP_OTA_1 : ESP_PARTITION_SUBTYPE_APP_OTA_0;
-    const esp_partition_t* running = esp_ota_get_running_partition();
-    const esp_partition_t* app0 =
-        esp_partition_find_first(ESP_PARTITION_TYPE_APP,
-                                 ESP_PARTITION_SUBTYPE_APP_OTA_0,
-                                 nullptr);
-    const esp_partition_t* app1 =
-        esp_partition_find_first(ESP_PARTITION_TYPE_APP,
-                                 ESP_PARTITION_SUBTYPE_APP_OTA_1,
-                                 nullptr);
-    const esp_partition_t* targetPart =
-        esp_partition_find_first(ESP_PARTITION_TYPE_APP, subtype, nullptr);
-
-    const bool oemLayout =
-        app0 && app1 &&
-        app0->address == 0x10000 && app0->size == 0x1f0000 &&
-        app1->address == 0x200000 && app1->size == 0x1f0000;
-    if (!oemLayout || !targetPart) {
-        if (_tele) _tele->publishCommandError("firmware_switch", "not_oem_layout", target);
-        log_w("[CMD] firmware_switch %s rejected — not on OEM layout", target);
-        return;
-    }
-
-    if (running && running->address == targetPart->address && running->size == targetPart->size) {
-        if (_tele) _tele->publishEventTyped("firmware already selected", "firmware_switch_already", 0, target);
-        log_i("[CMD] firmware_switch %s ignored — already running target", target);
-        return;
-    }
-
-    esp_ota_img_states_t state = ESP_OTA_IMG_UNDEFINED;
-    if (esp_ota_get_state_partition(targetPart, &state) == ESP_OK &&
-        (state == ESP_OTA_IMG_INVALID || state == ESP_OTA_IMG_ABORTED)) {
-        if (_tele) _tele->publishCommandError("firmware_switch", "target_not_bootable", target);
-        log_w("[CMD] firmware_switch %s rejected — target OTA state=%d", target, (int)state);
-        return;
-    }
-
-    esp_err_t err = esp_ota_set_boot_partition(targetPart);
-    if (err != ESP_OK) {
-        if (_tele) _tele->publishCommandError("firmware_switch", "set_boot_partition_failed", target);
-        log_e("[CMD] firmware_switch %s failed — esp_ota_set_boot_partition err=0x%x", target, err);
-        return;
-    }
-
-    log_w("[CMD] firmware_switch %s accepted — forcing outputs safe and rebooting", target);
-    outputCtrl.forceAllOff();
-    if (_cfg) _cfg->saveRunState(0, 0, false, false);
-    if (_tele) _tele->publishEventTyped("firmware switch", "firmware_switching", 0, target);
-    if (_mqtt) {
-        _mqtt->publishStatus();
-        _mqtt->loop();
-    }
-    delay(500);
-    ESP.restart();
 #endif
-}
 
 // ── tick ──────────────────────────────────────────────────────────────────────
 // Called from loop(). Fires once per second.

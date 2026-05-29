@@ -493,7 +493,7 @@ Request partition/OTA-slot diagnostics:
 
 `"diagnostics": "flash"` is accepted as an alias.
 
-Request bootloader/layout migration preflight:
+Recovery/installer builds only: request bootloader/layout migration preflight:
 
 ```json
 {
@@ -511,7 +511,9 @@ Alias:
 }
 ```
 
-The preflight is read-only. It never writes flash. It reports whether the
+Normal ProofPro firmware does not expose migration commands over MQTT. In
+special installer/recovery builds, the preflight is read-only. It never writes
+flash. It reports whether the
 device is in the only safe state for converting from the current large-slot
 ProofPro layout to the OEM-compatible bootloader/layout: running from the high
 `app1` slot at `0x650000`.
@@ -560,8 +562,9 @@ Example response:
 }
 ```
 
-`{"migration":"oem_bootloader_layout"}` currently performs the same preflight
-and then publishes a `command_error` with reason `writes_not_enabled`.
+`{"migration":"oem_bootloader_layout"}` is a recovery-build compatibility
+command. In builds that include it, it performs the same preflight and then
+publishes a `command_error` with reason `writes_not_enabled`.
 
 Reserved package install command:
 
@@ -615,8 +618,8 @@ bootloader, partition table, and otadata over serial/readback, then reboots into
 OEM-layout `app0`. A final MQTT `metadata_written` event is not expected after
 the critical marker.
 
-`write_stage: "all"` remains disabled. Production firmware rejects all real
-write stages.
+`write_stage: "all"` remains disabled. Normal production firmware does not
+compile these MQTT migration commands.
 
 Possible command errors from this command include:
 
@@ -629,8 +632,8 @@ Possible command errors from this command include:
 - `flash_verify_failed`
 - `writes_not_enabled`
 
-Normal ProofPro firmware publishes a structured status event while rejecting a
-conversion write stage that is not enabled in the current build:
+Recovery builds publish a structured status event while rejecting a conversion
+write stage that is not enabled in the current build:
 
 ```json
 {
@@ -665,9 +668,8 @@ that the current large-slot layout is present, sets the next boot partition to
 `app1` at `0x650000`, forces outputs safe/off, and reboots. It rejects the
 command unless the confirmation string is exact.
 
-After the device has been converted to the OEM-compatible layout, ProofPro can
-restore the SmartPID app payload to OEM `app1` from the verified migration
-package:
+Recovery builds can restore the SmartPID app payload to OEM `app1` from the
+verified migration package:
 
 ```json
 {
@@ -678,7 +680,8 @@ package:
 }
 ```
 
-This command is only enabled in the OEM-layout ProofPro build. It requires
+This command is not compiled into normal ProofPro firmware. It is retained for
+special recovery builds. It requires
 ProofPro to be running from OEM `app0`, forces outputs safe/off first, downloads
 and verifies the full package, writes `smartpid_oem_app1` to OEM `app1` at
 `0x200000`, writes `smartpid_oem_eeprom` to the OEM `eeprom` partition at
@@ -697,32 +700,20 @@ Possible command errors include:
 - `flash_verify_failed`
 - `writes_not_enabled`
 
-On the OEM-compatible layout, ProofPro can also request a boot switch:
+Normal ProofPro firmware does not expose firmware switching over MQTT. The
+OEM-compatible layout has a hidden serial-only command to select OEM SmartPID:
 
-```json
-{
-  "firmware_switch": "smartpid",
-  "confirm": "YES_BOOT_SMARTPID"
-}
+```text
+restore-smartpid
+yes restore-smartpid
 ```
 
-```json
-{
-  "firmware_switch": "proofpro",
-  "confirm": "YES_BOOT_PROOFPRO"
-}
-```
+The first command prints warnings and arms confirmation for 120 seconds. The
+second command forces outputs safe/off, verifies OEM `app1` is bootable, selects
+that partition, and reboots. It does not download, restore, erase, migrate, or
+write firmware. If SmartPID is booted, ProofPro MQTT will go offline until
+ProofPro is restored or selected again by an external path.
 
-`firmware_switch:"smartpid"` selects OEM `app1`; `firmware_switch:"proofpro"`
-selects OEM `app0`. The command validates that the OEM app-slot layout is
-present, checks that the target partition is not marked invalid/aborted, forces
-all outputs safe/off, publishes `firmware_switching`, and reboots. If SmartPID
-is booted, ProofPro MQTT will go offline until ProofPro is restored or selected
-again by an external path.
-
-Important: `firmware_switch:"proofpro"` is available only while ProofPro is
-running. After `firmware_switch:"smartpid"` boots the OEM app, the OEM app does
-not implement the ProofPro command schema and cannot receive this command.
 Current bench recovery back to ProofPro requires manually entering ESP32 ROM
 download mode with GPIO0 held low and writing only the 8 KB otadata selector:
 
@@ -739,8 +730,10 @@ Bench result, 2026-05-28:
 - ProofPro restored OEM SmartPID to `app1` and readback SHA-256 matched the
   packaged SmartPID app image:
   `08cd03b15ca0d71bb47767b3c953ff8e83e89bf15c733a8d5fa3a8113f8634c1`.
-- `firmware_switch:"smartpid"` booted SmartPID successfully. The device
-  published retained status on `smartpidM5/pro/{topic_id}/status`.
+- Serial `restore-smartpid` boot selection supersedes the earlier MQTT
+  `firmware_switch` test path. The earlier bench switch test booted SmartPID
+  successfully, and the device published retained status on
+  `smartpidM5/pro/{topic_id}/status`.
 - The first SmartPID boot test displayed `Not Authorized` because only the app
   image had been restored. Decompile review showed the OEM app requires an
   authorization byte from the OEM `eeprom` partition; the package and restore

@@ -590,7 +590,9 @@ void TelemetryPublisher::publishMigrationInstallStatus(const char* phase,
         doc["bytes_total"] = bytesTotal;
     }
     doc["writes_enabled"] =
-#if (defined(PROOFPRO_ENABLE_OEM_LAYOUT_INSTALL) || defined(PROOFPRO_ENABLE_OEM_APP_RESTORE)) && !defined(DESKTOP_BUILD)
+#if (defined(PROOFPRO_ENABLE_OEM_LAYOUT_INSTALL) || \
+     defined(PROOFPRO_ENABLE_OEM_LAYOUT_METADATA_INSTALL) || \
+     defined(PROOFPRO_ENABLE_OEM_APP_RESTORE)) && !defined(DESKTOP_BUILD)
         true;
 #else
         false;
