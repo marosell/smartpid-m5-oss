@@ -24,6 +24,12 @@ const manuals = [
     pdf: path.join(docsDir, "PROOFPRO_USER_MANUAL-technicalrecovery.pdf"),
     title: "ProofPro Technical Recovery Companion",
   },
+  {
+    markdown: path.join(docsDir, "TEST_PROTOCOL.md"),
+    html: path.join(outDir, "TEST_PROTOCOL.html"),
+    pdf: path.join(docsDir, "TEST_PROTOCOL.pdf"),
+    title: "ProofPro Bench Test Protocol",
+  },
 ];
 
 function escapeHtml(value) {

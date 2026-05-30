@@ -60,7 +60,15 @@ Start programmed power run:
 ```bash
 mosquitto_pub -h 10.0.1.203 -u proof -P proof \
   -t 'smartpidM5/proofpro/791402d5ac0fe1/commands' \
-  -m '{"program_running":true}'
+  -m '{"workflow":"distillation","strategy":"program","action":"start"}'
+```
+
+Enter manual distillation without safe/off stop:
+
+```bash
+mosquitto_pub -h 10.0.1.203 -u proof -P proof \
+  -t 'smartpidM5/proofpro/791402d5ac0fe1/commands' \
+  -m '{"workflow":"distillation","strategy":"manual","action":"start"}'
 ```
 
 Stop run:
@@ -68,7 +76,7 @@ Stop run:
 ```bash
 mosquitto_pub -h 10.0.1.203 -u proof -P proof \
   -t 'smartpidM5/proofpro/791402d5ac0fe1/commands' \
-  -m '{"stop":true}'
+  -m '{"action":"stop"}'
 ```
 
 Reset END/watchdog state:
@@ -76,7 +84,7 @@ Reset END/watchdog state:
 ```bash
 mosquitto_pub -h 10.0.1.203 -u proof -P proof \
   -t 'smartpidM5/proofpro/791402d5ac0fe1/commands' \
-  -m '{"reset":true}'
+  -m '{"action":"reset"}'
 ```
 
 Speaker chirp check:
@@ -89,26 +97,29 @@ mosquitto_pub -h 10.0.1.203 -u proof -P proof \
 
 ## ProofPro / DSPR400 Nomenclature
 
+In this protocol, `dcx` means `dc1` or `dc2`, and `rlx` means `rl1` or `rl2`.
+Use the numbered key in actual MQTT payloads.
+
 | Concept | ProofPro MQTT / Proof UI | DSPR400-style name | Notes |
 |---|---|---|---|
-| Acceleration enabled | `acc_mode` | Accel mode | Device-level, not per channel |
-| Acceleration end temp | `accel_temp` | `dAST` | When reached, status should change `ACCEL -> RUN` |
-| Acceleration output power | `accel_power` | `dOUT` | DC output percent during ACCEL |
-| Post-accel output power | `post_accel_power` | Distill/run power | Element DC output percent after ACCEL completes |
-| Main DC output | `dc_outputs.DCx.mode:"element"` | Element output | Receives `accel_power` and `post_accel_power` |
-| Auxiliary DC output | `dc_outputs.DCx.mode:"auxiliary"` | Auxiliary element | Direct/manual output; excluded from automatic program power |
-| Timer start temperature | `timer_start_temp` | `dtSP` | Temperature that starts the finish timer |
-| Finish timer length | `timer_s` | Timer | Device-level finish timer duration |
-| Finish temperature | `finish_temp` | `dFSP` | One threshold, not CH1/CH2 independent values |
-| Finish temp probe | `finish_temp_source` | Finish source | `"CH1"` or `"CH2"`; only this probe can end by temp |
-| Finish action | `finish_action` | `dEO` / finish behavior | Canonical values: `end`, `continue`, `shutoff` if supported by UI |
-| Disabled relay | `relay_mode:"off"` | Off/Disabled | Forced off, not commandable |
-| Manual relay | `relay_mode:"manual_on_off"` | On/Off | Local UI control only |
-| Accel relay | `relay_mode:"acc_element"` | AccElement | May be operator-disengaged |
-| Proof relay | `relay_mode:"remote_other"` | Remote/Other | Proof direct relay control |
-| Cycle relay | `relay_mode:"cycle"` | Cycle/Reflux timer | Uses `on_ms` and `cycle_ms` |
-| Cycle on time | `CHx on_ms` | Cycle on time | Relay ON portion in ms |
-| Cycle total time | `CHx cycle_ms` | Cycle period | Full ON+OFF cycle in ms |
+| Acceleration enabled | `distillation.acceleration_enabled` | Accel mode | Device-level, not per channel |
+| Acceleration end temp | `distillation.acceleration_end_temp` | `dAST` | When reached, status should change `ACCEL -> RUN` |
+| Acceleration output power | `distillation.acceleration_power` | `dOUT` | DC output percent during ACCEL |
+| Run output power | `distillation.run_power` | Distill/run power | Element DC output percent after ACCEL completes |
+| Main DC output | `config.dc_outputs.dcx.mode:"element"` | Element output | Receives acceleration power and run power |
+| Auxiliary DC output | `config.dc_outputs.dcx.mode:"auxiliary"` | Auxiliary element | Direct/manual output; excluded from automatic program power |
+| Timer start temperature | `distillation.timer_start_temp` | `dtSP` | Temperature that starts the finish timer |
+| Finish timer length | `distillation.timer_s` | Timer | Device-level finish timer duration |
+| Finish temperature | `distillation.finish_temp` | `dFSP` | One threshold, not probe-independent values |
+| Finish temp probe | `distillation.finish_temp_probe` | Finish source | `probe1` or `probe2`; only this probe can end by temp |
+| Finish action | `distillation.finish_action` | `dEO` / finish behavior | Canonical values: `end`, `continue`, `shutoff` if supported by UI |
+| Disabled relay | `config.relays.rlx.mode:"off"` | Off/Disabled | Forced off, not commandable |
+| Manual relay | `config.relays.rlx.mode:"manual_on_off"` | On/Off | Local UI control only |
+| Accel relay | `config.relays.rlx.mode:"acc_element"` | AccElement | May be operator-disengaged |
+| Proof relay | `config.relays.rlx.mode:"remote_other"` | Remote/Other | Proof direct relay control |
+| Cycle relay | `config.relays.rlx.mode:"cycle"` | Cycle/Reflux timer | Uses `on_ms` and `cycle_ms` |
+| Cycle on time | `rlx_on_ms` | Cycle on time | Relay ON portion in ms |
+| Cycle total time | `rlx_cycle_ms` | Cycle period | Full ON+OFF cycle in ms |
 | Remote ready | `remote_state:"RDY"` | Remote ready | Commands accepted, watchdog not active yet |
 | Remote active | `remote_state:"ON"` | Remote on | Proof is controlling; heartbeat expected |
 | Program ended | `program_ended.reason` | END condition | Reasons: `finish_timer`, `finish_temp`, `finish` |
@@ -122,14 +133,14 @@ boiling.
 
 | Run | Starting Temp | ProofPro Program Settings | DSPR400 Settings To Match | Primary Checks |
 |---|---:|---|---|---|
-| A. Remote relay smoke test | Any | Relay CH2 `remote_other`; no heat required | Set relay/output mode to remote/manual test equivalent | Proof can toggle relay from `RDY`; telemetry mode matches retained config |
-| B. Accel transition | 123-145F | `acc_mode:true`, `accel_temp:140`, `accel_power:100`, `post_accel_power:35`, `timer_start_temp:140`, `timer_s:120`, `finish_action:"continue"` | Accel enabled; `dAST=140F`; `dOUT=100`; run power `35%`; Timer start `dtSP=140F`; Timer `2:00`; finish continue | Status starts `ACCEL`, then changes to `RUN`; DC power changes to post-accel power; AccElement relay turns off at `dAST`; timer starts |
-| C. Timer END | 145-165F | `acc_mode:true`, `accel_temp:155`, `accel_power:100`, `post_accel_power:35`, `timer_start_temp:155`, `timer_s:60`, `finish_action:"end"` | `dAST=155F`; `dOUT=100`; run power `35%`; `dtSP=155F`; Timer `1:00`; END on timer | `program_ended.reason:"finish_timer"`; DC1/DC2 0; RL1/RL2 off; Remote `ON -> RDY` |
-| D. Finish temp source CH1 | 165-185F | `finish_temp:175`, `finish_temp_source:"CH1"`, `timer_s:300`, `finish_action:"end"` | `dFSP=175F`; finish source CH1; timer longer than expected | CH1 alone can trigger `program_ended.reason:"finish_temp"` |
-| E. Finish temp source CH2 | 175-200F | `finish_temp:190`, `finish_temp_source:"CH2"`, `timer_s:300`, `finish_action:"end"` | `dFSP=190F`; finish source CH2; timer longer than expected | CH2 alone can trigger `program_ended.reason:"finish_temp"` |
-| F. Cycle relay | Any stable temp | CH1 or CH2 `relay_mode:"cycle"`, `on_ms:1000`, `cycle_ms:5000`, then `CHx relay:true` | Cycle/reflux relay; ON 1 sec, total 5 sec | `relay_engaged:true`; physical `relay` blinks; local disengage stays off |
+| A. Remote relay smoke test | Any | Relay RL2 `remote_other`; no heat required | Set relay/output mode to remote/manual test equivalent | Proof can toggle relay from `RDY`; telemetry mode matches retained config |
+| B. Accel transition | 123-145F | `distillation.acceleration_enabled:true`, `acceleration_end_temp:140`, `acceleration_power:100`, `run_power:35`, `timer_start_temp:140`, `timer_s:120`, `finish_action:"continue"` | Accel enabled; `dAST=140F`; `dOUT=100`; run power `35%`; Timer start `dtSP=140F`; Timer `2:00`; finish continue | Status starts `ACCEL`, then changes to `RUN`; DC power changes to run power; AccElement relay turns off at `dAST`; timer starts |
+| C. Timer END | 145-165F | `distillation.acceleration_enabled:true`, `acceleration_end_temp:155`, `acceleration_power:100`, `run_power:35`, `timer_start_temp:155`, `timer_s:60`, `finish_action:"end"` | `dAST=155F`; `dOUT=100`; run power `35%`; `dtSP=155F`; Timer `1:00`; END on timer | `program_ended.reason:"finish_timer"`; DC1/DC2 0; RL1/RL2 off; Remote `ON -> RDY` |
+| D. Finish temp probe1 | 165-185F | `finish_temp:175`, `finish_temp_probe:"probe1"`, `timer_s:300`, `finish_action:"end"` | `dFSP=175F`; finish source probe1; timer longer than expected | Probe1 alone can trigger `program_ended.reason:"finish_temp"` |
+| E. Finish temp probe2 | 175-200F | `finish_temp:190`, `finish_temp_probe:"probe2"`, `timer_s:300`, `finish_action:"end"` | `dFSP=190F`; finish source probe2; timer longer than expected | Probe2 alone can trigger `program_ended.reason:"finish_temp"` |
+| F. Cycle relay | Any stable temp | RL1 or RL2 `mode:"cycle"`, `on_ms:1000`, `cycle_ms:5000`, then `rlx:true` | Cycle/reflux relay; ON 1 sec, total 5 sec | `state.relays.rlx.engaged:true`; physical `state.relays.rlx.state` blinks; local disengage stays off |
 | G. Watchdog | Any safe state | Remote enabled, `watchdog_s:30`; stop Proof heartbeat | Watchdog/remote safety if available | After >30s without heartbeat: DC1/DC2 0, RL1/RL2 off, `watchdog_safe`, Remote `RDY` |
-| H. Reboot restore | Any safe state | Active Proof run, Auto Resume ON | Auto Resume ON | Device publishes `controller_rebooted`; Proof re-sends program and `program_running:true` |
+| H. Reboot restore | Any safe state | Active Proof run, Auto Resume ON | Auto Resume ON | Device publishes `controller_rebooted`; Proof re-sends program and workflow start command |
 
 ## Program Command Payloads
 
@@ -138,13 +149,13 @@ Run B, Accel transition:
 ```bash
 mosquitto_pub -h 10.0.1.203 -u proof -P proof \
   -t 'smartpidM5/proofpro/791402d5ac0fe1/commands' \
-  -m '{"acc_mode":true,"accel_temp":140,"accel_power":100,"post_accel_power":35,"timer_start_temp":140,"timer_s":120,"finish_action":"continue","CH1 relay_mode":"acc_element","CH2 relay_mode":"off"}'
+  -m '{"distillation":{"acceleration_enabled":true,"acceleration_end_temp":140,"acceleration_power":100,"run_power":35,"timer_start_temp":140,"timer_s":120,"finish_action":"continue","finish_temp":0,"finish_temp_probe":"probe1","acceleration_relays_enabled":true},"rl1_mode":"acc_element","rl2_mode":"off"}'
 ```
 
 ```bash
 mosquitto_pub -h 10.0.1.203 -u proof -P proof \
   -t 'smartpidM5/proofpro/791402d5ac0fe1/commands' \
-  -m '{"program_running":true}'
+  -m '{"workflow":"distillation","strategy":"program","action":"start"}'
 ```
 
 Run C, Timer END:
@@ -152,81 +163,81 @@ Run C, Timer END:
 ```bash
 mosquitto_pub -h 10.0.1.203 -u proof -P proof \
   -t 'smartpidM5/proofpro/791402d5ac0fe1/commands' \
-  -m '{"acc_mode":true,"accel_temp":155,"accel_power":100,"post_accel_power":35,"timer_start_temp":155,"timer_s":60,"finish_action":"end","CH1 relay_mode":"acc_element","CH2 relay_mode":"remote_other"}'
+  -m '{"distillation":{"acceleration_enabled":true,"acceleration_end_temp":155,"acceleration_power":100,"run_power":35,"timer_start_temp":155,"timer_s":60,"finish_action":"end","finish_temp":0,"finish_temp_probe":"probe1","acceleration_relays_enabled":true},"rl1_mode":"acc_element","rl2_mode":"remote_other"}'
 ```
 
 ```bash
 mosquitto_pub -h 10.0.1.203 -u proof -P proof \
   -t 'smartpidM5/proofpro/791402d5ac0fe1/commands' \
-  -m '{"program_running":true}'
+  -m '{"workflow":"distillation","strategy":"program","action":"start"}'
 ```
 
-Run D, Finish temp from CH1:
+Run D, Finish temp from probe1:
 
 ```bash
 mosquitto_pub -h 10.0.1.203 -u proof -P proof \
   -t 'smartpidM5/proofpro/791402d5ac0fe1/commands' \
-  -m '{"acc_mode":false,"timer_s":300,"finish_temp":175,"finish_temp_source":"CH1","finish_action":"end"}'
-```
-
-```bash
-mosquitto_pub -h 10.0.1.203 -u proof -P proof \
-  -t 'smartpidM5/proofpro/791402d5ac0fe1/commands' \
-  -m '{"program_running":true}'
-```
-
-Run E, Finish temp from CH2:
-
-```bash
-mosquitto_pub -h 10.0.1.203 -u proof -P proof \
-  -t 'smartpidM5/proofpro/791402d5ac0fe1/commands' \
-  -m '{"acc_mode":false,"timer_s":300,"finish_temp":190,"finish_temp_source":"CH2","finish_action":"end"}'
+  -m '{"distillation":{"acceleration_enabled":false,"timer_s":300,"finish_temp":175,"finish_temp_probe":"probe1","finish_action":"end"}}'
 ```
 
 ```bash
 mosquitto_pub -h 10.0.1.203 -u proof -P proof \
   -t 'smartpidM5/proofpro/791402d5ac0fe1/commands' \
-  -m '{"program_running":true}'
+  -m '{"workflow":"distillation","strategy":"program","action":"start"}'
 ```
 
-Cycle relay test, CH1:
+Run E, Finish temp from probe2:
 
 ```bash
 mosquitto_pub -h 10.0.1.203 -u proof -P proof \
   -t 'smartpidM5/proofpro/791402d5ac0fe1/commands' \
-  -m '{"CH1 relay_mode":"cycle","CH1 on_ms":1000,"CH1 cycle_ms":5000}'
-```
-
-```bash
-mosquitto_pub -h 10.0.1.203 -u proof -P proof \
-  -t 'smartpidM5/proofpro/791402d5ac0fe1/commands' \
-  -m '{"CH1 relay":true}'
+  -m '{"distillation":{"acceleration_enabled":false,"timer_s":300,"finish_temp":190,"finish_temp_probe":"probe2","finish_action":"end"}}'
 ```
 
 ```bash
 mosquitto_pub -h 10.0.1.203 -u proof -P proof \
   -t 'smartpidM5/proofpro/791402d5ac0fe1/commands' \
-  -m '{"CH1 relay":false}'
+  -m '{"workflow":"distillation","strategy":"program","action":"start"}'
 ```
 
-Remote relay test, CH2:
+Cycle relay test, RL1:
 
 ```bash
 mosquitto_pub -h 10.0.1.203 -u proof -P proof \
   -t 'smartpidM5/proofpro/791402d5ac0fe1/commands' \
-  -m '{"CH2 relay_mode":"remote_other"}'
-```
-
-```bash
-mosquitto_pub -h 10.0.1.203 -u proof -P proof \
-  -t 'smartpidM5/proofpro/791402d5ac0fe1/commands' \
-  -m '{"CH2 relay":true}'
+  -m '{"rl1_mode":"cycle","rl1_on_ms":1000,"rl1_cycle_ms":5000}'
 ```
 
 ```bash
 mosquitto_pub -h 10.0.1.203 -u proof -P proof \
   -t 'smartpidM5/proofpro/791402d5ac0fe1/commands' \
-  -m '{"CH2 relay":false}'
+  -m '{"rl1":true}'
+```
+
+```bash
+mosquitto_pub -h 10.0.1.203 -u proof -P proof \
+  -t 'smartpidM5/proofpro/791402d5ac0fe1/commands' \
+  -m '{"rl1":false}'
+```
+
+Remote relay test, RL2:
+
+```bash
+mosquitto_pub -h 10.0.1.203 -u proof -P proof \
+  -t 'smartpidM5/proofpro/791402d5ac0fe1/commands' \
+  -m '{"rl2_mode":"remote_other"}'
+```
+
+```bash
+mosquitto_pub -h 10.0.1.203 -u proof -P proof \
+  -t 'smartpidM5/proofpro/791402d5ac0fe1/commands' \
+  -m '{"rl2":true}'
+```
+
+```bash
+mosquitto_pub -h 10.0.1.203 -u proof -P proof \
+  -t 'smartpidM5/proofpro/791402d5ac0fe1/commands' \
+  -m '{"rl2":false}'
 ```
 
 Watchdog setup:
@@ -242,7 +253,7 @@ DC output role setup:
 ```bash
 mosquitto_pub -h 10.0.1.203 -u proof -P proof \
   -t 'smartpidM5/proofpro/791402d5ac0fe1/commands' \
-  -m '{"DC1 dc_mode":"element","DC2 dc_mode":"auxiliary"}'
+  -m '{"dc1_mode":"element","dc2_mode":"auxiliary"}'
 ```
 
 Auxiliary DC direct command:
@@ -250,7 +261,7 @@ Auxiliary DC direct command:
 ```bash
 mosquitto_pub -h 10.0.1.203 -u proof -P proof \
   -t 'smartpidM5/proofpro/791402d5ac0fe1/commands' \
-  -m '{"CH2 power":25}'
+  -m '{"dc2_power":25}'
 ```
 
 ## 0. Safety and Setup
@@ -258,7 +269,7 @@ mosquitto_pub -h 10.0.1.203 -u proof -P proof \
 - [ ] Confirm no hazardous load is connected to DC1 during bench firmware work.
 - [ ] Confirm OTA is used for firmware updates.
 - [ ] Do not USB-flash with a heater or hazardous load connected to DC1.
-- [ ] Subscribe to status, config, power, and events.
+- [ ] Subscribe to status, config, state, and events.
 - [ ] Open Proof and confirm the device appears online.
 - [ ] On the device, start from the Power screen.
 - [ ] Confirm Remote is enabled on the device before testing Proof commands.
@@ -267,12 +278,16 @@ mosquitto_pub -h 10.0.1.203 -u proof -P proof \
 
 - [ ] Reboot the device.
 - [ ] Confirm retained `status` publishes after reconnect.
+- [ ] Confirm retained `status.schema_version` is `2`.
+- [ ] Confirm retained `status.firmware_version` is `0.3.0`.
 - [ ] Confirm retained `status.unit` is `F` or `C`.
 - [ ] Confirm retained `status.remote_state` is `OFF`, `RDY`, or `ON`.
+- [ ] Confirm retained `status.device_state`, `workflow`, and `strategy` are present.
 - [ ] Confirm retained `status.watchdog_enabled` and `watchdog_s` are present.
-- [ ] Confirm retained `config.program` is present.
-- [ ] Confirm retained `config.dc_outputs.DC1.mode` and `config.dc_outputs.DC2.mode` are present.
-- [ ] Confirm retained `config.relays.CH1` and `config.relays.CH2` are present.
+- [ ] Confirm retained `config.distillation` is present.
+- [ ] Confirm retained `config.dc_outputs.dc1.mode` and `config.dc_outputs.dc2.mode` are present.
+- [ ] Confirm retained `config.relays.rl1` and `config.relays.rl2` are present.
+- [ ] Confirm live `state` publishes while the device is idle.
 - [ ] In Proof onboarding/settings, confirm unit is auto-filled from status.
 - [ ] In Proof settings, confirm program defaults come from retained config.
 - [ ] In Proof settings, confirm relay modes and cycle timings come from retained config.
@@ -305,18 +320,18 @@ Pass criteria:
 
 ## 3. Proof Remote Relay Flow
 
-Run for CH1 and CH2.
+Run for RL1 and RL2.
 
 - [ ] Set retained relay mode to `remote_other`.
-- [ ] Confirm retained `config.relays.CHx.mode:"remote_other"`.
-- [ ] Confirm live `power/CHx.relay_mode:"remote_other"`.
+- [ ] Confirm retained `config.relays.rlx.mode:"remote_other"`.
+- [ ] Confirm live `state.relays.rlx.mode:"remote_other"`.
 - [ ] Confirm Remote is `RDY`.
-- [ ] Send `{"CHx relay":true}` from Proof.
+- [ ] Send the matching `{"rl1":true}` or `{"rl2":true}` from Proof.
 - [ ] Confirm `remote_state:"ON"`.
-- [ ] Confirm live telemetry has `relay_engaged:true`.
+- [ ] Confirm live telemetry has `state.relays.rlx.engaged:true`.
 - [ ] Confirm physical relay output is ON.
-- [ ] Send `{"CHx relay":false}`.
-- [ ] Confirm `relay_engaged:false`.
+- [ ] Send the matching `{"rl1":false}` or `{"rl2":false}`.
+- [ ] Confirm `state.relays.rlx.engaged:false`.
 - [ ] Confirm physical relay output is OFF.
 - [ ] Change relay mode to `off`.
 - [ ] Confirm physical relay is forced OFF.
@@ -332,9 +347,9 @@ Pass criteria:
 ## 4. Accel to Run
 
 - [ ] Configure acceleration enabled.
-- [ ] Set `accel_temp` below a reachable test temperature.
-- [ ] Set `accel_power` to a visibly different value than run power.
-- [ ] Set `post_accel_power` to the expected RUN output percent.
+- [ ] Set `distillation.acceleration_end_temp` below a reachable test temperature.
+- [ ] Set `distillation.acceleration_power` to a visibly different value than run power.
+- [ ] Set `distillation.run_power` to the expected RUN output percent.
 - [ ] If a DC output is auxiliary, confirm it stays off during ACCEL/RUN unless directly commanded.
 - [ ] Set at least one relay to `acc_element` if testing AccElement.
 - [ ] Start programmed run.
@@ -342,13 +357,13 @@ Pass criteria:
 - [ ] Confirm DC tile primary value shows actual accel power.
 - [ ] Confirm queued post-accel run power appears separately as small secondary text.
 - [ ] Confirm AccElement relay engages while accel is active.
-- [ ] Heat or simulate until selected probe reaches `accel_temp`.
+- [ ] Heat or simulate until selected probe reaches `distillation.acceleration_end_temp`.
 - [ ] Confirm status changes to `RUN`.
 - [ ] Confirm queued run power becomes the primary actual power value after
       acceleration ends.
 - [ ] Confirm AccElement relay turns off.
 - [ ] Confirm telemetry publishes `accel_complete`.
-- [ ] Confirm only `element` DC outputs change to `post_accel_power`.
+- [ ] Confirm only `element` DC outputs change to `distillation.run_power`.
 
 Pass criteria:
 
@@ -372,9 +387,9 @@ Pass criteria:
 Finish temperature:
 
 - [ ] Set one device-level `finish_temp`.
-- [ ] Set `finish_temp_source` to `CH1`.
-- [ ] Confirm only CH1 can trigger finish-by-temp.
-- [ ] Repeat with `finish_temp_source` set to `CH2`.
+- [ ] Set `distillation.finish_temp_probe` to `probe1`.
+- [ ] Confirm only probe1 can trigger finish-by-temp.
+- [ ] Repeat with `distillation.finish_temp_probe` set to `probe2`.
 - [ ] Confirm `program_ended.reason:"finish_temp"`.
 
 Pass criteria:
@@ -413,7 +428,7 @@ Pass criteria:
 - [ ] Confirm `events/standard` publishes `controller_rebooted` with `reset_reason`.
 - [ ] Confirm Proof detects the reboot/reconnect.
 - [ ] Confirm Proof re-sends the active program payload.
-- [ ] Confirm Proof re-sends `{"program_running":true}` and intended power/relay state.
+- [ ] Confirm Proof re-sends `{"workflow":"distillation","strategy":"program","action":"start"}` and intended power/relay state.
 - [ ] Confirm Proof audit logs restore commands with `origin:"restore"` and
       `trigger:"reconnect_restore"`.
 - [ ] Confirm the controller returns to the intended active run state.
@@ -428,25 +443,25 @@ Pass criteria:
 
 ## 7. Cycle Relay Mode
 
-Run for CH1 and CH2.
+Run for RL1 and RL2.
 
 - [ ] Set relay mode to `cycle`.
 - [ ] Set `on_ms`.
 - [ ] Set `cycle_ms`.
 - [ ] Confirm retained config reports mode and timing.
-- [ ] Confirm live telemetry reports `relay_mode:"cycle"`.
+- [ ] Confirm live telemetry reports `state.relays.rlx.mode:"cycle"`.
 - [ ] Confirm relay starts disengaged.
-- [ ] Send `{"CHx relay":true}`.
-- [ ] Confirm `relay_engaged:true`.
+- [ ] Send the matching `{"rl1":true}` or `{"rl2":true}`.
+- [ ] Confirm `state.relays.rlx.engaged:true`.
 - [ ] Confirm physical relay blinks/cycles.
-- [ ] Confirm telemetry `relay` follows actual GPIO ON/OFF state.
-- [ ] Send `{"CHx relay":false}`.
+- [ ] Confirm telemetry `state.relays.rlx.state` follows actual GPIO ON/OFF state.
+- [ ] Send the matching `{"rl1":false}` or `{"rl2":false}`.
 - [ ] Confirm physical relay turns off and stays off.
 
 Pass criteria:
 
 - [ ] Cycle timing follows configured `on_ms` / `cycle_ms`.
-- [ ] `relay_engaged` means armed; `relay` means actual physical state.
+- [ ] `state.relays.rlx.engaged` means armed; `state.relays.rlx.state` means actual physical state.
 
 ## 7a. Proof Audit and END Decisions
 

@@ -6,7 +6,7 @@ SmartPID M5 PRO Custom Firmware
 
 Firmware: `proofpro`
 
-MQTT `schema_version`: `1`
+MQTT `schema_version`: `2`
 
 Draft date: 2026-05-29
 
@@ -52,7 +52,7 @@ builds, and boot-slot repair are covered separately in
 | Probe sample target | 1 second |
 | MQTT publish cadence | 1 second default |
 | MQTT topic root | `smartpidM5/proofpro/{topic_id}/` |
-| Current schema | `schema_version: 1` |
+| Current schema | `schema_version: 2` |
 
 ## 2. Front Panel And Power Screen
 
@@ -85,8 +85,9 @@ Display notes:
   primary value. The queued run power may appear separately as smaller
   secondary text until acceleration ends.
 - Relay tile ON/OFF follows the actual physical relay output.
-- Managed relay armed state is distinct from physical output. In MQTT,
-  `relay_engaged` means commanded or armed; `relay` means actual physical state.
+- Managed relay armed state is distinct from physical output. In MQTT
+  `state.relays.rlx.engaged` means commanded or armed; `state.relays.rlx.state`
+  means actual physical state.
 - Disabled DC or relay tiles are darkened and skipped during selection.
 
 Button guidance:
@@ -207,7 +208,7 @@ When a program is running:
 
 1. If acceleration is enabled, element DC outputs use `accel_power` until the
    acceleration threshold is reached.
-2. After acceleration, element outputs use `post_accel_power`.
+2. After acceleration, element outputs use `distillation.run_power`.
 3. Auxiliary DC outputs are excluded from automatic acceleration and run power.
    They stay off unless explicitly commanded locally or remotely.
 4. The finish timer starts when the selected runtime temperature reaches Timer
@@ -243,28 +244,32 @@ Typical remote sequence:
 1. Confirm retained `status` and `config`.
 2. Enable Remote on the controller.
 3. Send or confirm program settings.
-4. Send `{"program_running":true}` to start.
+4. Send `{"workflow":"distillation","strategy":"program","action":"start"}` to start.
 5. Send `{"heartbeat":true}` about every 10 seconds while actively controlling.
-6. Send `{"program_running":false}` to leave programmed ACCEL/RUN without a
-   full safe/off shutdown, or `{"stop":true}` for full safe/off stop.
+6. Send `{"workflow":"distillation","strategy":"manual","action":"start"}` to
+   leave programmed ACCEL/RUN without a full safe/off shutdown, or
+   `{"action":"stop"}` for full safe/off stop.
 
 Remote command distinction:
 
 | Command | Result |
 |---|---|
-| `{"program_running":true}` | Starts programmed ProofPro power control. |
-| `{"program_running":false}` | Returns to manual/live power control without forcing DC outputs to zero. |
-| `{"stop":true}` | Forces DC outputs and relays off and clears program state. |
-| `{"reset":true}` | Clears END/watchdog state; does not start a run. |
+| `{"workflow":"distillation","strategy":"program","action":"start"}` | Starts programmed ProofPro distillation control. |
+| `{"workflow":"distillation","strategy":"manual","action":"start"}` | Returns to manual/live distillation control without forcing DC outputs to zero. |
+| `{"action":"stop"}` | Forces DC outputs and relays off and clears active control state. |
+| `{"action":"reset"}` | Clears END/watchdog state; does not start a run. |
 
 Telemetry distinction:
 
 | Field | Meaning |
 |---|---|
-| `power` | Actual driven DC output percent after acceleration, watchdog, END latch, and mode effects. |
-| `run_target_power` | Queued or target run percent after acceleration. |
-| `relay` | Actual physical relay output state. |
-| `relay_engaged` | Commanded or armed relay state for managed relay modes. |
+| `state.probes.probe1` / `probe2` | Live probe readings. The device-wide unit is `status.unit`. |
+| `state.dc_outputs.dc1.power` / `dc2.power` | Actual driven DC output percent after acceleration, watchdog, END latch, and mode effects. |
+| `state.dc_outputs.dc1.target_power` / `dc2.target_power` | Queued or target run percent after acceleration where applicable. |
+| `state.relays.rl1.state` / `rl2.state` | Actual physical relay output state. |
+| `state.relays.rl1.engaged` / `rl2.engaged` | Commanded or armed relay state for managed relay modes. |
+| `state.program.running` / `ended` / `latched` | Live program state for the UI. |
+| `state.program.timer_remaining_s` | Remaining finish timer seconds. |
 
 ## 7. Parameter Settings
 
@@ -272,19 +277,21 @@ Telemetry distinction:
 
 | ProofPro label | MQTT key | Range / values | Default / note |
 |---|---|---|---|
-| Accel Mode | `acc_mode` | `true` / `false` | Enables acceleration phase |
-| Accel Temp | `accel_temp` | Temperature; `0` disables temperature transition | DSPR400 `dAST` |
-| Accel Power | `accel_power` | 0-100% | DSPR400 `dOUT` |
-| Run Power | `post_accel_power` | 0-100% | DSPR400 dial/run power |
-| Timer Start Temp | `timer_start_temp` | Temperature | DSPR400 `dtSP` |
-| Timer | `timer_s` | Seconds | Finish timer duration |
-| Finish Temp | `finish_temp` | Temperature; `0` disables finish-by-temp | DSPR400 `dFSP` |
-| Finish Temp Source | `finish_temp_source` | `CH1` or `CH2` | Selects probe for finish-by-temp |
-| Finish Action | `finish_action` | `continue`, `end`, `shutoff` | `end` latches safe/off; `shutoff` is accepted as an alias for `end` |
+| Accel Mode | `distillation.acceleration_enabled` | `true` / `false` | Enables acceleration phase |
+| Accel Temp | `distillation.acceleration_end_temp` | Temperature; `0` disables temperature transition | DSPR400 `dAST` |
+| Accel Power | `distillation.acceleration_power` | 0-100% | DSPR400 `dOUT` |
+| Run Power | `distillation.run_power` | 0-100% | DSPR400 dial/run power |
+| Timer Start Temp | `distillation.timer_start_temp` | Temperature | DSPR400 `dtSP` |
+| Timer | `distillation.timer_s` | Seconds | Finish timer duration |
+| Finish Temp | `distillation.finish_temp` | Temperature; `0` disables finish-by-temp | DSPR400 `dFSP` |
+| Finish Temp Probe | `distillation.finish_temp_probe` | `probe1` or `probe2` | Selects probe for finish-by-temp |
+| Finish Action | `distillation.finish_action` | `continue`, `end`, `shutoff` | `end` latches safe/off; `shutoff` is accepted as an alias for `end` |
+| Acceleration Relays | `distillation.acceleration_relays_enabled` | `true` / `false` | Allows `acc_element` relays during ACCEL |
 
 Program parameters are device-level. ProofPro has one finish temperature and
-one finish temperature source; there are no independent CH1/CH2 finish
-temperatures.
+one finish temperature probe; there are no independent per-probe finish
+temperatures. Proof may label `probe1` and `probe2` as Boiler, Head, or other
+installation-specific names, but MQTT uses `probe1` and `probe2`.
 
 ### 7.2 DC Output Modes
 
@@ -365,7 +372,7 @@ Example settings:
 | Timer Start Temp | 173 F |
 | Timer | 3:00:00 |
 | Finish Temp | 200 F |
-| Finish Source | CH1 or CH2, depending on probe installation |
+| Finish Temp Probe | `probe1` or `probe2`, depending on probe installation |
 | Finish Action | `end` |
 
 Operating sequence:
@@ -400,7 +407,7 @@ Example based on bench Run C:
 | Timer Start Temp | 155 F |
 | Timer | 60 seconds |
 | Finish Action | `end` |
-| Relay example | CH1 `acc_element`, CH2 `remote_other` |
+| Relay example | RL1 `acc_element`, RL2 `remote_other` |
 
 Expected result:
 
@@ -411,7 +418,7 @@ Expected result:
    `reason:"finish_timer"`.
 5. DC1/DC2 are 0%, RL1/RL2 are off, and Remote returns from `ON` to `RDY`.
 
-### 8.3 Finish Temp Source CH1
+### 8.3 Finish Temp Probe 1
 
 Example based on bench Run D:
 
@@ -419,14 +426,14 @@ Example based on bench Run D:
 |---|---|
 | Accel Mode | Disabled |
 | Finish Temp | 175 F |
-| Finish Source | CH1 |
+| Finish Temp Probe | `probe1` |
 | Timer | 300 seconds |
 | Finish Action | `end` |
 
-Only CH1 can trigger finish-by-temp. The expected END reason is
+Only probe1 can trigger finish-by-temp. The expected END reason is
 `finish_temp`.
 
-### 8.4 Finish Temp Source CH2
+### 8.4 Finish Temp Probe 2
 
 Example based on bench Run E:
 
@@ -434,11 +441,11 @@ Example based on bench Run E:
 |---|---|
 | Accel Mode | Disabled |
 | Finish Temp | 190 F |
-| Finish Source | CH2 |
+| Finish Temp Probe | `probe2` |
 | Timer | 300 seconds |
 | Finish Action | `end` |
 
-Only CH2 can trigger finish-by-temp. The expected END reason is
+Only probe2 can trigger finish-by-temp. The expected END reason is
 `finish_temp`.
 
 ### 8.5 Cycle Relay
@@ -450,11 +457,11 @@ Example based on bench Run F:
 | Relay mode | `cycle` |
 | ON time | `on_ms = 1000` |
 | Cycle period | `cycle_ms = 5000` |
-| Relay command | `CHx relay = true` |
+| Relay command | `rl1` or `rl2` = `true` |
 
-In cycle mode, `relay_engaged:true` means the cycle is armed. The physical
-`relay` field still alternates between ON and OFF according to the configured
-cycle timing.
+In cycle mode, `state.relays.rlx.engaged:true` means the cycle is armed. The
+physical `state.relays.rlx.state` field still alternates between ON and OFF
+according to the configured cycle timing.
 
 ### 8.6 Manual Regulator Mode
 
@@ -463,11 +470,12 @@ To use ProofPro like a manual power regulator:
 1. Disable acceleration or leave the program stopped.
 2. Set the desired DC output mode. Use `element` for the main output or
    `auxiliary` for a direct/manual output.
-3. Adjust power from the Power screen or send live `CHx power` commands from
+3. Adjust power from the Power screen or send live `dc1_power` / `dc2_power` commands from
    Proof.
-4. Watch actual `power` telemetry and the large DC tile value. Do not confuse
-   retained Run Power with actual driven output.
-5. Use `stop` or local controls to force outputs safe/off when finished.
+4. Watch actual `state.dc_outputs.dcx.power` telemetry and the large DC tile
+   value. Do not confuse retained Run Power with actual driven output.
+5. Use `{"action":"stop"}` or local controls to force outputs safe/off when
+   finished.
 
 ## 9. Troubleshooting
 
@@ -477,8 +485,8 @@ To use ProofPro like a manual power regulator:
 | Proof command does not affect output | Remote is `OFF`, output mode is `off`, or command is not accepted in current mode | Enable Remote, check retained config, and confirm live telemetry. |
 | Remote shows `RDY` but not `ON` | Remote is enabled but Proof has not started an active session | Send heartbeat or a valid remote command. |
 | Watchdog safe state | Proof heartbeat or accepted remote traffic stopped for longer than `watchdog_s` | Inspect MQTT connection, then send an accepted command or reset after confirming the process is safe. |
-| Relay shows armed but not physically ON | Relay mode may be `cycle` or `acc_element`; `relay_engaged` is not the same as `relay` | Check both `relay_engaged` and `relay` telemetry. |
-| Power tile shows 0 after stop while Run Power remains configured | `stop` forces actual output safe/off but does not erase saved program defaults | This is normal. Confirm `power`, not only `post_accel_power`. |
+| Relay shows armed but not physically ON | Relay mode may be `cycle` or `acc_element`; `state.relays.rlx.engaged` is not the same as `state.relays.rlx.state` | Check both engaged and state telemetry. |
+| Power tile shows 0 after stop while Run Power remains configured | `action:"stop"` forces actual output safe/off but does not erase saved program defaults | This is normal. Confirm `state.dc_outputs.dcx.power`, not only retained `distillation.run_power`. |
 | DC OUT 1 energizes during USB flashing attempt | GPIO12 boot strapping / USB auto-reset hazard | Disconnect hazardous loads. Use OTA for normal updates. See the technical recovery manual for bench recovery. |
 | Output state is uncertain | Need output readback | Send `{"diagnostics":"outputs"}` or use the serial `diag` command on the bench. |
 
@@ -520,7 +528,11 @@ Expected status shape:
 {
   "serial": "000C3BA7C0E8FC",
   "firmware": "proofpro",
-  "schema_version": 1,
+  "firmware_version": "0.3.0",
+  "schema_version": 2,
+  "device_state": "online",
+  "workflow": "idle",
+  "strategy": "manual",
   "unit": "F",
   "remote_enabled": true,
   "remote_state": "RDY",
@@ -572,12 +584,14 @@ Current bench topic ID:
 |---|---|---|
 | `status` | Yes | Device identity, unit, firmware/schema, Remote state, watchdog settings |
 | `config` | Yes | Program defaults, DC output modes, clock readback, relay modes/timing |
-| `power/CH1` | No | CH1 power-mode telemetry |
-| `power/CH2` | No | CH2 power-mode telemetry |
+| `state` | No | Live UI telemetry for probes, DC outputs, relays, and program state |
 | `events/standard` | No | Device and channel events |
 
 Legacy `dynamic/CH1`, `dynamic/CH2`, and `events/advanced` may exist for
-compatibility. ProofPro custom workflow should prefer `power/CHx`.
+compatibility. Legacy `power/CH1` and `power/CH2` may also be published for
+older integrations, but ProofPro v2 should use `state`.
+
+In this appendix, `dcx` means `dc1` or `dc2`, and `rlx` means `rl1` or `rl2`.
 
 ### A.3 Subscribed Topics
 
@@ -603,61 +617,64 @@ Heartbeat:
 Start programmed run:
 
 ```json
-{"program_running": true}
+{"workflow": "distillation", "strategy": "program", "action": "start"}
 ```
 
-Leave programmed run without full safe/off stop:
+Enter manual distillation without full safe/off stop:
 
 ```json
-{"program_running": false}
+{"workflow": "distillation", "strategy": "manual", "action": "start"}
 ```
 
 Full safe/off stop:
 
 ```json
-{"stop": true}
+{"action": "stop"}
 ```
 
 Reset END/watchdog state:
 
 ```json
-{"reset": true}
+{"action": "reset"}
 ```
 
 Program settings:
 
 ```json
 {
-  "acc_mode": true,
-  "accel_temp": 170,
-  "accel_power": 100,
-  "post_accel_power": 35,
-  "timer_start_temp": 170,
-  "timer_s": 3600,
-  "finish_temp": 200,
-  "finish_temp_source": "CH1",
-  "finish_action": "end"
+  "distillation": {
+    "acceleration_enabled": true,
+    "acceleration_end_temp": 170,
+    "acceleration_power": 100,
+    "run_power": 35,
+    "timer_start_temp": 170,
+    "timer_s": 3600,
+    "finish_temp": 200,
+    "finish_temp_probe": "probe1",
+    "finish_action": "end",
+    "acceleration_relays_enabled": true
+  }
 }
 ```
 
 DC output commands:
 
 ```json
-{"DC1 dc_mode": "element", "DC2 dc_mode": "auxiliary"}
+{"dc1_mode": "element", "dc2_mode": "auxiliary"}
 ```
 
 ```json
-{"CH1 power": 35}
+{"dc1_power": 35}
 ```
 
 Relay mode and command:
 
 ```json
-{"CH1 relay_mode": "cycle", "CH1 on_ms": 1000, "CH1 cycle_ms": 5000}
+{"rl1_mode": "cycle", "rl1_on_ms": 1000, "rl1_cycle_ms": 5000}
 ```
 
 ```json
-{"CH1 relay": true}
+{"rl1": true}
 ```
 
 Watchdog:
@@ -697,15 +714,17 @@ Explicit safe/off stop plays three 1800 Hz tones, 0.5 seconds each, with
 | Field | Meaning |
 |---|---|
 | `remote_state` | `OFF`, `RDY`, or `ON`; see Section 5.1. |
-| `program_running` | `true` when a channel is under ProofPro ACCEL/RUN/END logic; `false` in manual/live mode. |
-| `power` | Actual driven DC output percent. |
-| `run_target_power` | Queued/target run percent after acceleration. |
-| `relay` | Actual physical relay output. |
-| `relay_engaged` | Commanded/armed relay state. |
-| `ended` | Device/program END state reflected in telemetry. |
-| `latched` | Outputs are latched safe/off until reset/start. |
-| `timer_remaining_s` | Remaining finish timer seconds; freezes if END occurs early. |
-| `timer_frozen` | Timer display has frozen because END occurred before timer expiry. |
+| `workflow` | Current device workflow, normally `idle` or `distillation`. |
+| `strategy` | Current strategy, normally `manual` or `program`. |
+| `state.dc_outputs.dcx.power` | Actual driven DC output percent. |
+| `state.dc_outputs.dcx.target_power` | Queued/target run percent after acceleration. |
+| `state.relays.rlx.state` | Actual physical relay output. |
+| `state.relays.rlx.engaged` | Commanded/armed relay state. |
+| `state.program.running` | `true` when ProofPro ACCEL/RUN/END logic is active. |
+| `state.program.ended` | Device/program END state reflected in telemetry. |
+| `state.program.latched` | Outputs are latched safe/off until reset/start. |
+| `state.program.timer_remaining_s` | Remaining finish timer seconds; freezes if END occurs early. |
+| `state.program.timer_frozen` | Timer display has frozen because END occurred before timer expiry. |
 
 ### A.6 Remote Gating
 
@@ -713,16 +732,13 @@ Accepted regardless of Remote:
 
 - `status`
 - `heartbeat`
-- `stop`
-- `pause`
-- `resume`
-- `reset`
+- `action:"stop"`
+- `action:"reset"`
 - `chirp` / `audio:"chirp"`
 
 Require Remote enabled:
 
-- `program_running`
-- `start`
+- workflow `action:"start"`
 - output power commands
 - relay commands
 - program parameter writes
@@ -782,16 +798,16 @@ future firmware `source` field as `firmware_source` when present. Do not require
 
 | DSPR400 concept | ProofPro setting / field | Notes |
 |---|---|---|
-| Distilling power / dial power, for example `P30` | Run Power / `post_accel_power` | Element output after acceleration |
-| `dAST` | Accel Temp / `accel_temp` | Acceleration end temperature |
-| `dOUT` | Accel Power / `accel_power` | Element output during acceleration |
-| `dtSP` | Timer Start Temp / `timer_start_temp` | Temperature that starts finish timer |
-| `dt` | Timer / `timer_s` | Finish timer duration |
-| `dFSP` | Finish Temp / `finish_temp` | Device-level finish threshold |
-| Finish source | Finish Temp Source / `finish_temp_source` | `CH1` or `CH2` |
-| `dEO` / finish behavior | Finish Action / `finish_action` | `continue`, `end`, or `shutoff` alias |
-| Main element | `dc_outputs.DCx.mode:"element"` | Uses accel/run program power |
-| Auxiliary element | `dc_outputs.DCx.mode:"auxiliary"` | Manual/direct output |
+| Distilling power / dial power, for example `P30` | Run Power / `distillation.run_power` | Element output after acceleration |
+| `dAST` | Accel Temp / `distillation.acceleration_end_temp` | Acceleration end temperature |
+| `dOUT` | Accel Power / `distillation.acceleration_power` | Element output during acceleration |
+| `dtSP` | Timer Start Temp / `distillation.timer_start_temp` | Temperature that starts finish timer |
+| `dt` | Timer / `distillation.timer_s` | Finish timer duration |
+| `dFSP` | Finish Temp / `distillation.finish_temp` | Device-level finish threshold |
+| Finish source | Finish Temp Probe / `distillation.finish_temp_probe` | `probe1` or `probe2` |
+| `dEO` / finish behavior | Finish Action / `distillation.finish_action` | `continue`, `end`, or `shutoff` alias |
+| Main element | `config.dc_outputs.dcx.mode:"element"` | Uses accel/run program power |
+| Auxiliary element | `config.dc_outputs.dcx.mode:"auxiliary"` | Manual/direct output |
 | Auxiliary acceleration relay | Relay mode `acc_element` | May be operator-disengaged |
 | Reflux/cycle relay | Relay mode `cycle` | Uses `on_ms` and `cycle_ms` |
 | Remote relay/manual test | Relay mode `remote_other` | Proof direct relay control |
