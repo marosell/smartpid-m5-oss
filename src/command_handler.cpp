@@ -346,8 +346,11 @@ static void setDeviceWatchdogFired(ChannelState* ch1, ChannelState* ch2, bool fi
 
 static void noteRemoteActivity(ChannelState* ch1, ChannelState* ch2, TelemetryPublisher* tele) {
     if (!gMqttRemoteEnabled) return;
-    setMqttRemoteActiveInternal(true);
     gLastMqttMsgMs = millis();
+    const bool programActive =
+        (ch1 && ch1->programRunning) ||
+        (ch2 && ch2->programRunning);
+    setMqttRemoteActiveInternal(programActive);
     if (gWatchdogFired) {
         setDeviceWatchdogFired(ch1, ch2, false);
         if (tele) tele->publishEventTyped("watchdog cleared", "watchdog_cleared");
@@ -1196,7 +1199,6 @@ void CommandHandler::_cmdStart(const char* modeStr, int ch1Profile, int ch2Profi
 // Loads saved power params from config into channel state.
 void CommandHandler::_cmdStartPower() {
     log_i("[CMD] start: power");
-    noteRemoteActivity(_ch[0], _ch[1], _tele);
     requestAlert(AlertKind::ProgramStart);
 
     for (int i = 0; i < 2; i++) {
@@ -1221,6 +1223,7 @@ void CommandHandler::_cmdStartPower() {
         ch->relay_command = (ch->relay_mode == RelayMode::ACC_SYNC);
     }
 
+    noteRemoteActivity(_ch[0], _ch[1], _tele);
     _tele->publishEventTyped("start power", "program_started");
     _cfg->saveRunState(0, 0, false, false);
 }
@@ -1236,7 +1239,6 @@ void CommandHandler::_cmdSetProgramRunning(bool running) {
     }
 
     log_i("[CMD] program_running → false");
-    noteRemoteActivity(_ch[0], _ch[1], _tele);
     profiles.stop(0, *_ch[0]);
     profiles.stop(1, *_ch[1]);
     for (int i = 0; i < 2; i++) {
@@ -1260,6 +1262,8 @@ void CommandHandler::_cmdSetProgramRunning(bool running) {
             ch->relay_state = false;
         }
     }
+    setMqttRemoteActiveInternal(false);
+    gLastMqttMsgMs = 0;
     _tele->publishEventTyped("program manual", "program_manual");
     _cfg->saveRunState((uint8_t)Runmode::POWER_DIRECT,
                        (uint8_t)Runmode::POWER_DIRECT,
@@ -1964,6 +1968,9 @@ void CommandHandler::tick() {
             _tele->publishEventTyped("watchdog cleared", "watchdog_cleared");
         }
         setMqttRemoteActiveInternal(false);
+    } else if (mqttRemoteActive() && !(_ch[0]->programRunning || _ch[1]->programRunning)) {
+        setMqttRemoteActiveInternal(false);
+        gLastMqttMsgMs = 0;
     } else if (mqttRemoteActive() && _cfg->pwr_wdog_enabled && gLastMqttMsgMs > 0) {
         unsigned long elapsed = now - gLastMqttMsgMs;
         bool timedOut = (elapsed > (unsigned long)_cfg->pwr_wdog_s * 1000UL);
