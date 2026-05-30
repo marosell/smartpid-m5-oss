@@ -79,11 +79,16 @@ smartpid-m5-oss/
 
 See [docs/BUILDING.md](docs/BUILDING.md) for the current build target and
 recovery rules.
+See [docs/PROOFPRO_MQTT_V2_CHECKLIST.md](docs/PROOFPRO_MQTT_V2_CHECKLIST.md)
+for the short Proof MQTT integration checklist.
+See [docs/PROOFPRO_MODE_MODEL.md](docs/PROOFPRO_MODE_MODEL.md) for the target
+device/workflow/strategy vocabulary that will guide future MQTT schema changes.
 
 ```bash
 cd smartpid-m5-oss
 pio run                            # current hardware build: OEM layout
 pio run -e desktop                 # desktop emulator build
+pio test -e test-native            # fast native schema tests
 pio device monitor                 # serial console (115200 baud)
 ```
 
@@ -158,9 +163,13 @@ Topics: `smartpidM5/proofpro/<topic_id>/`
 | Topic suffix | Direction | Content |
 |---|---|---|
 | `status` | publish | Retained device identity/status JSON |
-| `power/CH1`, `power/CH2` | publish | Power-mode telemetry |
+| `config` | publish | Retained ProofPro v2 config defaults |
+| `state` | publish | Live ProofPro v2 telemetry |
+| `events/standard` | publish | Events and command errors |
 | `commands` | subscribe | JSON command dispatch |
 
+Short Proof integration checklist is in
+[docs/PROOFPRO_MQTT_V2_CHECKLIST.md](docs/PROOFPRO_MQTT_V2_CHECKLIST.md).
 Full command reference is in [docs/MQTT_SCHEMA.md](docs/MQTT_SCHEMA.md).
 
 ---

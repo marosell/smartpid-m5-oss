@@ -6,10 +6,13 @@ short and current. The canonical human docs are:
 - `README.md` - project overview, build/flash commands, first-flash safety
 - `docs/WIRING.md` - hardware, wiring, probe, and bench facts
 - `docs/MQTT_SCHEMA.md` - current ProofPro MQTT topic and command schema
+- `docs/PROOFPRO_MQTT_V2_CHECKLIST.md` - short Proof MQTT v2 integration checklist
+- `docs/PROOFPRO_MODE_MODEL.md` - target device/workflow/strategy vocabulary
 - `docs/WORKPLAN.md` - active status and next bench tests
 - `docs/BUILDING.md` - current build target, OTA command, installer builds
 - `docs/COMMISSIONING.md` - first boot, captive portal, OTA update flow
 - `docs/FIRMWARE_SWITCHING.md` - research note for OEM/custom switching
+- `docs/MQTT_RECOVERY_COMMANDS.md` - recovery/installer MQTT commands
 
 ## Current Product Direction
 
@@ -20,7 +23,7 @@ workflow. The active workflow is:
 - Power screen first
 - local/manual control for DC1/DC2 and RL1/RL2
 - Remote toggle gates MQTT output/program commands
-- power telemetry on `smartpidM5/proofpro/{topic_id}/power/CH1` and `power/CH2`
+- schema v2 live telemetry on `smartpidM5/proofpro/{topic_id}/state`
 - simple program states: manual, acceleration, running, ended
 
 OEM behavior is still useful for constants, hardware facts, MQTT compatibility,
@@ -60,6 +63,7 @@ DC OUT 1 is LOW. OTA updates do not exercise the USB boot strapping path.
 pio run
 pio run -t upload --upload-port 10.0.1.60
 pio device monitor --port /dev/cu.usbserial-58690003391 --baud 115200
+pio test -e test-native
 pio test -e test
 ```
 
@@ -77,7 +81,7 @@ pio run -e desktop
   boot. No WiFiManager dependency is used.
 - MQTT topic base is `smartpidM5/proofpro/`.
 - Retained status publishes on connect and on `{"status": true}`.
-- Power telemetry default cadence is 6 seconds (`cfg.sample_s`).
+- State telemetry default cadence is 6 seconds (`cfg.sample_s`).
 - Probe sample target is 2 seconds.
 - Sensor values outside 0C..120C are treated as process errors; UI shows `ERR`.
 - `status`, `stop`, `pause`, `resume`, and `reset` are accepted regardless of
