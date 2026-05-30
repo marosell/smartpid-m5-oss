@@ -34,12 +34,11 @@ private:
     void _handleRoot();
     void _handleHealthz();
     void _handleStatus();
-    void _handleConfig();
-    void _handleCommand();
+    void _handleConfigSummary();
     void _handleNotFound();
 
     String _statusJson() const;
-    String _configJson() const;
+    String _configSummaryJson() const;
     String _htmlPage() const;
 };
 

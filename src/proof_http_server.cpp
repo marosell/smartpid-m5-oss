@@ -28,8 +28,7 @@ void ProofHttpServer::begin(Config& cfg,
     _server.on("/", HTTP_GET, [this] { _handleRoot(); });
     _server.on("/healthz", HTTP_GET, [this] { _handleHealthz(); });
     _server.on("/status", HTTP_GET, [this] { _handleStatus(); });
-    _server.on("/config", HTTP_GET, [this] { _handleConfig(); });
-    _server.on("/commands", HTTP_POST, [this] { _handleCommand(); });
+    _server.on("/debug/config-summary", HTTP_GET, [this] { _handleConfigSummary(); });
     _server.onNotFound([this] { _handleNotFound(); });
     _server.begin();
     _running = true;
@@ -53,44 +52,8 @@ void ProofHttpServer::_handleStatus() {
     _server.send(200, "application/json", _statusJson());
 }
 
-void ProofHttpServer::_handleConfig() {
-    _server.send(200, "application/json", _configJson());
-}
-
-void ProofHttpServer::_handleCommand() {
-    if (!_commands) {
-        _server.send(503, "application/json", "{\"ok\":false,\"error\":\"commands_unavailable\"}");
-        return;
-    }
-
-    String body = _server.arg("plain");
-    body.trim();
-    if (body.length() == 0) {
-        _server.send(400, "application/json", "{\"ok\":false,\"error\":\"empty_body\"}");
-        return;
-    }
-
-    JsonDocument doc;
-    DeserializationError err = deserializeJson(doc, body);
-    if (err) {
-        JsonDocument out;
-        out["ok"] = false;
-        out["error"] = "invalid_json";
-        out["detail"] = err.c_str();
-        String payload;
-        serializeJson(out, payload);
-        _server.send(400, "application/json", payload);
-        return;
-    }
-
-    _commands->handle(reinterpret_cast<const uint8_t*>(body.c_str()), body.length());
-    JsonDocument out;
-    out["ok"] = true;
-    out["source"] = "http";
-    out["status"] = "/status";
-    String payload;
-    serializeJson(out, payload);
-    _server.send(202, "application/json", payload);
+void ProofHttpServer::_handleConfigSummary() {
+    _server.send(200, "application/json", _configSummaryJson());
 }
 
 void ProofHttpServer::_handleNotFound() {
@@ -147,8 +110,9 @@ String ProofHttpServer::_statusJson() const {
     return payload;
 }
 
-String ProofHttpServer::_configJson() const {
+String ProofHttpServer::_configSummaryJson() const {
     JsonDocument doc;
+    doc["diagnostic_only"] = true;
     if (_cfg) {
         JsonObject program = doc["program"].to<JsonObject>();
         program["acc_mode"] = _cfg->pwr_acc_mode;
@@ -190,7 +154,7 @@ String ProofHttpServer::_configJson() const {
 
 String ProofHttpServer::_htmlPage() const {
     String page;
-    page.reserve(1800);
+    page.reserve(1400);
     page += F("<!doctype html><html><head><meta charset='utf-8'>");
     page += F("<meta name='viewport' content='width=device-width,initial-scale=1'>");
     page += F("<title>ProofPro</title><style>");
@@ -214,10 +178,7 @@ String ProofHttpServer::_htmlPage() const {
     page += F("</div></div><div class='box'><div class='k'>Watchdog</div><div class='v'>");
     page += (_cfg && _cfg->pwr_wdog_enabled) ? String(_cfg->pwr_wdog_s) + "s" : "Off";
     page += F("</div></div></div>");
-    page += F("<p><a href='/status'>/status</a> · <a href='/config'>/config</a> · <a href='/healthz'>/healthz</a></p>");
-    page += F("<h2>Command</h2><form method='post' action='/commands'>");
-    page += F("<textarea name='plain'>{\"status\":true}</textarea><p><button type='submit'>Send</button></p></form>");
-    page += F("<p class='muted'>HTTP commands use the same JSON schema as MQTT commands.</p>");
+    page += F("<p><a href='/status'>/status</a> · <a href='/healthz'>/healthz</a></p>");
     page += F("</body></html>");
     return page;
 }
