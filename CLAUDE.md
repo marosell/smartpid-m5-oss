@@ -130,6 +130,9 @@ When old research conflicts with active docs, use this authority order:
 ## Development Rules
 
 - Do not revert the board target to Core2.
+- Do not run `pio run -e m5stack-core-esp32-16M` for normal verification. Use
+  plain `pio run` or `pio run -e m5stack-core-esp32-16M-oem-layout`; the
+  unqualified env is guarded as legacy large-slot work only.
 - Do not introduce WiFiManager unless the project explicitly decides to replace
   the current built-in captive portal.
 - Do not change GPIO/output mapping without updating `docs/WIRING.md`.

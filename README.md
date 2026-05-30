@@ -89,7 +89,9 @@ pio device monitor                 # serial console (115200 baud)
 
 For hardware agents: do not use `m5stack-core-esp32-16M` for normal ProofPro
 hardware builds unless you are intentionally working on the legacy large-slot
-layout. Converted devices use the OEM-compatible layout:
+layout. PlatformIO rejects direct legacy-layout builds unless
+`ALLOW_LEGACY_LARGE_SLOT=1` is set. Converted devices use the OEM-compatible
+layout:
 
 ```text
 app0  ota_0  0x010000  0x1f0000  ProofPro

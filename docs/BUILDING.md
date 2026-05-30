@@ -27,6 +27,13 @@ eeprom  data    0x3ff000  0x001000  OEM authorization/settings data
 Do not build or OTA `m5stack-core-esp32-16M` to converted hardware unless the
 task explicitly says to work on the legacy large-slot layout.
 
+PlatformIO has a pre-build guard on the legacy large-slot environment. A direct
+build of `m5stack-core-esp32-16M` fails unless the override below is present:
+
+```bash
+ALLOW_LEGACY_LARGE_SLOT=1 pio run -e m5stack-core-esp32-16M
+```
+
 ## OTA To Hardware
 
 When ProofPro is running and connected to WiFi:
