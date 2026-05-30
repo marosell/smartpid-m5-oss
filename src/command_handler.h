@@ -5,8 +5,16 @@
 // config plus channel state.
 //
 // New POWER_DIRECT commands (our extension):
+//   {"workflow":"distillation","strategy":"program","action":"start"}
+//   {"workflow":"distillation","strategy":"manual","action":"start"}
+//   {"action":"stop"} / {"action":"reset"} Mode-model aliases
 //   {"program_running": bool}               Start/leave programmed power run
 //   {"start": "power"}                      Legacy alias for program_running=true
+//   {"dc1_power": N} / {"dc2_power": N}      Resource aliases for DC output power
+//   {"dc1_mode": "..."} / {"dc2_mode": "..."}  Resource aliases for DC output role
+//   {"rl1": bool} / {"rl2": bool}            Resource aliases for relay command
+//   {"rl1_mode": "..."} / {"rl2_mode": "..."}  Resource aliases for relay mode
+//   {"distillation": {...}}                  Process-shaped program aliases
 //   {"CHx power": N}                        DC OUT duty % target (0–100)
 //   {"acc_mode": bool}                      Enable/disable acceleration phase
 //   {"CHx relay_mode": "off"/"acc_element"/"remote_other"/"cycle"}
@@ -41,6 +49,13 @@ bool mqttRemoteEnabled();
 bool mqttRemoteActive();
 void setMqttRemoteEnabled(bool enabled);
 bool accElementsEnabled();
+const char* proofDeviceState();
+const char* proofWorkflow();
+const char* proofStrategy();
+
+#ifdef UNIT_TEST
+bool commandPayloadAliasesValidForTest(const char* payload);
+#endif
 
 class CommandHandler {
 public:

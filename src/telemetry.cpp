@@ -59,6 +59,84 @@ static uint32_t telemetryTimerRemainingSeconds(const ChannelState& ch) {
     return elapsed >= ch.timer_duration_s ? 0 : (ch.timer_duration_s - elapsed);
 }
 
+static bool telemetryRelayEngaged(const ChannelState& ch) {
+    switch (ch.relay_mode) {
+        case RelayMode::ACC_SYNC:
+        case RelayMode::REFLUX_TIMER:
+        case RelayMode::REMOTE:
+        case RelayMode::LOCAL_ON_OFF:
+            return ch.relay_command;
+        case RelayMode::OFF:
+            return false;
+    }
+    return false;
+}
+
+static String buildStatePayload(Config& cfg, const ChannelState& ch1, const ChannelState& ch2,
+                                uint32_t bootSeconds) {
+    JsonDocument doc;
+
+    doc["time"] = bootSeconds;
+    doc["unit"] = cfg.temp_unit;
+    doc["device_state"] = proofDeviceState();
+    const char* workflow = proofWorkflow();
+    const char* strategy = proofStrategy();
+    doc["workflow"] = workflow ? workflow : nullptr;
+    doc["strategy"] = strategy ? strategy : nullptr;
+    doc["remote_enabled"] = mqttRemoteEnabled();
+    doc["remote_state"] = !mqttRemoteEnabled() ? "OFF" : (mqttRemoteActive() ? "ON" : "RDY");
+
+    JsonObject probes = doc["probes"].to<JsonObject>();
+    JsonObject probe1 = probes["probe1"].to<JsonObject>();
+    probe1["temp"] = ch1.temp;
+    probe1["temp_valid"] = tempInProcessRange(ch1.temp, cfg.temp_unit);
+    JsonObject probe2 = probes["probe2"].to<JsonObject>();
+    probe2["temp"] = ch2.temp;
+    probe2["temp_valid"] = tempInProcessRange(ch2.temp, cfg.temp_unit);
+
+    JsonObject dcOutputs = doc["dc_outputs"].to<JsonObject>();
+    JsonObject dc1 = dcOutputs["dc1"].to<JsonObject>();
+    dc1["mode"] = dcOutputModeStr(normalizeDcOutputMode(cfg.pwr_dc1_mode));
+    dc1["power"] = ch1.power_pct;
+    dc1["target_power"] = ch1.distill_power_pct;
+    JsonObject dc2 = dcOutputs["dc2"].to<JsonObject>();
+    dc2["mode"] = dcOutputModeStr(normalizeDcOutputMode(cfg.pwr_dc2_mode));
+    dc2["power"] = ch2.power_pct;
+    dc2["target_power"] = ch2.distill_power_pct;
+
+    JsonObject relays = doc["relays"].to<JsonObject>();
+    JsonObject rl1 = relays["rl1"].to<JsonObject>();
+    rl1["mode"] = relayModeStr(ch1.relay_mode);
+    rl1["state"] = ch1.relay_state;
+    rl1["engaged"] = telemetryRelayEngaged(ch1);
+    JsonObject rl2 = relays["rl2"].to<JsonObject>();
+    rl2["mode"] = relayModeStr(ch2.relay_mode);
+    rl2["state"] = ch2.relay_state;
+    rl2["engaged"] = telemetryRelayEngaged(ch2);
+
+    JsonObject program = doc["program"].to<JsonObject>();
+    program["running"] = ch1.programRunning || ch2.programRunning;
+    program["ended"] = ch1.finishEnd || ch2.finishEnd;
+    program["latched"] = ch1.finishLatch || ch2.finishLatch;
+    program["acc_elements_enabled"] = accElementsEnabled();
+    program["finish_temp_source"] = (cfg.pwr_dfsp_source == 2) ? "probe2" : "probe1";
+    program["timer_remaining_s"] = min(telemetryTimerRemainingSeconds(ch1),
+                                       telemetryTimerRemainingSeconds(ch2));
+    program["timer_frozen"] = ch1.timerFrozen || ch2.timerFrozen;
+
+    String payload;
+    serializeJson(doc, payload);
+    return payload;
+}
+
+#ifdef UNIT_TEST
+String telemetryStatePayloadForTest(Config& cfg,
+                                    const ChannelState& ch1,
+                                    const ChannelState& ch2) {
+    return buildStatePayload(cfg, ch1, ch2, 1);
+}
+#endif
+
 // ── begin ─────────────────────────────────────────────────────────────────────
 void TelemetryPublisher::begin(Config& cfg, MQTTManager& mqtt) {
     _cfg  = &cfg;
@@ -86,8 +164,10 @@ void TelemetryPublisher::loop(const ChannelState& ch1, const ChannelState& ch2) 
     bool timeToTick = (now - _lastTickMs >= intervalMs);
     if (!timeToTick && !_forceTick) return;
 
-    // KEY BEHAVIORAL NOTE: Idle state publishes NO telemetry.
-    // Only publish when at least one channel is in a non-IDLE mode.
+    _publishState(ch1, ch2);
+
+    // Legacy channel topics publish only when at least one channel is in a
+    // non-IDLE mode. The resource-oriented state topic above is always-on.
     bool ch1Active = (ch1.runmode != Runmode::IDLE);
     bool ch2Active = (ch2.runmode != Runmode::IDLE);
 
@@ -96,6 +176,14 @@ void TelemetryPublisher::loop(const ChannelState& ch1, const ChannelState& ch2) 
 
     _lastTickMs = now;
     _forceTick  = false;
+}
+
+void TelemetryPublisher::_publishState(const ChannelState& ch1, const ChannelState& ch2) {
+    String payload = buildStatePayload(*_cfg, ch1, ch2, bootSeconds());
+    String topic = _mqtt->fullTopic("state");
+    _mqtt->publish(topic.c_str(), payload.c_str(), /*retained=*/false);
+
+    log_d("[TELE] state: %s", payload.c_str());
 }
 
 // ── _publishChannel ───────────────────────────────────────────────────────────
@@ -113,6 +201,11 @@ void TelemetryPublisher::_publishChannel(const char* chName, const ChannelState&
     doc["temp"] = ch.temp;
     doc["temp_valid"] = tempInProcessRange(ch.temp, _cfg->temp_unit);
     doc["unit"] = _cfg->temp_unit;
+    doc["device_state"] = proofDeviceState();
+    const char* workflow = proofWorkflow();
+    const char* strategy = proofStrategy();
+    doc["workflow"] = workflow ? workflow : nullptr;
+    doc["strategy"] = strategy ? strategy : nullptr;
 
     if (ch.runmode == Runmode::POWER_DIRECT) {
         // Power mode: unique payload with power field, no PID fields

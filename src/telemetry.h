@@ -2,6 +2,7 @@
 // telemetry.h — Dynamic telemetry publisher and event publisher
 //
 // Publishes to:
+//   smartpidM5/proofpro/<id>/state          — always-on device/resource state (NOT retained)
 //   smartpidM5/proofpro/<id>/power/CH1      — power-mode CH1 data (NOT retained)
 //   smartpidM5/proofpro/<id>/power/CH2      — power-mode CH2 data (NOT retained)
 //   smartpidM5/proofpro/<id>/dynamic/CH1    — legacy-mode CH1 data (NOT retained)
@@ -10,7 +11,8 @@
 //   smartpidM5/proofpro/<id>/events/advanced
 //
 // Timing:
-//   - CH1 + CH2 publish on the same tick, every cfg.sample_s seconds
+//   - state publishes every cfg.sample_s seconds, including while idle
+//   - CH1 + CH2 publish on the same tick when channel topics are active
 //   - "time" field = seconds since boot (monotonic via millis())
 //   - Tick aligned to real seconds (not drift-accumulating)
 //
@@ -85,7 +87,14 @@ private:
     unsigned long _lastTickMs = 0;
     bool          _forceTick  = false;
 
+    void _publishState(const ChannelState& ch1, const ChannelState& ch2);
     void _publishChannel(const char* chName, const ChannelState& ch);
 };
 
 extern TelemetryPublisher telemetry;
+
+#ifdef UNIT_TEST
+String telemetryStatePayloadForTest(Config& cfg,
+                                    const ChannelState& ch1,
+                                    const ChannelState& ch2);
+#endif

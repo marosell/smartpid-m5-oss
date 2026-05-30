@@ -2,6 +2,9 @@
 
 Firmware flavor: ProofPro custom SmartPID M5 firmware.
 
+Short Proof integration checklist: `docs/PROOFPRO_MQTT_V2_CHECKLIST.md`.
+Recovery/installer MQTT commands: `docs/MQTT_RECOVERY_COMMANDS.md`.
+
 Topic root:
 
 ```text
@@ -22,11 +25,14 @@ Retained. Published on MQTT connect and in response to `{"status": true}`.
   "SSID": "Chaos",
   "client": "10.0.1.60",
   "firmware": "proofpro",
-  "firmware_version": "0.2.0",
-  "schema_version": 1,
+  "firmware_version": "0.3.0",
+  "schema_version": 2,
   "unit": "F",
   "remote_enabled": true,
   "remote_state": "RDY",
+  "device_state": "idle",
+  "workflow": null,
+  "strategy": null,
   "auto_resume_enabled": true,
   "watchdog_enabled": true,
   "watchdog_s": 30
@@ -44,6 +50,16 @@ Retained. Published on MQTT connect and in response to `{"status": true}`.
   - `RDY`: Remote enabled; firmware is ready to accept Proof commands.
   - `ON`: active Proof session; heartbeat is expected and watchdog is active.
 - `watchdog_enabled` and `watchdog_s` are device-level.
+- `device_state`, `workflow`, and `strategy` are additive mode-model metadata.
+  They are documented in `docs/PROOFPRO_MODE_MODEL.md`.
+  - `device_state` is lifecycle/safety state such as `"idle"`, `"running"`,
+    `"paused"`, `"ended"`, or `"safe"`.
+  - `workflow` is `null`, `"distillation"`, `"monitor"`, `"pid"`, or a future
+    workflow value.
+  - `strategy` is `null`, `"manual"`, `"program"`, `"standard"`,
+    `"advanced"`, or a future strategy value.
+  - These fields do not replace `remote_state`; Remote/session state is a
+    separate axis.
 - Proof should display retained watchdog settings during onboarding.
 - `auto_resume_enabled` reports the local controller Auto Resume setting.
   Proof should treat this as discoverable device behavior, but should still
@@ -62,22 +78,23 @@ after accepted config writes.
 ```json
 {
   "updated_at_ms": 123456,
-  "program": {
-    "acc_mode": true,
-    "accel_temp": 170,
-    "accel_power": 100,
-    "post_accel_power": 35,
+  "distillation": {
+    "acceleration_enabled": true,
+    "acceleration_end_temp": 170,
+    "acceleration_power": 100,
+    "run_power": 35,
     "timer_start_temp": 170,
     "timer_s": 3600,
     "finish_temp": 200,
-    "finish_temp_source": "CH1",
-    "finish_action": "end"
+    "finish_temp_probe": "probe1",
+    "finish_action": "end",
+    "acceleration_relays_enabled": true
   },
   "dc_outputs": {
-    "DC1": {
+    "dc1": {
       "mode": "element"
     },
-    "DC2": {
+    "dc2": {
       "mode": "auxiliary"
     }
   },
@@ -90,12 +107,12 @@ after accepted config writes.
     "synced": true
   },
   "relays": {
-    "CH1": {
+    "rl1": {
       "mode": "cycle",
       "on_ms": 1000,
       "cycle_ms": 5000
     },
-    "CH2": {
+    "rl2": {
       "mode": "off",
       "on_ms": 1000,
       "cycle_ms": 5000
@@ -105,6 +122,9 @@ after accepted config writes.
 ```
 
 `config` is the Proof readback source for editable/default settings.
+It intentionally uses the same resource/process names that Proof should publish
+in commands. Legacy SmartPID-shaped command names are accepted by firmware, but
+they are not the Proof integration contract.
 
 Clock notes:
 
@@ -117,6 +137,80 @@ Clock notes:
 - Firmware stores and reports timezone readback under retained `config.clock`.
 - After accepting a clock command, firmware republishes retained `config`.
 
+### `state`
+
+Not retained. Published every configured sample interval, including while the
+device is idle. This is the additive resource-oriented telemetry surface for the
+ProofPro mode model.
+
+```json
+{
+  "time": 123,
+  "unit": "F",
+  "device_state": "idle",
+  "workflow": null,
+  "strategy": null,
+  "remote_enabled": true,
+  "remote_state": "RDY",
+  "probes": {
+    "probe1": {
+      "temp": 74.1,
+      "temp_valid": true
+    },
+    "probe2": {
+      "temp": 73.9,
+      "temp_valid": true
+    }
+  },
+  "dc_outputs": {
+    "dc1": {
+      "mode": "element",
+      "power": 0,
+      "target_power": 30
+    },
+    "dc2": {
+      "mode": "auxiliary",
+      "power": 0,
+      "target_power": 0
+    }
+  },
+  "relays": {
+    "rl1": {
+      "mode": "cycle",
+      "state": false,
+      "engaged": false
+    },
+    "rl2": {
+      "mode": "off",
+      "state": false,
+      "engaged": false
+    }
+  },
+  "program": {
+    "running": false,
+    "ended": false,
+    "latched": false,
+    "acc_elements_enabled": true,
+    "finish_temp_source": "probe1",
+    "timer_remaining_s": 0,
+    "timer_frozen": false
+  }
+}
+```
+
+Field notes:
+
+- `state` is the preferred live telemetry topic for Proof.
+- `device_state:"idle"` means online and not controlling; it does not suppress
+  telemetry.
+- `probes`, `dc_outputs`, and `relays` use resource names instead of SmartPID
+  channel names.
+- `power` is actual driven DC output percent. `target_power` is the current
+  runtime target for that DC output.
+- `relays.*.state` is the physical output state. `relays.*.engaged` is the
+  commanded/armed state for managed relay modes.
+- Existing `power/CHx` and `dynamic/CHx` topics remain for compatibility.
+
 ### `power/CH1` and `power/CH2`
 
 Not retained. Published every configured sample interval while the channel is in
@@ -128,6 +222,9 @@ power mode. Current default publish cadence is 1 second.
   "temp": 74.1,
   "temp_valid": true,
   "unit": "F",
+  "device_state": "running",
+  "workflow": "distillation",
+  "strategy": "program",
   "runmode": "power",
   "relay": false,
   "relay_engaged": false,
@@ -151,9 +248,12 @@ Field notes:
 
 - `unit` is required in every temperature-bearing telemetry payload and must
   match retained `status.unit`.
+- `device_state`, `workflow`, and `strategy` mirror the retained status
+  mode-model metadata for live UI support.
 - `temp_valid` is false when the temperature is outside the process range.
 - `dc_mode` is `element`, `auxiliary`, or `off`.
-- `element` DC outputs participate in acceleration and `post_accel_power`.
+- `element` DC outputs participate in acceleration and
+  `config.distillation.run_power`.
 - `auxiliary` DC outputs are direct/manual outputs. They do not receive
   acceleration power or post-accel power automatically and remain off unless
   Proof or the operator explicitly commands them.
@@ -164,12 +264,13 @@ Field notes:
   element outputs.
 - `run_target_power` is the live queued/target run percent for that DC output.
   During ACCEL, it is the value that will take over after ACCEL completes. It
-  can differ from retained `config.program.post_accel_power` if Proof or the
+  can differ from retained `config.distillation.run_power` if Proof or the
   operator has made a live runtime adjustment.
 - `relay` is the actual physical relay output state.
 - `relay_engaged` is the commanded/armed relay state for `remote_other`,
   `manual_on_off`, `acc_element`, and `cycle`; it is false for `off`.
-- Live `relay_mode` is synchronized from retained `config.relays.CHx.mode` on
+- Live `relay_mode` is synchronized from retained `config.relays.rl1.mode` /
+  `config.relays.rl2.mode` on
   boot and before accepted remote relay commands, so Proof should not need to
   resend relay mode after reconnect just to make a configured relay commandable.
 - In `acc_element`, `relay_engaged=true` means the acceleration relay is allowed
@@ -479,9 +580,95 @@ smartpidM5/proofpro/{topic_id}/profiles/update/#
 `profiles/update/#` is retained for legacy compatibility. ProofPro custom app
 logic should use `commands` unless profile support is deliberately revived.
 
+## Proof Integration Contract
+
+Proof should treat schema version 2 as the current distillation contract. This
+is not a compatibility negotiation surface; update Proof and firmware together.
+
+Proof subscribes to:
+
+```text
+smartpidM5/proofpro/{topic_id}/status
+smartpidM5/proofpro/{topic_id}/config
+smartpidM5/proofpro/{topic_id}/state
+smartpidM5/proofpro/{topic_id}/events/standard
+```
+
+Proof publishes only to:
+
+```text
+smartpidM5/proofpro/{topic_id}/commands
+```
+
+Proof should send the preferred command names below:
+
+```json
+{"status": true}
+{"heartbeat": true}
+{"workflow": "distillation", "strategy": "program", "action": "start"}
+{"workflow": "distillation", "strategy": "manual", "action": "start"}
+{"action": "stop"}
+{"action": "reset"}
+{"dc1_mode": "element"}
+{"dc2_mode": "auxiliary"}
+{"dc1_power": 35}
+{"dc2_power": 0}
+{"rl1_mode": "cycle"}
+{"rl1": true}
+{"rl1_on_ms": 1000}
+{"rl1_cycle_ms": 5000}
+{
+  "distillation": {
+    "acceleration_enabled": true,
+    "acceleration_end_temp": 170,
+    "acceleration_power": 100,
+    "run_power": 35,
+    "timer_start_temp": 170,
+    "timer_s": 3600,
+    "finish_temp": 200,
+    "finish_temp_probe": "probe1",
+    "finish_action": "end",
+    "acceleration_relays_enabled": true
+  }
+}
+```
+
+Proof should not send the legacy SmartPID-shaped command names (`CH1 power`,
+`DC1 dc_mode`, `CH1 relay_mode`, `accel_temp`, `post_accel_power`, and so on)
+for the distillation workflow. Firmware still accepts them as bench/operator
+compatibility aliases and rejects mixed aliases if they disagree.
+
+Minimum Proof behavior:
+
+- Use retained `status.unit` as the only temperature unit.
+- Use retained `status.remote_enabled` / `status.remote_state` to decide whether
+  output/program commands can be sent.
+- Use retained `config` to populate editable defaults.
+- Use live `state` for probes, DC outputs, relays, program state, and idle
+  telemetry.
+- Send `{"heartbeat":true}` every 10 seconds while actively controlling the
+  device.
+- Use `action:"stop"` for safe/off shutdown. Use `action:"reset"` only to clear
+  an ended/latched program state.
+
 ## Command payloads
 
 All commands are JSON objects. Multiple keys may be sent in one payload.
+
+Alias conflict rule:
+
+- ProofPro accepts both preferred resource/mode-model keys and legacy SmartPID
+  keys for firmware compatibility.
+- A payload may include both names for the same setting only when the values are
+  equivalent.
+- If aliases disagree, firmware rejects the whole payload before applying any
+  command changes and publishes `command_error` with
+  `reason:"conflicting_alias"`.
+- Semantic aliases are normalized for conflict checks. For example,
+  `probe1` equals `CH1`, `probe2` equals `CH2`, `cycle` equals
+  `reflux_timer`, `acc_element` equals `acc_sync`, `remote_other` equals
+  `remote`, `manual_on_off` equals `manual`/`on_off`, and `end` equals
+  `shutoff`.
 
 Request live output diagnostics:
 
@@ -501,260 +688,16 @@ Request partition/OTA-slot diagnostics:
 
 `"diagnostics": "flash"` is accepted as an alias.
 
-Recovery/installer builds only: request bootloader/layout migration preflight:
-
-```json
-{
-  "migration": "preflight",
-  "proofpro_app_size": 1500304,
-  "oem_app_size": 2031616
-}
-```
-
-Alias:
-
-```json
-{
-  "diagnostics": "migration_preflight"
-}
-```
-
-Normal ProofPro firmware does not expose migration commands over MQTT. In
-special installer/recovery builds, the preflight is read-only. It never writes
-flash. It reports whether the
-device is in the only safe state for converting from the current large-slot
-ProofPro layout to the OEM-compatible bootloader/layout: running from the high
-`app1` slot at `0x650000`.
-
-Example response:
-
-```json
-{
-  "time": 123,
-  "type": "migration_preflight",
-  "event": "migration preflight",
-  "target": "oem_bootloader_layout",
-  "writes_enabled": false,
-  "target_layout": {
-    "bootloader_offset": 4096,
-    "bootloader_size": 28672,
-    "partition_table_offset": 32768,
-    "partition_table_size": 3072,
-    "otadata_offset": 57344,
-    "otadata_size": 8192,
-    "proofpro_app0_offset": 65536,
-    "proofpro_app0_size": 2031616,
-    "smartpid_app1_offset": 2097152,
-    "smartpid_app1_size": 2031616
-  },
-  "write_plan": [
-    "require_running_from_current_high_app1",
-    "force_outputs_safe_off",
-    "write_verify_proofpro_oem_layout_app0",
-    "write_verify_smartpid_oem_app1",
-    "write_verify_oem_partition_table",
-    "write_verify_oem_bootloader",
-    "write_verify_otadata_selecting_proofpro_app0",
-    "restart_into_oem_layout_proofpro_app0"
-  ],
-  "safe_to_convert": false,
-  "checks": {
-    "current_large_slot_layout": true,
-    "running_from_high_app1": false,
-    "proofpro_app_fits_oem_slot": true,
-    "oem_app_fits_oem_slot": true
-  },
-  "blockers": [
-    "not_running_from_high_app1"
-  ]
-}
-```
-
-`{"migration":"oem_bootloader_layout"}` is a recovery-build compatibility
-command. In builds that include it, it performs the same preflight and then
-publishes a `command_error` with reason `writes_not_enabled`.
-
-Reserved package install command:
-
-```json
-{
-  "migration": "install_oem_bootloader_layout",
-  "confirm": "YES_INSTALL_OEM_LAYOUT",
-  "write_stage": "validate_only",
-  "package_url": "http://10.0.1.203:8080/proofpro_oem_layout_migration.ppmig",
-  "package_sha256": "..."
-}
-```
-
-`write_stage` may be `validate_only`, `apps`, `metadata`, or `all`.
-`validate_only` is the only stage that can complete in current production
-firmware. If the device is running from current-layout high `app1`, firmware
-downloads the package, verifies the package SHA-256, parses the embedded
-manifest, verifies every artifact hash and size while streaming, and publishes a
-final validated event. Real write stages validate the package first and then
-reject before flash writes with `command_error.reason = "writes_not_enabled"`.
-If validation fails first, the command error reason is `download_failed` or
-`package_invalid`. Invalid write stages publish
-`command_error.reason = "invalid_write_stage"`.
-
-Each stage requires its own confirmation string:
-
-```text
-validate_only -> YES_INSTALL_OEM_LAYOUT
-apps          -> YES_INSTALL_OEM_LAYOUT_APPS
-metadata      -> YES_INSTALL_OEM_LAYOUT_METADATA
-all           -> disabled
-```
-
-A special installer build may enable `write_stage: "apps"` with the compile-time
-flag `PROOFPRO_ENABLE_OEM_LAYOUT_INSTALL`. That build writes and readback-verifies
-only `proofpro_app0` and `smartpid_oem_app1` after a full package validation
-pass.
-
-A separate special installer build may enable `write_stage: "metadata"` with the
-compile-time flag `PROOFPRO_ENABLE_OEM_LAYOUT_METADATA_INSTALL`. That build
-writes and readback-verifies only `partition_table`, `bootloader`, and
-`otadata_boot_app0` after a full package validation pass. Use it only after the
-app-stage write/readback has succeeded.
-
-For the final conversion sequence, use the staged installer build that enables
-both separately-confirmed `apps` and `metadata` stages. Load it into both
-current-layout OTA slots, rerun `write_stage: "apps"`, then run
-`write_stage: "metadata"` from current-layout high `app1`. Metadata publishes a
-`metadata_critical` event before the protected boot metadata writes, verifies the
-bootloader, partition table, and otadata over serial/readback, then reboots into
-OEM-layout `app0`. A final MQTT `metadata_written` event is not expected after
-the critical marker.
-
-`write_stage: "all"` remains disabled. Normal production firmware does not
-compile these MQTT migration commands.
-
-Possible command errors from this command include:
-
-- `invalid_package`
-- `invalid_write_stage`
-- `unsafe_state`
-- `download_failed`
-- `package_invalid`
-- `flash_write_failed`
-- `flash_verify_failed`
-- `writes_not_enabled`
-
-Recovery builds publish a structured status event while rejecting a conversion
-write stage that is not enabled in the current build:
-
-```json
-{
-  "time": 123,
-  "type": "migration_install",
-  "event": "migration install",
-  "target": "oem_bootloader_layout",
-  "phase": "writer",
-  "status": "rejected",
-  "reason": "writes_not_enabled",
-  "write_stage": "apps",
-  "package_url": "http://10.0.1.203:8080/proofpro_oem_layout_migration.ppmig",
-  "package_sha256": "...",
-  "bytes_done": 3690506,
-  "bytes_total": 3690506,
-  "writes_enabled": false
-}
-```
-
-Prepare for bootloader/layout conversion by rebooting into the high current
-`app1` slot:
-
-```json
-{
-  "migration": "boot_high_app1",
-  "confirm": "YES_BOOT_HIGH_APP1"
-}
-```
-
-This command does not write the bootloader or partition table. It only validates
-that the current large-slot layout is present, sets the next boot partition to
-`app1` at `0x650000`, forces outputs safe/off, and reboots. It rejects the
-command unless the confirmation string is exact.
-
-Recovery builds can restore the SmartPID app payload to OEM `app1` from the
-verified migration package:
-
-```json
-{
-  "firmware_restore": "smartpid_app1",
-  "confirm": "YES_RESTORE_SMARTPID_APP1",
-  "package_url": "http://10.0.1.203:8080/proofpro_oem_layout_migration.ppmig",
-  "package_sha256": "..."
-}
-```
-
-This command is not compiled into normal ProofPro firmware. It is retained for
-special recovery builds. It requires
-ProofPro to be running from OEM `app0`, forces outputs safe/off first, downloads
-and verifies the full package, writes `smartpid_oem_app1` to OEM `app1` at
-`0x200000`, writes `smartpid_oem_eeprom` to the OEM `eeprom` partition at
-`0x3ff000`, readback-verifies both through the ESP partition API, and leaves
-ProofPro running. It does not write bootloader, partition table, otadata, or
-ProofPro `app0`.
-
-Possible command errors include:
-
-- `confirmation_required`
-- `invalid_package`
-- `unsafe_state`
-- `download_failed`
-- `package_invalid`
-- `flash_write_failed`
-- `flash_verify_failed`
-- `writes_not_enabled`
-
-Normal ProofPro firmware does not expose firmware switching over MQTT. The
-OEM-compatible layout has a hidden serial-only command to select OEM SmartPID:
-
-```text
-restore-smartpid
-yes restore-smartpid
-```
-
-The first command prints warnings and arms confirmation for 120 seconds. The
-second command forces outputs safe/off, verifies OEM `app1` is bootable, selects
-that partition, and reboots. It does not download, restore, erase, migrate, or
-write firmware. If SmartPID is booted, ProofPro MQTT will go offline until
-ProofPro is restored or selected again by an external path.
-
-Current bench recovery back to ProofPro requires manually entering ESP32 ROM
-download mode with GPIO0 held low and writing only the 8 KB otadata selector:
-
-```bash
-esptool --chip esp32 -p /dev/cu.usbserial-XXXX -b 460800 \
-  write-flash 0xe000 build/migration/oem-layout/otadata_boot_proofpro_app0.bin
-```
-
-This recovery write does not modify either app image, the bootloader, the
-partition table, or OEM EEPROM.
-
-Bench result, 2026-05-28:
-
-- ProofPro restored OEM SmartPID to `app1` and readback SHA-256 matched the
-  packaged SmartPID app image:
-  `08cd03b15ca0d71bb47767b3c953ff8e83e89bf15c733a8d5fa3a8113f8634c1`.
-- Serial `restore-smartpid` boot selection supersedes the earlier MQTT
-  `firmware_switch` test path. The earlier bench switch test booted SmartPID
-  successfully, and the device published retained status on
-  `smartpidM5/pro/{topic_id}/status`.
-- The first SmartPID boot test displayed `Not Authorized` because only the app
-  image had been restored. Decompile review showed the OEM app requires an
-  authorization byte from the OEM `eeprom` partition; the package and restore
-  command now include `smartpid_oem_eeprom`.
-- A normal PlatformIO/ArduinoOTA push of ProofPro over the running OEM app did
-  not connect to port 3232. Treat Proof-over-OEM OTA as not proven until the OEM
-  update path is understood or a resident launcher/recovery path exists.
-- Manual GPIO0-low ROM download mode plus the 8 KB otadata selector write
-  successfully returned the device to ProofPro `app0`.
+Recovery/installer MQTT commands are not part of the Proof integration
+contract. They live in `docs/MQTT_RECOVERY_COMMANDS.md`.
 
 ### General commands
 
 ```json
+{"workflow": "distillation", "strategy": "program", "action": "start"}
+{"workflow": "distillation", "strategy": "manual", "action": "start"}
+{"action": "stop"}
+{"action": "reset"}
 {"status": true}
 {"heartbeat": true}
 {"program_running": true}
@@ -774,6 +717,8 @@ Remote gating:
 
 - `status`, `heartbeat`, `stop`, `pause`, `resume`, and `reset` are accepted
   regardless of Remote.
+- `action:"stop"` and `action:"reset"` are aliases for `stop:true` and
+  `reset:true`.
 - `chirp` / `audio:"chirp"` is accepted regardless of Remote and program END
   state so Proof can test or play notifications from a safe/off condition.
 - `program_running`, `start`, output control, relay control, and program
@@ -785,13 +730,22 @@ Remote gating:
 - Proof sends `{"heartbeat": true}` every 10 seconds while actively controlling
   the device.
 - `{"start": "remote"}` is deprecated; Proof should use the explicit
-  `remote_enabled` / `remote_state` model and start runs with `{"program_running":true}`.
+  `remote_enabled` / `remote_state` model and start runs with
+  `{"workflow":"distillation","strategy":"program","action":"start"}`.
+- `{"workflow":"distillation","strategy":"program","action":"start"}` is the
+  mode-model alias for `{"program_running":true}`.
+- `{"workflow":"distillation","strategy":"manual","action":"start"}` is the
+  mode-model alias for `{"program_running":false}`.
+- Transition aliases follow the same conflict rule. For example,
+  `{"workflow":"distillation","strategy":"manual","action":"start",
+  "program_running":true}` is rejected because the mode-model alias asks for
+  manual distillation while the legacy field asks to start the programmed run.
 
 Program state commands:
 
 - `{"program_running": true}` starts the programmed ProofPro power run from the
-  current config. It is the preferred replacement for legacy
-  `{"start":"power"}`.
+  current config. Proof should prefer
+  `{"workflow":"distillation","strategy":"program","action":"start"}`.
 - `{"program_running": false}` exits programmed ACCEL/RUN state and returns the
   device to manual/live power control. It clears program timer/end-condition
   state and program-managed AccElement relay authority, but it does not force
@@ -802,6 +756,10 @@ Program state commands:
 ### DC output commands
 
 ```json
+{"dc1_power": 35}
+{"dc2_power": 0}
+{"dc1_mode": "element"}
+{"dc2_mode": "auxiliary"}
 {"CH1 power": 35}
 {"CH2 power": 0}
 {"DC1 dc_mode": "element"}
@@ -809,22 +767,34 @@ Program state commands:
 ```
 
 Power values are percent `0..100`. If DC1/DC2 is configured `off`, commands to
-that DC channel are ignored. `CHx power` can directly command an `auxiliary`
-DC output, but `post_accel_power` applies only to DC outputs with
-`dc_mode:"element"`.
+that DC channel are ignored. `dc1_power`/`dc2_power` can directly command an
+`auxiliary` DC output, but `distillation.run_power` applies only to DC outputs
+with `dc_mode:"element"`.
 
-`CHx power` is live runtime state only. It sets the active target for that DC
-output and does not update retained config or the saved program default. During
-ACCEL, `CHx power` updates the queued post-accel target while `accel_power`
-continues to drive the element. Use `post_accel_power` to change the retained
-program default loaded at the start of the next run.
+`dc1_power`/`dc2_power` are live runtime state only. They set the active target
+for that DC output and do not update retained config or the saved program
+default. During ACCEL, they update the queued post-accel target while `accel_power`
+continues to drive the element. Use `distillation.run_power` to change the
+retained program default loaded at the start of the next run. The legacy flat
+alias is `post_accel_power`.
+
+Legacy aliases:
+
+Firmware accepts these aliases; Proof should send the resource command names.
+
+| Resource command | Legacy command |
+|---|---|
+| `dc1_power` | `CH1 power` |
+| `dc2_power` | `CH2 power` |
+| `dc1_mode` | `DC1 dc_mode` |
+| `dc2_mode` | `DC2 dc_mode` |
 
 DC output modes:
 
 | Mode | Meaning |
 |---|---|
 | `off` | Disabled, forced off |
-| `element` | Main programmed element; uses `accel_power` during ACCEL and `post_accel_power` during RUN |
+| `element` | Main programmed element; uses `distillation.acceleration_power` during ACCEL and `distillation.run_power` during RUN |
 | `auxiliary` | Direct auxiliary output; excluded from automatic program power |
 
 Accepted aliases for `auxiliary`: `aux`, `auxilary`.
@@ -832,6 +802,15 @@ Accepted aliases for `auxiliary`: `aux`, `auxilary`.
 ### Relay commands
 
 ```json
+{"rl1_mode": "off"}
+{"rl1_mode": "manual_on_off"}
+{"rl1_mode": "acc_element"}
+{"rl1_mode": "remote_other"}
+{"rl1_mode": "cycle"}
+{"rl1": true}
+{"rl1": false}
+{"rl1_on_ms": 1000}
+{"rl1_cycle_ms": 5000}
 {"CH1 relay_mode": "off"}
 {"CH1 relay_mode": "manual_on_off"}
 {"CH1 relay_mode": "acc_element"}
@@ -843,11 +822,11 @@ Accepted aliases for `auxiliary`: `aux`, `auxilary`.
 {"CH1 cycle_ms": 5000}
 ```
 
-Use `CH2` for RL2.
+Use `rl2` or legacy `CH2` for RL2.
 
 Relay mode command semantics:
 
-| Relay mode | `CHx relay` meaning | Timing commands |
+| Relay mode | `rlx` / `CHx relay` meaning | Timing commands |
 |---|---|---|
 | `off` | ignored; relay forced off | ignored by behavior |
 | `manual_on_off` | ignored; local UI only | ignored by behavior |
@@ -869,6 +848,21 @@ Behavior notes:
 - `manual_on_off` is local UI only; remote direct relay commands are ignored.
 - `off` / Disabled ignores relay commands and forces the relay off.
 
+Legacy aliases:
+
+Firmware accepts these aliases; Proof should send the resource command names.
+
+| Resource command | Legacy command |
+|---|---|
+| `rl1_mode` | `CH1 relay_mode` |
+| `rl2_mode` | `CH2 relay_mode` |
+| `rl1` | `CH1 relay` |
+| `rl2` | `CH2 relay` |
+| `rl1_on_ms` | `CH1 on_ms` |
+| `rl2_on_ms` | `CH2 on_ms` |
+| `rl1_cycle_ms` | `CH1 cycle_ms` |
+| `rl2_cycle_ms` | `CH2 cycle_ms` |
+
 Accepted relay mode aliases:
 
 - `remote` maps to `remote_other`
@@ -877,6 +871,27 @@ Accepted relay mode aliases:
 - `manual` and `on_off` map to `manual_on_off`
 
 ### Program commands
+
+Preferred distillation program shape:
+
+```json
+{
+  "distillation": {
+    "acceleration_enabled": true,
+    "acceleration_end_temp": 170,
+    "acceleration_power": 100,
+    "run_power": 35,
+    "timer_start_temp": 170,
+    "timer_s": 3600,
+    "finish_temp": 200,
+    "finish_temp_probe": "probe1",
+    "finish_action": "end",
+    "acceleration_relays_enabled": true
+  }
+}
+```
+
+Legacy flat shape:
 
 ```json
 {
@@ -892,27 +907,32 @@ Accepted relay mode aliases:
 }
 ```
 
+Firmware accepts this legacy shape; Proof should send the nested
+`distillation` object.
+
 Program parameters are device-level in ProofPro. Proof should treat them as one
 program configuration, not independent per-channel settings.
 
 Field meanings:
 
-| Key | Meaning |
-|---|---|
-| `acc_mode` | acceleration phase enabled/disabled |
-| `accel_temp` | acceleration end temperature; `0` disables temperature transition |
-| `accel_power` | acceleration output percent |
-| `post_accel_power` | element output percent after acceleration completes; also used immediately when acceleration is disabled |
-| `timer_start_temp` | finish timer start temperature |
-| `timer_s` | finish timer duration in seconds |
-| `finish_temp` | finish temperature; `0` disables finish-by-temp |
-| `finish_temp_source` | source probe for finish-by-temp; `"CH1"` or `"CH2"` |
-| `finish_action` | finish action; `end`/`shutoff` latches END, `continue` does not |
+| Preferred key | Legacy key | Meaning |
+|---|---|---|
+| `distillation.acceleration_enabled` | `acc_mode` | acceleration phase enabled/disabled |
+| `distillation.acceleration_end_temp` | `accel_temp` | acceleration end temperature; `0` disables temperature transition |
+| `distillation.acceleration_power` | `accel_power` | acceleration output percent |
+| `distillation.run_power` | `post_accel_power` | element output percent after acceleration completes; also used immediately when acceleration is disabled |
+| `distillation.timer_start_temp` | `timer_start_temp` | finish timer start temperature |
+| `distillation.timer_s` | `timer_s` | finish timer duration in seconds |
+| `distillation.finish_temp` | `finish_temp` | finish temperature; `0` disables finish-by-temp |
+| `distillation.finish_temp_probe` | `finish_temp_source` | source probe for finish-by-temp; `"probe1"` / `"probe2"` preferred, `"CH1"` / `"CH2"` accepted |
+| `distillation.finish_action` | `finish_action` | finish action; `end`/`shutoff` latches END, `continue` does not |
+| `distillation.acceleration_relays_enabled` | `acc_elements` | allow/suppress acceleration relays |
 
 Finish temperature behavior:
 
 - ProofPro has one finish temperature value and one finish-temperature source.
-- `finish_temp_source` selects which probe is evaluated against `dFSP`.
+- `finish_temp_probe` / `finish_temp_source` selects which probe is evaluated
+  against `dFSP`.
 - Only the selected probe can trigger `program_ended.reason="finish_temp"`.
 - The default source is `"CH1"` for backward compatibility.
 - There are no per-channel finish temperatures in ProofPro.
@@ -1011,8 +1031,10 @@ ProofPro workflow:
 ## HTTP Interface
 
 When ProofPro is running on WiFi, firmware also exposes a small local HTTP
-server on port 80. This is a convenience and recovery surface; MQTT remains the
-primary Proof integration contract.
+server on port 80. This surface is diagnostic-only and browser-oriented. It is
+not an integration API, does not define or mirror the MQTT schema, and should
+not be used by Proof for device control or schema readback. MQTT remains the
+only Proof integration contract.
 
 Endpoints:
 
@@ -1021,18 +1043,10 @@ Endpoints:
 | `GET` | `/` | Minimal human-readable ProofPro page |
 | `GET` | `/healthz` | Plain `ok` health check |
 | `GET` | `/status` | JSON runtime/device status |
-| `GET` | `/config` | JSON retained/default program and relay config |
-| `POST` | `/commands` | Dispatch the request body as a normal ProofPro command JSON payload |
+| `GET` | `/debug/config-summary` | Diagnostic config snapshot for bench debugging; not a schema contract |
 
 Example:
 
 ```bash
 curl http://10.0.1.60/status
-curl -X POST http://10.0.1.60/commands \
-  -H 'Content-Type: application/json' \
-  -d '{"status":true}'
 ```
-
-`POST /commands` uses the same schema as MQTT `commands`. It returns `202` when
-the JSON payload was accepted for dispatch. Command-specific errors are still
-reported through the normal event path when MQTT is connected.

@@ -73,3 +73,8 @@ private:
 
 // Singleton accessible throughout the firmware.
 extern MQTTManager mqttMgr;
+
+#ifdef UNIT_TEST
+String mqttStatusPayloadForTest(Config& cfg);
+String mqttConfigPayloadForTest(Config& cfg);
+#endif

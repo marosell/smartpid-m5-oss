@@ -11,8 +11,88 @@
 MQTTManager  mqttMgr;
 MQTTManager* MQTTManager::_instance = nullptr;
 static constexpr const char* PROOFPRO_FIRMWARE = "proofpro";
-static constexpr const char* PROOFPRO_FIRMWARE_VERSION = "0.2.0";
-static constexpr uint8_t PROOFPRO_SCHEMA_VERSION = 1;
+static constexpr const char* PROOFPRO_FIRMWARE_VERSION = "0.3.0";
+static constexpr uint8_t PROOFPRO_SCHEMA_VERSION = 2;
+
+static String buildStatusPayload(Config& cfg) {
+    JsonDocument doc;
+    doc["serial"] = cfg.serial_hex;
+    doc["SSID"]   = WiFi.SSID();
+    doc["client"] = WiFi.localIP().toString();
+    doc["firmware"] = PROOFPRO_FIRMWARE;
+    doc["firmware_version"] = PROOFPRO_FIRMWARE_VERSION;
+    doc["schema_version"] = PROOFPRO_SCHEMA_VERSION;
+    doc["unit"]   = cfg.temp_unit;
+    doc["remote_enabled"] = mqttRemoteEnabled();
+    doc["remote_state"] = !mqttRemoteEnabled() ? "OFF" : (mqttRemoteActive() ? "ON" : "RDY");
+    doc["device_state"] = proofDeviceState();
+    const char* workflow = proofWorkflow();
+    const char* strategy = proofStrategy();
+    doc["workflow"] = workflow ? workflow : nullptr;
+    doc["strategy"] = strategy ? strategy : nullptr;
+    doc["auto_resume_enabled"] = cfg.auto_resume;
+    doc["watchdog_enabled"] = cfg.pwr_wdog_enabled;
+    doc["watchdog_s"] = cfg.pwr_wdog_s;
+
+    String payload;
+    serializeJson(doc, payload);
+    return payload;
+}
+
+static String buildConfigPayload(Config& cfg) {
+    JsonDocument doc;
+    doc["updated_at_ms"] = millis();
+
+    JsonObject distillation = doc["distillation"].to<JsonObject>();
+    distillation["acceleration_enabled"] = cfg.pwr_acc_mode;
+    distillation["acceleration_end_temp"] = cfg.pwr_dast;
+    distillation["acceleration_power"] = cfg.pwr_dout;
+    distillation["run_power"] = cfg.pwr_distill_pct;
+    distillation["timer_start_temp"] = cfg.pwr_dtsp;
+    distillation["timer_s"] = cfg.pwr_timer_s;
+    distillation["finish_temp"] = cfg.pwr_dfsp;
+    distillation["finish_temp_probe"] = (cfg.pwr_dfsp_source == 2) ? "probe2" : "probe1";
+    distillation["finish_action"] = cfg.pwr_deo ? "end" : "continue";
+    distillation["acceleration_relays_enabled"] = cfg.pwr_acc_elements_enabled;
+
+    JsonObject dcOutputs = doc["dc_outputs"].to<JsonObject>();
+    JsonObject dc1 = dcOutputs["dc1"].to<JsonObject>();
+    dc1["mode"] = dcOutputModeStr(normalizeDcOutputMode(cfg.pwr_dc1_mode));
+    JsonObject dc2 = dcOutputs["dc2"].to<JsonObject>();
+    dc2["mode"] = dcOutputModeStr(normalizeDcOutputMode(cfg.pwr_dc2_mode));
+
+    JsonObject clock = doc["clock"].to<JsonObject>();
+    clock["timezone_label"] = clockCurrentTimeZoneLabel(cfg);
+    clock["timezone_posix"] = clockCurrentTimeZonePosix(cfg);
+    clock["ntp_enabled"] = cfg.clock_ntp_enabled;
+    clock["ntp_host"] = cfg.clock_ntp_host;
+    clock["clock_24h"] = cfg.clock_24h;
+    clock["synced"] = clockTimeIsSynced();
+
+    JsonObject relays = doc["relays"].to<JsonObject>();
+    JsonObject rl1 = relays["rl1"].to<JsonObject>();
+    rl1["mode"] = relayModeStr((RelayMode)cfg.pwr_relay1_mode);
+    rl1["on_ms"] = cfg.pwr_r1_on_ms;
+    rl1["cycle_ms"] = cfg.pwr_r1_cycle_ms;
+    JsonObject rl2 = relays["rl2"].to<JsonObject>();
+    rl2["mode"] = relayModeStr((RelayMode)cfg.pwr_relay2_mode);
+    rl2["on_ms"] = cfg.pwr_r2_on_ms;
+    rl2["cycle_ms"] = cfg.pwr_r2_cycle_ms;
+
+    String payload;
+    serializeJson(doc, payload);
+    return payload;
+}
+
+#ifdef UNIT_TEST
+String mqttStatusPayloadForTest(Config& cfg) {
+    return buildStatusPayload(cfg);
+}
+
+String mqttConfigPayloadForTest(Config& cfg) {
+    return buildConfigPayload(cfg);
+}
+#endif
 
 // ── begin ─────────────────────────────────────────────────────────────────────
 void MQTTManager::begin(Config& config) {
@@ -84,23 +164,7 @@ void MQTTManager::_subscribe() {
 bool MQTTManager::publishStatus() {
     if (!_client.connected()) return false;
 
-    JsonDocument doc;
-    doc["serial"] = _cfg->serial_hex;
-    doc["SSID"]   = WiFi.SSID();
-    doc["client"] = WiFi.localIP().toString();
-    doc["firmware"] = PROOFPRO_FIRMWARE;
-    doc["firmware_version"] = PROOFPRO_FIRMWARE_VERSION;
-    doc["schema_version"] = PROOFPRO_SCHEMA_VERSION;
-    doc["unit"]   = _cfg->temp_unit;
-    doc["remote_enabled"] = mqttRemoteEnabled();
-    doc["remote_state"] = !mqttRemoteEnabled() ? "OFF" : (mqttRemoteActive() ? "ON" : "RDY");
-    doc["auto_resume_enabled"] = _cfg->auto_resume;
-    doc["watchdog_enabled"] = _cfg->pwr_wdog_enabled;
-    doc["watchdog_s"] = _cfg->pwr_wdog_s;
-
-    String payload;
-    serializeJson(doc, payload);
-
+    String payload = buildStatusPayload(*_cfg);
     String topic = fullTopic("status");
     bool ok = _client.publish(topic.c_str(), payload.c_str(), /*retained=*/true);
     if (ok) {
@@ -113,47 +177,7 @@ bool MQTTManager::publishStatus() {
 bool MQTTManager::publishConfig() {
     if (!_client.connected()) return false;
 
-    JsonDocument doc;
-    doc["updated_at_ms"] = millis();
-
-    JsonObject program = doc["program"].to<JsonObject>();
-    program["acc_mode"] = _cfg->pwr_acc_mode;
-    program["accel_temp"] = _cfg->pwr_dast;
-    program["accel_power"] = _cfg->pwr_dout;
-    program["post_accel_power"] = _cfg->pwr_distill_pct;
-    program["timer_start_temp"] = _cfg->pwr_dtsp;
-    program["timer_s"] = _cfg->pwr_timer_s;
-    program["finish_temp"] = _cfg->pwr_dfsp;
-    program["finish_temp_source"] = (_cfg->pwr_dfsp_source == 2) ? "CH2" : "CH1";
-    program["finish_action"] = _cfg->pwr_deo ? "end" : "continue";
-
-    JsonObject dcOutputs = doc["dc_outputs"].to<JsonObject>();
-    JsonObject dc1 = dcOutputs["DC1"].to<JsonObject>();
-    dc1["mode"] = dcOutputModeStr(normalizeDcOutputMode(_cfg->pwr_dc1_mode));
-    JsonObject dc2 = dcOutputs["DC2"].to<JsonObject>();
-    dc2["mode"] = dcOutputModeStr(normalizeDcOutputMode(_cfg->pwr_dc2_mode));
-
-    JsonObject clock = doc["clock"].to<JsonObject>();
-    clock["timezone_label"] = clockCurrentTimeZoneLabel(*_cfg);
-    clock["timezone_posix"] = clockCurrentTimeZonePosix(*_cfg);
-    clock["ntp_enabled"] = _cfg->clock_ntp_enabled;
-    clock["ntp_host"] = _cfg->clock_ntp_host;
-    clock["clock_24h"] = _cfg->clock_24h;
-    clock["synced"] = clockTimeIsSynced();
-
-    JsonObject relays = doc["relays"].to<JsonObject>();
-    JsonObject rl1 = relays["CH1"].to<JsonObject>();
-    rl1["mode"] = relayModeStr((RelayMode)_cfg->pwr_relay1_mode);
-    rl1["on_ms"] = _cfg->pwr_r1_on_ms;
-    rl1["cycle_ms"] = _cfg->pwr_r1_cycle_ms;
-    JsonObject rl2 = relays["CH2"].to<JsonObject>();
-    rl2["mode"] = relayModeStr((RelayMode)_cfg->pwr_relay2_mode);
-    rl2["on_ms"] = _cfg->pwr_r2_on_ms;
-    rl2["cycle_ms"] = _cfg->pwr_r2_cycle_ms;
-
-    String payload;
-    serializeJson(doc, payload);
-
+    String payload = buildConfigPayload(*_cfg);
     String topic = fullTopic("config");
     bool ok = _client.publish(topic.c_str(), payload.c_str(), /*retained=*/true);
     if (ok) {

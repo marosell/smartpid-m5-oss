@@ -9,6 +9,7 @@
 #include "output_control.h"
 #include "profiles.h"
 #include <ArduinoJson.h>
+#include <math.h>
 #ifndef DESKTOP_BUILD
 #include <esp_ota_ops.h>
 #endif
@@ -29,6 +30,8 @@ static bool gMqttRemoteEnabled = false;
 static bool gMqttRemoteActive = false;
 static bool gAccElementsEnabled = true;
 static Config* gRuntimeCfg = nullptr;
+static ChannelState* gCh1 = nullptr;
+static ChannelState* gCh2 = nullptr;
 static uint32_t gLastMqttMsgMs = 0;
 static bool gWatchdogFired = false;
 
@@ -65,6 +68,166 @@ static uint8_t finishTempSourceChannel() {
     return (gRuntimeCfg->pwr_dfsp_source == 2) ? 2 : 1;
 }
 
+static const char* canonicalDcMode(const char* value) {
+    if (!value) return "";
+    if (strcmp(value, "element") == 0) return "element";
+    if (strcmp(value, "auxiliary") == 0 ||
+        strcmp(value, "auxilary") == 0 ||
+        strcmp(value, "aux") == 0) return "auxiliary";
+    if (strcmp(value, "off") == 0 ||
+        strcmp(value, "disabled") == 0) return "off";
+    return value;
+}
+
+static const char* canonicalRelayMode(const char* value) {
+    if (!value) return "";
+    if (strcmp(value, "off") == 0) return "off";
+    if (strcmp(value, "acc_element") == 0 ||
+        strcmp(value, "acc_sync") == 0) return "acc_element";
+    if (strcmp(value, "remote_other") == 0 ||
+        strcmp(value, "remote") == 0) return "remote_other";
+    if (strcmp(value, "cycle") == 0 ||
+        strcmp(value, "reflux_timer") == 0) return "cycle";
+    if (strcmp(value, "manual_on_off") == 0 ||
+        strcmp(value, "manual") == 0 ||
+        strcmp(value, "on_off") == 0) return "manual_on_off";
+    return value;
+}
+
+static const char* canonicalProbe(const char* value) {
+    if (!value) return "";
+    if (strcmp(value, "CH1") == 0 ||
+        strcmp(value, "ch1") == 0 ||
+        strcmp(value, "probe1") == 0 ||
+        strcmp(value, "1") == 0) return "probe1";
+    if (strcmp(value, "CH2") == 0 ||
+        strcmp(value, "ch2") == 0 ||
+        strcmp(value, "probe2") == 0 ||
+        strcmp(value, "2") == 0) return "probe2";
+    return value;
+}
+
+static const char* canonicalFinishAction(const char* value) {
+    if (!value) return "";
+    if (strcmp(value, "end") == 0 ||
+        strcmp(value, "shutoff") == 0) return "end";
+    if (strcmp(value, "continue") == 0) return "continue";
+    return value;
+}
+
+static bool valuesEquivalent(JsonVariant a, JsonVariant b,
+                             const char* (*canonical)(const char*) = nullptr) {
+    if (a.is<bool>() || b.is<bool>()) {
+        return a.is<bool>() && b.is<bool>() && a.as<bool>() == b.as<bool>();
+    }
+    if (a.is<const char*>() || b.is<const char*>()) {
+        if (!a.is<const char*>() || !b.is<const char*>()) return false;
+        const char* av = a.as<const char*>();
+        const char* bv = b.as<const char*>();
+        if (canonical) {
+            av = canonical(av);
+            bv = canonical(bv);
+        }
+        return strcmp(av ? av : "", bv ? bv : "") == 0;
+    }
+    if (a.is<double>() || a.is<float>() || a.is<int>() || a.is<long>() ||
+        b.is<double>() || b.is<float>() || b.is<int>() || b.is<long>()) {
+        return fabs(a.as<double>() - b.as<double>()) < 0.0001;
+    }
+    return true;
+}
+
+static bool aliasConflict(JsonVariant preferred, JsonVariant legacy,
+                          const char* preferredName, const char* legacyName,
+                          TelemetryPublisher* tele,
+                          const char* (*canonical)(const char*) = nullptr) {
+    if (preferred.isNull() || legacy.isNull()) return false;
+    if (valuesEquivalent(preferred, legacy, canonical)) return false;
+    if (tele) tele->publishCommandError(preferredName, "conflicting_alias", legacyName);
+    log_w("[CMD] conflicting aliases: %s conflicts with %s", preferredName, legacyName);
+    return true;
+}
+
+static bool boolAliasConflict(JsonVariant actual, bool expected,
+                              const char* preferredName, const char* legacyName,
+                              TelemetryPublisher* tele) {
+    if (actual.isNull()) return false;
+    if (actual.is<bool>() && actual.as<bool>() == expected) return false;
+    if (tele) tele->publishCommandError(preferredName, "conflicting_alias", legacyName);
+    log_w("[CMD] conflicting aliases: %s conflicts with %s", preferredName, legacyName);
+    return true;
+}
+
+static bool validateAliasConflicts(JsonDocument& doc, TelemetryPublisher* tele) {
+    if (doc["action"].is<const char*>()) {
+        const char* action = doc["action"].as<const char*>();
+        const char* workflow = doc["workflow"].is<const char*>()
+            ? doc["workflow"].as<const char*>()
+            : nullptr;
+        const char* strategy = doc["strategy"].is<const char*>()
+            ? doc["strategy"].as<const char*>()
+            : nullptr;
+
+        if (strcmp(action, "start") == 0 && workflow && strcmp(workflow, "distillation") == 0) {
+            const bool startsProgram = !(strategy && strcmp(strategy, "manual") == 0);
+            if (boolAliasConflict(doc["program_running"], startsProgram, "workflow/action", "program_running", tele)) return false;
+            if (doc["start"].is<const char*>() && strcmp(doc["start"].as<const char*>(), "power") == 0 && !startsProgram) {
+                if (tele) tele->publishCommandError("workflow/action", "conflicting_alias", "start");
+                log_w("[CMD] conflicting aliases: workflow/action conflicts with start");
+                return false;
+            }
+        } else if (strcmp(action, "stop") == 0) {
+            if (boolAliasConflict(doc["stop"], true, "action", "stop", tele)) return false;
+        } else if (strcmp(action, "reset") == 0) {
+            if (boolAliasConflict(doc["reset"], true, "action", "reset", tele)) return false;
+        }
+    }
+
+    if (doc["start"].is<const char*>() && strcmp(doc["start"].as<const char*>(), "power") == 0) {
+        if (boolAliasConflict(doc["program_running"], true, "start", "program_running", tele)) return false;
+    }
+    if (doc["resume"].is<bool>() && doc["resume"].as<bool>()) {
+        if (boolAliasConflict(doc["pause"], false, "resume", "pause", tele)) return false;
+    }
+
+    if (aliasConflict(doc["dc1_power"], doc["CH1 power"], "dc1_power", "CH1 power", tele)) return false;
+    if (aliasConflict(doc["dc2_power"], doc["CH2 power"], "dc2_power", "CH2 power", tele)) return false;
+    if (aliasConflict(doc["dc1_mode"], doc["DC1 dc_mode"], "dc1_mode", "DC1 dc_mode", tele, canonicalDcMode)) return false;
+    if (aliasConflict(doc["dc2_mode"], doc["DC2 dc_mode"], "dc2_mode", "DC2 dc_mode", tele, canonicalDcMode)) return false;
+    if (aliasConflict(doc["rl1_mode"], doc["CH1 relay_mode"], "rl1_mode", "CH1 relay_mode", tele, canonicalRelayMode)) return false;
+    if (aliasConflict(doc["rl2_mode"], doc["CH2 relay_mode"], "rl2_mode", "CH2 relay_mode", tele, canonicalRelayMode)) return false;
+    if (aliasConflict(doc["rl1"], doc["CH1 relay"], "rl1", "CH1 relay", tele)) return false;
+    if (aliasConflict(doc["rl2"], doc["CH2 relay"], "rl2", "CH2 relay", tele)) return false;
+    if (aliasConflict(doc["rl1_on_ms"], doc["CH1 on_ms"], "rl1_on_ms", "CH1 on_ms", tele)) return false;
+    if (aliasConflict(doc["rl2_on_ms"], doc["CH2 on_ms"], "rl2_on_ms", "CH2 on_ms", tele)) return false;
+    if (aliasConflict(doc["rl1_cycle_ms"], doc["CH1 cycle_ms"], "rl1_cycle_ms", "CH1 cycle_ms", tele)) return false;
+    if (aliasConflict(doc["rl2_cycle_ms"], doc["CH2 cycle_ms"], "rl2_cycle_ms", "CH2 cycle_ms", tele)) return false;
+
+    JsonVariant distillation = doc["distillation"];
+    if (distillation.is<JsonObject>()) {
+        if (aliasConflict(distillation["acceleration_enabled"], doc["acc_mode"], "distillation.acceleration_enabled", "acc_mode", tele)) return false;
+        if (aliasConflict(distillation["acceleration_end_temp"], doc["accel_temp"], "distillation.acceleration_end_temp", "accel_temp", tele)) return false;
+        if (aliasConflict(distillation["acceleration_power"], doc["accel_power"], "distillation.acceleration_power", "accel_power", tele)) return false;
+        if (aliasConflict(distillation["run_power"], doc["post_accel_power"], "distillation.run_power", "post_accel_power", tele)) return false;
+        if (aliasConflict(distillation["timer_start_temp"], doc["timer_start_temp"], "distillation.timer_start_temp", "timer_start_temp", tele)) return false;
+        if (aliasConflict(distillation["timer_s"], doc["timer_s"], "distillation.timer_s", "timer_s", tele)) return false;
+        if (aliasConflict(distillation["finish_temp"], doc["finish_temp"], "distillation.finish_temp", "finish_temp", tele)) return false;
+        if (aliasConflict(distillation["finish_temp_probe"], doc["finish_temp_source"], "distillation.finish_temp_probe", "finish_temp_source", tele, canonicalProbe)) return false;
+        if (aliasConflict(distillation["finish_action"], doc["finish_action"], "distillation.finish_action", "finish_action", tele, canonicalFinishAction)) return false;
+        if (aliasConflict(distillation["acceleration_relays_enabled"], doc["acc_elements"], "distillation.acceleration_relays_enabled", "acc_elements", tele)) return false;
+    }
+    return true;
+}
+
+#ifdef UNIT_TEST
+bool commandPayloadAliasesValidForTest(const char* payload) {
+    JsonDocument doc;
+    DeserializationError err = deserializeJson(doc, payload);
+    if (err) return false;
+    return validateAliasConflicts(doc, nullptr);
+}
+#endif
+
 bool mqttRemoteEnabled() {
     return gMqttRemoteEnabled;
 }
@@ -92,6 +255,34 @@ void setMqttRemoteEnabled(bool enabled) {
 
 bool accElementsEnabled() {
     return gAccElementsEnabled;
+}
+
+const char* proofDeviceState() {
+    if (!gCh1 || !gCh2) return "booting";
+    if (gWatchdogFired || gCh1->watchdogFired || gCh2->watchdogFired) return "safe";
+    if (gCh1->finishEnd || gCh1->finishLatch || gCh2->finishEnd || gCh2->finishLatch) return "ended";
+    if ((gCh1->isRunning() && gCh1->paused) || (gCh2->isRunning() && gCh2->paused)) return "paused";
+    if (gCh1->runmode != Runmode::IDLE || gCh2->runmode != Runmode::IDLE) return "running";
+    return "idle";
+}
+
+const char* proofWorkflow() {
+    if (!gCh1 || !gCh2) return nullptr;
+    if (gCh1->runmode == Runmode::POWER_DIRECT || gCh2->runmode == Runmode::POWER_DIRECT) return "distillation";
+    if (gCh1->runmode == Runmode::ADVANCED || gCh2->runmode == Runmode::ADVANCED) return "pid";
+    if (gCh1->runmode == Runmode::STANDARD || gCh2->runmode == Runmode::STANDARD) return "pid";
+    if (gCh1->runmode == Runmode::MONITOR || gCh2->runmode == Runmode::MONITOR) return "monitor";
+    return nullptr;
+}
+
+const char* proofStrategy() {
+    if (!gCh1 || !gCh2) return nullptr;
+    if (gCh1->runmode == Runmode::POWER_DIRECT || gCh2->runmode == Runmode::POWER_DIRECT) {
+        return (gCh1->programRunning || gCh2->programRunning) ? "program" : "manual";
+    }
+    if (gCh1->runmode == Runmode::ADVANCED || gCh2->runmode == Runmode::ADVANCED) return "advanced";
+    if (gCh1->runmode == Runmode::STANDARD || gCh2->runmode == Runmode::STANDARD) return "standard";
+    return nullptr;
 }
 
 static void setAccElementsEnabled(bool enabled) {
@@ -329,6 +520,8 @@ void CommandHandler::begin(Config& cfg, MQTTManager& mqtt,
     _ch[1]  = &ch2;
     _lastTickMs = millis();
     gRuntimeCfg = &cfg;
+    gCh1 = &ch1;
+    gCh2 = &ch2;
     gMqttRemoteEnabled = cfg.remote_enabled;
     gMqttRemoteActive = false;
     if (cfg.pwr_wdog_s < WATCHDOG_MIN_S || cfg.pwr_wdog_s > WATCHDOG_MAX_S) {
@@ -353,6 +546,9 @@ void CommandHandler::handle(const uint8_t* payload, unsigned int len) {
     DeserializationError err = deserializeJson(doc, payload, len);
     if (err) {
         log_w("[CMD] JSON parse error: %s", err.c_str());
+        return;
+    }
+    if (!validateAliasConflicts(doc, _tele)) {
         return;
     }
 
@@ -465,6 +661,38 @@ void CommandHandler::handle(const uint8_t* payload, unsigned int len) {
         }
     }
 
+    // ── Workflow/action aliases ──────────────────────────────────────────────
+    if (doc["action"].is<const char*>()) {
+        const char* action = doc["action"].as<const char*>();
+        const char* workflow = doc["workflow"].is<const char*>()
+            ? doc["workflow"].as<const char*>()
+            : nullptr;
+        const char* strategy = doc["strategy"].is<const char*>()
+            ? doc["strategy"].as<const char*>()
+            : nullptr;
+
+        if (strcmp(action, "start") == 0) {
+            if (!workflow || strcmp(workflow, "distillation") != 0) {
+                _tele->publishCommandError("workflow", "invalid_value", workflow ? workflow : "");
+            } else if (!mqttRemoteEnabled()) {
+                _tele->publishCommandError("action", "remote_off", action);
+                log_w("[CMD] workflow distillation start ignored — Remote is OFF");
+            } else if (!strategy || strcmp(strategy, "program") == 0) {
+                _cmdSetProgramRunning(true);
+            } else if (strcmp(strategy, "manual") == 0) {
+                _cmdSetProgramRunning(false);
+            } else {
+                _tele->publishCommandError("strategy", "invalid_value", strategy);
+            }
+        } else if (strcmp(action, "stop") == 0) {
+            _cmdStop();
+        } else if (strcmp(action, "reset") == 0) {
+            _cmdReset();
+        } else {
+            _tele->publishCommandError("action", "invalid_value", action);
+        }
+    }
+
     // ── {"start": "power"} ───────────────────────────────────────────────────
     if (doc["start"].is<const char*>()) {
         const char* modeStr = doc["start"].as<const char*>();
@@ -519,6 +747,55 @@ void CommandHandler::handle(const uint8_t* payload, unsigned int len) {
         }
     }
 
+    // ── Distillation program aliases ─────────────────────────────────────────
+    // Preferred process-shaped wrapper for ProofPro distillation settings.
+    JsonVariant distillation = doc["distillation"];
+    if (!distillation.isNull()) {
+        if (!distillation.is<JsonObject>()) {
+            _tele->publishCommandError("distillation", "invalid_value");
+        } else if (!mqttRemoteEnabled()) {
+            _tele->publishCommandError("distillation", "remote_off");
+            log_w("[CMD] distillation settings ignored — Remote is OFF");
+        } else {
+            if (distillation["acceleration_enabled"].is<bool>()) {
+                _cmdSetAccMode(distillation["acceleration_enabled"].as<bool>());
+            }
+            if (!distillation["acceleration_end_temp"].isNull()) {
+                _cmdSetDAST(distillation["acceleration_end_temp"].as<float>());
+            }
+            if (!distillation["acceleration_power"].isNull()) {
+                _cmdSetDOut(distillation["acceleration_power"].as<int>());
+            }
+            if (!distillation["run_power"].isNull()) {
+                _cmdSetPostAccelPower(distillation["run_power"].as<int>());
+            }
+            if (!distillation["timer_start_temp"].isNull()) {
+                _cmdSetDtSP(distillation["timer_start_temp"].as<float>());
+            }
+            if (!distillation["timer_s"].isNull()) {
+                _cmdSetTimerDuration(distillation["timer_s"].as<int>());
+            }
+            if (!distillation["finish_temp"].isNull()) {
+                _cmdSetDFSP(distillation["finish_temp"].as<float>());
+            }
+            if (!distillation["finish_temp_probe"].isNull()) {
+                _cmdSetFinishTempSource(distillation["finish_temp_probe"].as<const char*>());
+            }
+            if (!distillation["finish_action"].isNull()) {
+                _cmdSetTimerDir(distillation["finish_action"].as<const char*>());
+            }
+            if (distillation["acceleration_relays_enabled"].is<bool>()) {
+                noteRemoteActivity(_ch[0], _ch[1], _tele);
+                setAccElementsEnabled(distillation["acceleration_relays_enabled"].as<bool>());
+                if (_ch[0]) _ch[0]->acc_elements_enabled = gAccElementsEnabled;
+                if (_ch[1]) _ch[1]->acc_elements_enabled = gAccElementsEnabled;
+                _tele->publishEventTyped(gAccElementsEnabled ? "acc elements enabled" : "acc elements disabled",
+                                         gAccElementsEnabled ? "acc_elements_enabled" : "acc_elements_disabled");
+                _mqtt->publishConfig();
+            }
+        }
+    }
+
     // ── Per-channel OEM commands ──────────────────────────────────────────────
     if (!doc["CH1 SP"].isNull())  _cmdSetSP(1, doc["CH1 SP"].as<float>());
     if (!doc["CH2 SP"].isNull())  _cmdSetSP(2, doc["CH2 SP"].as<float>());
@@ -555,11 +832,31 @@ void CommandHandler::handle(const uint8_t* payload, unsigned int len) {
     // DC OUT target power
     if (!doc["CH1 power"].isNull()) {
         if (mqttRemoteEnabled()) _cmdSetPower(1, doc["CH1 power"].as<int>());
-        else log_w("[CMD] CH1 power ignored — Remote is OFF");
+        else {
+            _tele->publishCommandError("CH1 power", "remote_off");
+            log_w("[CMD] CH1 power ignored — Remote is OFF");
+        }
     }
     if (!doc["CH2 power"].isNull()) {
         if (mqttRemoteEnabled()) _cmdSetPower(2, doc["CH2 power"].as<int>());
-        else log_w("[CMD] CH2 power ignored — Remote is OFF");
+        else {
+            _tele->publishCommandError("CH2 power", "remote_off");
+            log_w("[CMD] CH2 power ignored — Remote is OFF");
+        }
+    }
+    if (!doc["dc1_power"].isNull()) {
+        if (mqttRemoteEnabled()) _cmdSetPower(1, doc["dc1_power"].as<int>());
+        else {
+            _tele->publishCommandError("dc1_power", "remote_off");
+            log_w("[CMD] dc1_power ignored — Remote is OFF");
+        }
+    }
+    if (!doc["dc2_power"].isNull()) {
+        if (mqttRemoteEnabled()) _cmdSetPower(2, doc["dc2_power"].as<int>());
+        else {
+            _tele->publishCommandError("dc2_power", "remote_off");
+            log_w("[CMD] dc2_power ignored — Remote is OFF");
+        }
     }
 
     // Device-level program settings
@@ -586,15 +883,49 @@ void CommandHandler::handle(const uint8_t* payload, unsigned int len) {
             log_w("[CMD] CH2 relay_mode ignored — Remote is OFF");
         }
     }
+    if (!doc["rl1_mode"].isNull()) {
+        if (mqttRemoteEnabled()) _cmdSetRelayMode(1, doc["rl1_mode"].as<const char*>());
+        else {
+            _tele->publishCommandError("rl1_mode", "remote_off");
+            log_w("[CMD] rl1_mode ignored — Remote is OFF");
+        }
+    }
+    if (!doc["rl2_mode"].isNull()) {
+        if (mqttRemoteEnabled()) _cmdSetRelayMode(2, doc["rl2_mode"].as<const char*>());
+        else {
+            _tele->publishCommandError("rl2_mode", "remote_off");
+            log_w("[CMD] rl2_mode ignored — Remote is OFF");
+        }
+    }
 
     // Relay state (REMOTE mode command)
     if (doc["CH1 relay"].is<bool>()) {
         if (mqttRemoteEnabled()) _cmdSetRelay(1, doc["CH1 relay"].as<bool>());
-        else log_w("[CMD] CH1 relay ignored — Remote is OFF");
+        else {
+            _tele->publishCommandError("CH1 relay", "remote_off");
+            log_w("[CMD] CH1 relay ignored — Remote is OFF");
+        }
     }
     if (doc["CH2 relay"].is<bool>()) {
         if (mqttRemoteEnabled()) _cmdSetRelay(2, doc["CH2 relay"].as<bool>());
-        else log_w("[CMD] CH2 relay ignored — Remote is OFF");
+        else {
+            _tele->publishCommandError("CH2 relay", "remote_off");
+            log_w("[CMD] CH2 relay ignored — Remote is OFF");
+        }
+    }
+    if (doc["rl1"].is<bool>()) {
+        if (mqttRemoteEnabled()) _cmdSetRelay(1, doc["rl1"].as<bool>());
+        else {
+            _tele->publishCommandError("rl1", "remote_off");
+            log_w("[CMD] rl1 ignored — Remote is OFF");
+        }
+    }
+    if (doc["rl2"].is<bool>()) {
+        if (mqttRemoteEnabled()) _cmdSetRelay(2, doc["rl2"].as<bool>());
+        else {
+            _tele->publishCommandError("rl2", "remote_off");
+            log_w("[CMD] rl2 ignored — Remote is OFF");
+        }
     }
 
     if (!doc["accel_temp"].isNull()) {
@@ -625,6 +956,14 @@ void CommandHandler::handle(const uint8_t* payload, unsigned int len) {
     if (!doc["DC2 dc_mode"].isNull()) {
         if (mqttRemoteEnabled()) _cmdSetDcMode(2, doc["DC2 dc_mode"].as<const char*>());
         else _tele->publishCommandError("DC2 dc_mode", "remote_off");
+    }
+    if (!doc["dc1_mode"].isNull()) {
+        if (mqttRemoteEnabled()) _cmdSetDcMode(1, doc["dc1_mode"].as<const char*>());
+        else _tele->publishCommandError("dc1_mode", "remote_off");
+    }
+    if (!doc["dc2_mode"].isNull()) {
+        if (mqttRemoteEnabled()) _cmdSetDcMode(2, doc["dc2_mode"].as<const char*>());
+        else _tele->publishCommandError("dc2_mode", "remote_off");
     }
     if (!doc["finish_temp"].isNull()) {
         if (mqttRemoteEnabled()) _cmdSetDFSP(doc["finish_temp"].as<float>());
@@ -688,6 +1027,14 @@ void CommandHandler::handle(const uint8_t* payload, unsigned int len) {
         if (mqttRemoteEnabled()) _cmdSetRelayOnMs(2, doc["CH2 on_ms"].as<int>());
         else _tele->publishCommandError("CH2 on_ms", "remote_off");
     }
+    if (!doc["rl1_on_ms"].isNull()) {
+        if (mqttRemoteEnabled()) _cmdSetRelayOnMs(1, doc["rl1_on_ms"].as<int>());
+        else _tele->publishCommandError("rl1_on_ms", "remote_off");
+    }
+    if (!doc["rl2_on_ms"].isNull()) {
+        if (mqttRemoteEnabled()) _cmdSetRelayOnMs(2, doc["rl2_on_ms"].as<int>());
+        else _tele->publishCommandError("rl2_on_ms", "remote_off");
+    }
     if (!doc["CH1 cycle_ms"].isNull()) {
         if (mqttRemoteEnabled()) _cmdSetRelayCycleMs(1, doc["CH1 cycle_ms"].as<int>());
         else _tele->publishCommandError("CH1 cycle_ms", "remote_off");
@@ -695,6 +1042,14 @@ void CommandHandler::handle(const uint8_t* payload, unsigned int len) {
     if (!doc["CH2 cycle_ms"].isNull()) {
         if (mqttRemoteEnabled()) _cmdSetRelayCycleMs(2, doc["CH2 cycle_ms"].as<int>());
         else _tele->publishCommandError("CH2 cycle_ms", "remote_off");
+    }
+    if (!doc["rl1_cycle_ms"].isNull()) {
+        if (mqttRemoteEnabled()) _cmdSetRelayCycleMs(1, doc["rl1_cycle_ms"].as<int>());
+        else _tele->publishCommandError("rl1_cycle_ms", "remote_off");
+    }
+    if (!doc["rl2_cycle_ms"].isNull()) {
+        if (mqttRemoteEnabled()) _cmdSetRelayCycleMs(2, doc["rl2_cycle_ms"].as<int>());
+        else _tele->publishCommandError("rl2_cycle_ms", "remote_off");
     }
 
     // After any command, drive outputs once so POWER_DIRECT relay/power changes
@@ -1179,8 +1534,10 @@ void CommandHandler::_cmdSetDFSP(float temp) {
 void CommandHandler::_cmdSetFinishTempSource(const char* source) {
     if (!source) return;
     uint8_t ch = 0;
-    if (strcmp(source, "CH1") == 0 || strcmp(source, "ch1") == 0 || strcmp(source, "1") == 0) ch = 1;
-    else if (strcmp(source, "CH2") == 0 || strcmp(source, "ch2") == 0 || strcmp(source, "2") == 0) ch = 2;
+    if (strcmp(source, "CH1") == 0 || strcmp(source, "ch1") == 0 ||
+        strcmp(source, "probe1") == 0 || strcmp(source, "1") == 0) ch = 1;
+    else if (strcmp(source, "CH2") == 0 || strcmp(source, "ch2") == 0 ||
+             strcmp(source, "probe2") == 0 || strcmp(source, "2") == 0) ch = 2;
     else {
         log_w("[CMD] finish_temp_source unknown: '%s'", source);
         if (_tele) _tele->publishCommandError("finish_temp_source", "invalid_value", source);
