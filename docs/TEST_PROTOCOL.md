@@ -28,6 +28,17 @@ mosquitto_sub -h 10.0.1.203 -u proof -P proof \
   -t 'smartpidM5/proofpro/791402d5ac0fe1/#' -v
 ```
 
+Run the schema v2 MQTT smoke test after firmware is flashed and online:
+
+```bash
+python3 scripts/mqtt_v2_smoke_test.py
+```
+
+This verifies retained `status`, retained `config`, and live `state` against
+the ProofPro schema v2 contract. Add `--conflict-test` to also verify
+`command_error.reason:"conflicting_alias"` for a non-energizing conflicting
+alias command.
+
 Request retained status/config refresh:
 
 ```bash

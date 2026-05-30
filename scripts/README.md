@@ -64,3 +64,31 @@ Inspect and verify the single-file migration package:
 ```bash
 python3 scripts/inspect_migration_package.py build/migration/oem-layout/proofpro_oem_layout_migration.ppmig
 ```
+
+## MQTT schema v2 smoke test
+
+After firmware is flashed and connected to the broker, verify the ProofPro v2
+MQTT contract without changing firmware:
+
+```bash
+python3 scripts/mqtt_v2_smoke_test.py
+```
+
+Defaults match the bench broker and topic ID in `docs/TEST_PROTOCOL.md`.
+Override them as needed:
+
+```bash
+python3 scripts/mqtt_v2_smoke_test.py \
+  --host 10.0.1.203 \
+  --user proof \
+  --password proof \
+  --topic-id 791402d5ac0fe1
+```
+
+The default check publishes only `{"status":true}` and validates retained
+`status`, retained `config`, and live `state`. To also verify command-error
+feedback for a non-energizing conflicting alias:
+
+```bash
+python3 scripts/mqtt_v2_smoke_test.py --conflict-test
+```
