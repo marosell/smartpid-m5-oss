@@ -555,6 +555,9 @@ void loop() {
             // Use cmdHandler helper to apply config power params into ch1
             cmdHandler._applyPowerParams(1);
             ch1.finishLatch = false;  // don't resume into a latched state
+            ch1.finishLatchJustSet = false;
+            ch1.finishEnd = false;
+            ch1.finishEndJustSet = false;
             log_i("[RESUME] CH1 POWER_DIRECT: dist=%u%% acc=%s watchdog=%s/%us",
                   ch1.distill_power_pct, ch1.acc_mode ? "on" : "off",
                   cfg.pwr_wdog_enabled ? "on" : "off", (unsigned)cfg.pwr_wdog_s);
@@ -562,6 +565,9 @@ void loop() {
         if (r2 == Runmode::POWER_DIRECT) {
             cmdHandler._applyPowerParams(2);
             ch2.finishLatch = false;
+            ch2.finishLatchJustSet = false;
+            ch2.finishEnd = false;
+            ch2.finishEndJustSet = false;
             log_i("[RESUME] CH2 POWER_DIRECT: dist=%u%% acc=%s watchdog=%s/%us",
                   ch2.distill_power_pct, ch2.acc_mode ? "on" : "off",
                   cfg.pwr_wdog_enabled ? "on" : "off", (unsigned)cfg.pwr_wdog_s);
@@ -1535,6 +1541,9 @@ static void serialSetDc1(int pct) {
         cmdHandler._applyPowerParams(1);
     }
     ch1.finishLatch = false;
+    ch1.finishLatchJustSet = false;
+    ch1.finishEnd = false;
+    ch1.finishEndJustSet = false;
     ch1.watchdogFired = false;
     ch1.accelPhaseActive = false;
     ch1.distill_power_pct = (uint8_t)pct;
@@ -1557,6 +1566,9 @@ static void serialSetDc2(int pct) {
         cmdHandler._applyPowerParams(2);
     }
     ch2.finishLatch = false;
+    ch2.finishLatchJustSet = false;
+    ch2.finishEnd = false;
+    ch2.finishEndJustSet = false;
     ch2.watchdogFired = false;
     ch2.accelPhaseActive = false;
     ch2.distill_power_pct = (uint8_t)pct;

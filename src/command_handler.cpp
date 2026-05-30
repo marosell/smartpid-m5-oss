@@ -422,6 +422,17 @@ static bool payloadIsPureStatusRequest(JsonDocument& doc) {
     return doc.as<JsonObject>().size() == 1;
 }
 
+static bool payloadHasDedicatedAlert(JsonDocument& doc) {
+    if (doc["action"].is<const char*>()) {
+        const char* action = doc["action"].as<const char*>();
+        if (strcmp(action, "start") == 0 || strcmp(action, "stop") == 0) return true;
+    }
+    if (doc["start"].is<const char*>()) return true;
+    if (doc["program_running"].is<bool>()) return true;
+    if (doc["stop"].is<bool>() && doc["stop"].as<bool>()) return true;
+    return false;
+}
+
 static bool playTestChirp() {
 #ifdef DESKTOP_BUILD
     return false;
@@ -610,7 +621,7 @@ void CommandHandler::handle(const uint8_t* payload, unsigned int len) {
         noteRemoteActivity(_ch[0], _ch[1], _tele);
         if (_mqtt) _mqtt->publishStatus();
     }
-    if (!heartbeatRequest && !payloadIsPureStatusRequest(doc)) {
+    if (!heartbeatRequest && !payloadIsPureStatusRequest(doc) && !payloadHasDedicatedAlert(doc)) {
         requestAlert(AlertKind::Command);
     }
 
@@ -1592,7 +1603,8 @@ void CommandHandler::_cmdSetDFSP(float temp) {
     noteRemoteActivity(_ch[0], _ch[1], _tele);
     log_i("[CMD] finish_temp → %.1f %s", temp, _cfg->temp_unit);
     for (int i = 0; i < 2; i++) {
-        if (_ch[i]) _ch[i]->dFSP = temp;
+        if (!_ch[i]) continue;
+        _ch[i]->dFSP = temp;
     }
     _cfg->pwr_dfsp = temp;
     _cfg->savePowerParams();
@@ -1974,7 +1986,6 @@ void CommandHandler::tick() {
     if (consumeDeviceProgramEnd(_ch[0], _ch[1], &deviceEndReason)) {
         publishDeviceProgramEnd(_tele, _mqtt, deviceEndReason);
     }
-
     for (int i = 0; i < 2; i++) {
         ChannelState* ch = _ch[i];
         const char* chName = (i == 0) ? "CH1" : "CH2";
@@ -2020,8 +2031,8 @@ void CommandHandler::tick() {
             log_i("[EVT] acceleration complete — power → %u%%", ch->distill_power_pct);
         }
 
-        // ── Run timer (manual start or temperature-triggered dtSP / dEO) ──
-        if (ch->timer_duration_s > 0) {
+        // ── Run timer (temperature-triggered dtSP / dEO) ──
+        if (ch->timer_dir == 1 && ch->timer_duration_s > 0) {
             // Arm timer when temp first crosses dtSP
             if (!ch->timerTriggered && tempValid && ch->dtSP > 0.0f && ch->temp >= ch->dtSP) {
                 ch->timerTriggered = true;
@@ -2036,31 +2047,23 @@ void CommandHandler::tick() {
                 uint32_t elapsed_s = (uint32_t)((now - ch->timerStartMs) / 1000UL);
                 if (elapsed_s >= ch->timer_duration_s) {
                     ch->timerExpired = true;
-                    if (ch->timer_dir == 1) {
-                        log_i("[EVT] %s dtSP timer expired -> End", chName);
-                        for (int j = 0; j < 2; j++) {
-                            if (!_ch[j]) continue;
-                            _ch[j]->finishEnd = true;
-                            _ch[j]->finishEndJustSet = true;
-                            _ch[j]->finishLatch = true;
-                            _ch[j]->finishLatchJustSet = true;
-                            _ch[j]->timerExpired = true;
-                            _ch[j]->timerFrozen = true;
-                            _ch[j]->timerFrozenRemaining_s = 0;
-                        }
-                        const char* reason = nullptr;
-                        if (consumeDeviceProgramEnd(_ch[0], _ch[1], &reason)) {
-                            publishDeviceProgramEnd(_tele, _mqtt, reason);
-                        }
-                        _applyRuntimeOutputs();
-                        return;
-                    } else {
-                        // Continue: publish event, keep running
-                        char evtBuf[24];
-                        snprintf(evtBuf, sizeof(evtBuf), "%s timer expired", chName);
-                        _tele->publishEventTyped(evtBuf, "timer_expired", (int8_t)(i + 1), "continue");
-                        log_i("[EVT] %s (continue)", evtBuf);
+                    log_i("[EVT] %s dtSP timer expired -> End", chName);
+                    for (int j = 0; j < 2; j++) {
+                        if (!_ch[j]) continue;
+                        _ch[j]->finishEnd = true;
+                        _ch[j]->finishEndJustSet = true;
+                        _ch[j]->finishLatch = true;
+                        _ch[j]->finishLatchJustSet = true;
+                        _ch[j]->timerExpired = true;
+                        _ch[j]->timerFrozen = true;
+                        _ch[j]->timerFrozenRemaining_s = 0;
                     }
+                    const char* reason = nullptr;
+                    if (consumeDeviceProgramEnd(_ch[0], _ch[1], &reason)) {
+                        publishDeviceProgramEnd(_tele, _mqtt, reason);
+                    }
+                    _applyRuntimeOutputs();
+                    return;
                 }
             }
         }

@@ -196,21 +196,16 @@ void OutputController::_updatePowerDirect(int chIdx, ChannelState& ch,
         return;
     }
 
-    // 2. Finish temperature: mark End; optionally latch all outputs off.
+    // 2. Finish temperature: only meaningful when finish_action=end.
     const bool finishTempSource = !_cfg || _cfg->pwr_dfsp_source == (uint8_t)chIdx;
-    if (finishTempSource && ch.dFSP > 0.0f && !ch.finishEnd && ch.temp >= ch.dFSP) {
+    if (ch.timer_dir == 1 && finishTempSource && ch.dFSP > 0.0f && !ch.finishEnd && ch.temp >= ch.dFSP) {
         ch.finishEnd = true;
         ch.finishEndJustSet = true;
         freezePowerTimer(ch);
-        if (ch.timer_dir == 1) {
-            ch.finishLatch = true;
-            ch.finishLatchJustSet = true;
-            log_i("[OUT] CH%d finish temp crossed (%.1f >= %.1f) — latched off",
-                  chIdx, ch.temp, ch.dFSP);
-        } else {
-            log_i("[OUT] CH%d finish temp crossed (%.1f >= %.1f) — continue",
-                  chIdx, ch.temp, ch.dFSP);
-        }
+        ch.finishLatch = true;
+        ch.finishLatchJustSet = true;
+        log_i("[OUT] CH%d finish temp crossed (%.1f >= %.1f) — latched off",
+              chIdx, ch.temp, ch.dFSP);
     }
     if (ch.finishLatch) {
         pwmState.dutyCurrent = 0;

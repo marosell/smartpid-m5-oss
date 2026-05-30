@@ -99,7 +99,9 @@ struct ChannelState {
     bool      accelPhaseJustEnded = false;  // pulse: output_control sets, cmdHandler clears
 
     // ── Latching finish temperature (dFSP / FF latch) ─────────────────────────
-    // When temp crosses dFSP: all outputs off and latched until {"reset": true}.
+    // Only active when finish_action=end. When temp crosses dFSP: all outputs
+    // off and latched until {"reset": true}. In continue mode, finish
+    // conditions are ignored.
     // 0.0f = feature disabled.
     float     dFSP             = 0.0f;
     bool      finishLatch      = false;
@@ -113,8 +115,8 @@ struct ChannelState {
     bool      watchdogFired     = false;
 
     // ── Temperature-triggered timer (dtSP / dEO) ──────────────────────────────
-    // When temp crosses dtSP: arm a countdown of timer_duration_s seconds.
-    // On expiry: either "continue" (publish event) or "shutoff" (stop run).
+    // Only active when finish_action=end. When temp crosses dtSP: arm a
+    // countdown of timer_duration_s seconds. On expiry: stop run.
     // 0.0f dtSP or 0 timer_duration_s = feature disabled.
     float     dtSP             = 0.0f;
     uint32_t  timer_duration_s = 0;     // duration in seconds (0 = disabled)
