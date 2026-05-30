@@ -119,7 +119,7 @@ static String buildStatePayload(Config& cfg, const ChannelState& ch1, const Chan
     program["ended"] = ch1.finishEnd || ch2.finishEnd;
     program["latched"] = ch1.finishLatch || ch2.finishLatch;
     program["acc_elements_enabled"] = accElementsEnabled();
-    program["finish_temp_source"] = (cfg.pwr_dfsp_source == 2) ? "probe2" : "probe1";
+    program["finish_temp_probe"] = (cfg.pwr_dfsp_source == 2) ? "probe2" : "probe1";
     program["timer_remaining_s"] = min(telemetryTimerRemainingSeconds(ch1),
                                        telemetryTimerRemainingSeconds(ch2));
     program["timer_frozen"] = ch1.timerFrozen || ch2.timerFrozen;

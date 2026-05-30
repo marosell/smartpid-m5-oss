@@ -33,11 +33,11 @@ DisplayManager display;
 #define COL_DISABLED   0x39E7u   // dim gray — disabled power tiles
 #define COL_DISABLED_BG 0x0841u  // near-black gray — disabled tile fill
 
-// ── Main menu items (from spec §6 + OEM screenshots) ──────────────────────
+// ── ProofPro launcher items ───────────────────────────────────────────────
 static const char* const kMainMenuItems[] = {
-    "Power", "Settings", "WiFi / MQTT", "Info"
+    "Monitor", "Distillation", "General Settings"
 };
-static const int kMainMenuCount = 4;
+static const int kMainMenuCount = 3;
 
 // ── Context menu items (from spec §7.4 + screenshot IMG_2615) ─────────────
 static const char* const kCtxMenuItems[] = {
@@ -45,11 +45,23 @@ static const char* const kCtxMenuItems[] = {
 };
 static const int kCtxMenuCount = 4;
 
+static const char* const kPowerSettingsItems[] = {
+    "Sensors", "Relays", "Program", "Parameters", "Back", "Exit Distillation Mode"
+};
+static const int kPowerSettingsCount = 6;
+
+static const char* const kDefaultModeOpts[] = {
+    "None", "Monitor", "Distillation"
+};
+static const int kDefaultModeCount = 3;
+
 // ── Setup sub-menu items ───────────────────────────────────────────────────
 static const char* const kSetupMenuItems[] = {
-    "Sensors", "Relays", "Programming", "Parameters", "System", "Exit"
+    "WiFi", "MQTT", "Default Mode", "Temperature Unit",
+    "Publish Interval", "Log Configuration", "Auto Resume", "Clock Setup",
+    "Status", "SW Version", "Serial Number", "Exit"
 };
-static const int kSetupMenuCount = 6;
+static const int kSetupMenuCount = 12;
 
 // ── Info menu items (from spec §12) ──────────────────────────────────────
 static const char* const kInfoMenuItems[] = {
@@ -58,12 +70,10 @@ static const char* const kInfoMenuItems[] = {
 };
 static const int kInfoMenuCount = 6;
 
-// ── WiFi/Logging menu items (from spec §10) ───────────────────────────────
-static const char* const kWifiMenuItems[] = {
-    "Log Configuration", "Status", "WiFi Mode",
-    "SSID", "Password", "MQTT Broker Config.", "Exit"
+static const char* const kWifiModeOpts[] = {
+    "Off", "Client", "AP", "Auto"
 };
-static const int kWifiMenuCount = 7;
+static const int kWifiModeCount = 4;
 
 static const char* const kClockItems[] = {
     "Time Zone", "NTP Sync", "Format", "Sync Now", "Exit"
@@ -304,6 +314,64 @@ static void resetPowerProgramState(ChannelState* ch) {
     ch->accelPhaseActive = elementOutput && ch->programRunning && cfg.pwr_acc_mode && cfg.pwr_dast > 0.0f;
 }
 
+static void startMonitorMode(ChannelState* ch1, ChannelState* ch2) {
+    if (ch1) {
+        ch1->runmode = Runmode::MONITOR;
+        ch1->paused = false;
+        ch1->mode = ControlMode::OFF;
+        ch1->power_pct = 0;
+        ch1->relay_state = false;
+        ch1->relay_command = false;
+        ch1->programRunning = false;
+    }
+    if (ch2) {
+        ch2->runmode = Runmode::MONITOR;
+        ch2->paused = false;
+        ch2->mode = ControlMode::OFF;
+        ch2->power_pct = 0;
+        ch2->relay_state = false;
+        ch2->relay_command = false;
+        ch2->programRunning = false;
+    }
+    cfg.saveRunState((uint8_t)Runmode::MONITOR, (uint8_t)Runmode::MONITOR, false, false);
+}
+
+static void stopToIdleMode(ChannelState* ch1, ChannelState* ch2) {
+    if (ch1) {
+        ch1->runmode = Runmode::IDLE;
+        ch1->paused = false;
+        ch1->mode = ControlMode::OFF;
+        ch1->power_pct = 0;
+        ch1->relay_state = false;
+        ch1->relay_command = false;
+        ch1->programRunning = false;
+    }
+    if (ch2) {
+        ch2->runmode = Runmode::IDLE;
+        ch2->paused = false;
+        ch2->mode = ControlMode::OFF;
+        ch2->power_pct = 0;
+        ch2->relay_state = false;
+        ch2->relay_command = false;
+        ch2->programRunning = false;
+    }
+    cfg.saveRunState(0, 0, false, false);
+    if (ch1 && ch2) {
+        outputCtrl.update(*ch1, *ch2);
+        outputCtrl.pwmLoop();
+    }
+}
+
+static void startPowerManualMode(ChannelState* ch1, ChannelState* ch2) {
+    clearPowerProgramState(ch1, false);
+    clearPowerProgramState(ch2, false);
+    cfg.saveRunState((uint8_t)Runmode::POWER_DIRECT, (uint8_t)Runmode::POWER_DIRECT, false, false);
+    if (ch1 && ch2) {
+        outputCtrl.update(*ch1, *ch2);
+        outputCtrl.pwmLoop();
+    }
+}
+
 static void startPowerProgramFromTiles(ChannelState* ch1, ChannelState* ch2) {
     cmdHandler.startPowerRun();
     if (ch1) {
@@ -381,8 +449,9 @@ void DisplayManager::begin(Config& cfg, MQTTManager& mqtt) {
     M5.Display.setRotation(1);
     M5.Display.fillScreen(COL_BG);
 
-    // Custom firmware boots directly to the live Power screen.
-    _screen = UIScreen::POWER_STATUS;
+    // Boot to the ProofPro launcher. Distillation is one selection away from
+    // the live power/status screen so operators choose intent explicitly.
+    _screen = UIScreen::MAIN_MENU;
     _needsFullRedraw = true;
 }
 
@@ -394,6 +463,19 @@ void DisplayManager::loop(ChannelState& ch1, ChannelState& ch2) {
     _ch2 = &ch2;
     gDisplayCh1 = &ch1;
     gDisplayCh2 = &ch2;
+
+    if (!_defaultModeApplied && _cfg) {
+        _defaultModeApplied = true;
+        if (_cfg->default_mode == (uint8_t)DefaultBootMode::MONITOR) {
+            startMonitorMode(_ch1, _ch2);
+            _screen = UIScreen::MONITOR_STATUS;
+            _needsFullRedraw = true;
+        } else if (_cfg->default_mode == (uint8_t)DefaultBootMode::DISTILLATION) {
+            startPowerManualMode(_ch1, _ch2);
+            _screen = UIScreen::POWER_STATUS;
+            _needsFullRedraw = true;
+        }
+    }
 
     // Poll buttons — dispatch each independently.
     // BtnA (GPIO39) is an ADC input-only pin; wasPressed() can miss brief taps
@@ -459,10 +541,15 @@ void DisplayManager::loop(ChannelState& ch1, ChannelState& ch2) {
                       _screen == UIScreen::RUNNING_GRAPH_CH1 ||
                       _screen == UIScreen::RUNNING_GRAPH_CH2 ||
                       _screen == UIScreen::RUNNING_DUAL_OVERVIEW ||
+                      _screen == UIScreen::MONITOR_STATUS ||
                       _screen == UIScreen::POWER_STATUS);
 
     if (isRunning && _needsDataRedraw) {
         _needsDataRedraw = false;
+        if (_screen == UIScreen::MONITOR_STATUS) {
+            _redrawMonitorStatusValues();
+            return;
+        }
         if (_screen == UIScreen::POWER_STATUS) {
             _redrawPowerStatusValues();
             return;
@@ -503,9 +590,15 @@ UIScreen DisplayManager::_logicalParent() const {
         case UIScreen::RUNNING_GRAPH_CH1:
         case UIScreen::RUNNING_GRAPH_CH2:
         case UIScreen::RUNNING_DUAL_OVERVIEW:
+        case UIScreen::MONITOR_STATUS:
         case UIScreen::POWER_STATUS:
         case UIScreen::POWER_OUTPUT_EDIT:
             return UIScreen::MAIN_MENU;
+
+        case UIScreen::POWER_SETTINGS_MENU:
+            return UIScreen::POWER_STATUS;
+        case UIScreen::EXIT_DISTILLATION_CONFIRM:
+            return UIScreen::POWER_SETTINGS_MENU;
 
         // Context + running dialogs → running detail
         case UIScreen::CONTEXT_MENU:
@@ -522,6 +615,7 @@ UIScreen DisplayManager::_logicalParent() const {
         case UIScreen::SETUP_SOUND_ALARMS:
         case UIScreen::SETUP_PID_AUTOTUNE:
         case UIScreen::SETUP_PID_AUTOTUNE_RUN:
+            if (_prevScreen == UIScreen::POWER_SETTINGS_MENU) return UIScreen::POWER_SETTINGS_MENU;
             return UIScreen::SETUP_MENU;
 
         // WiFi sub-screens → wifi menu
@@ -529,7 +623,7 @@ UIScreen DisplayManager::_logicalParent() const {
         case UIScreen::WIFI_STATUS:
         case UIScreen::WIFI_MODE_SELECT:
         case UIScreen::MQTT_BROKER_CONFIG:
-            return UIScreen::WIFI_LOGGING;
+            return _prevScreen;
 
         // Profile sub-screens → profile menu
         case UIScreen::PROFILE_EDIT:
@@ -537,7 +631,7 @@ UIScreen DisplayManager::_logicalParent() const {
 
         // Info sub-screens → info menu
         case UIScreen::INFO_SINGLE_VALUE:
-            return UIScreen::INFO_MENU;
+            return _prevScreen;
 
         // Top-level menus → main menu
         case UIScreen::SETUP_MENU:
@@ -582,6 +676,15 @@ void DisplayManager::_dispatch(UIEvent ev) {
             _handleSetTimer(ev);
             return;
         }
+        if (_screen == UIScreen::MONITOR_STATUS) {
+            stopToIdleMode(_ch1, _ch2);
+            _goTo(UIScreen::MAIN_MENU);
+            return;
+        }
+        if (_screen == UIScreen::POWER_STATUS) {
+            _goTo(UIScreen::POWER_SETTINGS_MENU);
+            return;
+        }
         UIScreen parent = _logicalParent();
         if (parent != _screen) {
             log_i("[NAV] back %d → %d", (int)_screen, (int)parent);
@@ -612,8 +715,11 @@ void DisplayManager::_dispatch(UIEvent ev) {
         case UIScreen::RUNNING_GRAPH_CH1:
         case UIScreen::RUNNING_GRAPH_CH2:      _handleRunningGraph(ev);    break;
         case UIScreen::RUNNING_DUAL_OVERVIEW:  _handleRunningOverview(ev); break;
+        case UIScreen::MONITOR_STATUS:         _handleMonitorStatus(ev);   break;
         case UIScreen::POWER_STATUS:           _handlePowerStatus(ev);     break;
         case UIScreen::POWER_OUTPUT_EDIT:      _handlePowerOutputEdit(ev); break;
+        case UIScreen::POWER_SETTINGS_MENU:    _handlePowerSettingsMenu(ev); break;
+        case UIScreen::EXIT_DISTILLATION_CONFIRM: _handleExitDistillationConfirm(ev); break;
         case UIScreen::CONTEXT_MENU:           _handleContextMenu(ev);     break;
         case UIScreen::SET_TIMER_DIALOG:       _handleSetTimer(ev);        break;
         case UIScreen::SET_MAXPOWER_DIALOG:    _handleSetMaxPower(ev);     break;
@@ -644,6 +750,8 @@ void DisplayManager::_dispatch(UIEvent ev) {
             // Stub screens — BtnB or BtnC returns to previous screen.
             if (ev == UIEvent::BTN_B || ev == UIEvent::BTN_C) {
                 _goTo(_prevScreen);
+            } else if (ev == UIEvent::TICK_1S && _screen == UIScreen::MQTT_BROKER_CONFIG) {
+                _needsFullRedraw = true;
             }
             break;
         case UIScreen::OTA_PROGRESS:
@@ -666,8 +774,11 @@ void DisplayManager::_drawScreen() {
         case UIScreen::RUNNING_GRAPH_CH1:      _drawRunningGraph(0);       break;
         case UIScreen::RUNNING_GRAPH_CH2:      _drawRunningGraph(1);       break;
         case UIScreen::RUNNING_DUAL_OVERVIEW:  _drawRunningOverview();     break;
+        case UIScreen::MONITOR_STATUS:         _drawMonitorStatus();       break;
         case UIScreen::POWER_STATUS:           _drawPowerStatus();         break;
         case UIScreen::POWER_OUTPUT_EDIT:      _drawPowerOutputEdit();     break;
+        case UIScreen::POWER_SETTINGS_MENU:    _drawPowerSettingsMenu();   break;
+        case UIScreen::EXIT_DISTILLATION_CONFIRM: _drawExitDistillationConfirm(); break;
         case UIScreen::CONTEXT_MENU:           _drawContextMenu();         break;
         case UIScreen::SET_TIMER_DIALOG:       _drawSetTimerDialog();      break;
         case UIScreen::SET_MAXPOWER_DIALOG:    _drawSetMaxPowerDialog();   break;
@@ -930,8 +1041,27 @@ void DisplayManager::_drawTogglePill(int x, int y, int w, int h, bool on) {
 
 void DisplayManager::_drawMainMenu() {
     _drawHeader("ProofPro");
-    _drawNavFooter();
-    _drawMenuList(kMainMenuItems, nullptr, kMainMenuCount, _menuSel, _menuScroll);
+
+    static constexpr int kButtonX = 12;
+    static constexpr int kButtonY = 54;
+    static constexpr int kButtonW = DISP_W - 24;
+    static constexpr int kButtonH = 42;
+    static constexpr int kButtonGap = 14;
+
+    M5.Display.setTextDatum(lgfx::middle_center);
+    for (int i = 0; i < kMainMenuCount; i++) {
+        const int y = kButtonY + i * (kButtonH + kButtonGap);
+        const bool selected = (i == _menuSel);
+        const uint16_t fill = selected ? COL_ACCENT : COL_DISABLED_BG;
+        const uint16_t stroke = selected ? COL_ACCENT : COL_DIVIDER;
+        const uint16_t text = selected ? COL_BG : COL_TEXT;
+
+        M5.Display.fillRoundRect(kButtonX, y, kButtonW, kButtonH, 4, fill);
+        M5.Display.drawRoundRect(kButtonX, y, kButtonW, kButtonH, 4, stroke);
+        M5.Display.setTextColor(text, fill);
+        M5.Display.setTextSize(2);
+        M5.Display.drawString(kMainMenuItems[i], CENTER_X, y + kButtonH / 2);
+    }
 }
 
 void DisplayManager::_handleMainMenu(UIEvent ev) {
@@ -962,17 +1092,16 @@ void DisplayManager::_handleMainMenu(UIEvent ev) {
         case UIEvent::BTN_B: {
             const int item = _menuSel;
             switch (item) {
-                case 0: // Power
+                case 0: // Monitor
+                    startMonitorMode(_ch1, _ch2);
+                    _goTo(UIScreen::MONITOR_STATUS);
+                    break;
+                case 1: // Distillation
+                    startPowerManualMode(_ch1, _ch2);
                     _goTo(UIScreen::POWER_STATUS);
                     break;
-                case 1: // Settings
+                case 2: // General Settings
                     _navPush(); _goTo(UIScreen::SETUP_MENU);
-                    break;
-                case 2: // WiFi / MQTT
-                    _navPush(); _goTo(UIScreen::WIFI_LOGGING);
-                    break;
-                case 3: // Info
-                    _navPush(); _goTo(UIScreen::INFO_MENU);
                     break;
             }
             break;
@@ -1362,6 +1491,67 @@ void DisplayManager::_handleRunningOverview(UIEvent ev) {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
+// MONITOR STATUS — live probe readings only
+// ════════════════════════════════════════════════════════════════════════════
+
+void DisplayManager::_drawMonitorStatus() {
+    if (!_ch1 || !_ch2 || !_cfg) return;
+
+    _drawHeader("Monitor");
+    _drawFooter("", "Exit", "");
+    _redrawMonitorStatusValues();
+}
+
+void DisplayManager::_redrawMonitorStatusValues() {
+    if (!_ch1 || !_ch2 || !_cfg) return;
+
+    M5.Display.fillRect(0, CONTENT_Y, DISP_W, CONTENT_H, COL_BG);
+    M5.Display.drawFastHLine(0, 120, DISP_W, COL_DIVIDER);
+
+    const bool fahrenheit = (strcmp(_cfg->temp_unit, "F") == 0);
+    const char* unit = fahrenheit ? "F" : "C";
+    char value[16];
+    char label[24];
+
+    M5.Display.setTextDatum(lgfx::middle_center);
+
+    snprintf(label, sizeof(label), "Probe 1 (%s)", unit);
+    M5.Display.setTextSize(2);
+    M5.Display.setTextColor(COL_TEXT, COL_BG);
+    M5.Display.drawString(label, CENTER_X, 44);
+    fmtDisplayTemp(value, sizeof(value), _ch1->temp);
+    M5.Display.setTextSize(4);
+    M5.Display.setTextColor(COL_TEMP, COL_BG);
+    M5.Display.drawString(value, CENTER_X, 84);
+
+    snprintf(label, sizeof(label), "Probe 2 (%s)", unit);
+    M5.Display.setTextSize(2);
+    M5.Display.setTextColor(COL_TEXT, COL_BG);
+    M5.Display.drawString(label, CENTER_X, 144);
+    fmtDisplayTemp(value, sizeof(value), _ch2->temp);
+    M5.Display.setTextSize(4);
+    M5.Display.setTextColor(COL_TEMP, COL_BG);
+    M5.Display.drawString(value, CENTER_X, 184);
+}
+
+void DisplayManager::_handleMonitorStatus(UIEvent ev) {
+    switch (ev) {
+        case UIEvent::BTN_B:
+            stopToIdleMode(_ch1, _ch2);
+            _goTo(UIScreen::MAIN_MENU);
+            break;
+        case UIEvent::TICK_1S:
+            _needsIconRedraw = true;
+            break;
+        case UIEvent::DATA_UPDATE:
+            _needsDataRedraw = true;
+            break;
+        default:
+            break;
+    }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
 // POWER STATUS — practical bench/operator screen
 // ════════════════════════════════════════════════════════════════════════════
 
@@ -1411,7 +1601,7 @@ void DisplayManager::_drawPowerStatus() {
     if (!_ch1 || !_ch2 || !_cfg) return;
 
     _drawHeader("ProofPro");
-    _drawFooter("Up", "Sel/Menu", "Down");
+    _drawFooter("Up", "Set/Config", "Down");
 
     _redrawPowerStatusValues();
 }
@@ -1488,10 +1678,11 @@ void DisplayManager::_redrawPowerStatusValues() {
     drawPowerStatusBox(244, 86, 68, 50, "Reset", "RST",
                        COL_TEXT, _powerSel == 5);
 
+    const bool watchdog = _ch1->watchdogFired || _ch2->watchdogFired;
     const bool programRunning = _ch1->programRunning || _ch2->programRunning;
     const bool accel = programRunning && (_ch1->accelPhaseActive || _ch2->accelPhaseActive);
-    const char* status = ended ? "END" : (accel ? "ACCEL" : (programRunning ? "RUN" : "MAN"));
-    uint16_t statusColor = ended ? COL_WARN : (programRunning ? COL_OK : COL_TEXT);
+    const char* status = watchdog ? "SAFE" : (ended ? "END" : (accel ? "ACCEL" : (programRunning ? "RUN" : "MAN")));
+    uint16_t statusColor = (watchdog || ended) ? COL_WARN : (programRunning ? COL_OK : COL_TEXT);
     drawPowerStatusBox(8, 146, 74, 50, "Status", status, statusColor, _powerSel == 6);
 
     char timerBuf[24];
@@ -1614,10 +1805,116 @@ void DisplayManager::_handlePowerStatus(UIEvent ev) {
             }
             break;
         case UIEvent::BTN_BACK:
-            _goTo(UIScreen::MAIN_MENU);
+            _goTo(UIScreen::POWER_SETTINGS_MENU);
             break;
         case UIEvent::TICK_1S: _needsTimerRedraw = true;           break;
         default: break;
+    }
+}
+
+void DisplayManager::_drawPowerSettingsMenu() {
+    _drawHeader("Power Settings");
+    _drawNavFooter();
+    _drawMenuList(kPowerSettingsItems, nullptr, kPowerSettingsCount, _menuSel, _menuScroll);
+}
+
+void DisplayManager::_handlePowerSettingsMenu(UIEvent ev) {
+    switch (ev) {
+        case UIEvent::BTN_A:
+            if (_menuSel > 0) {
+                _menuSel--;
+                if (_menuSel < _menuScroll) _menuScroll = _menuSel;
+            } else {
+                _menuSel = kPowerSettingsCount - 1;
+                _menuScroll = (kPowerSettingsCount > MENU_ITEMS_VIS) ? kPowerSettingsCount - MENU_ITEMS_VIS : 0;
+            }
+            _needsFullRedraw = true;
+            break;
+        case UIEvent::BTN_C:
+            if (_menuSel < kPowerSettingsCount - 1) {
+                _menuSel++;
+                if (_menuSel >= _menuScroll + MENU_ITEMS_VIS)
+                    _menuScroll = _menuSel - MENU_ITEMS_VIS + 1;
+            } else {
+                _menuSel = 0;
+                _menuScroll = 0;
+            }
+            _needsFullRedraw = true;
+            break;
+        case UIEvent::BTN_B:
+            _savedMenuSel = _menuSel;
+            _savedMenuScroll = _menuScroll;
+            switch (_menuSel) {
+                case 0: _navPush(); _goTo(UIScreen::SETUP_HW); break;
+                case 1: _navPush(); _goTo(UIScreen::SETUP_POWER); break;
+                case 2: _navPush(); _goTo(UIScreen::SETUP_PROCESS_P); break;
+                case 3: _navPush(); _goTo(UIScreen::SETUP_PROCESS); break;
+                case 4: _goTo(UIScreen::POWER_STATUS); break;
+                case 5:
+                    _ctxSel = 0;
+                    _goTo(UIScreen::EXIT_DISTILLATION_CONFIRM);
+                    break;
+            }
+            break;
+        default:
+            break;
+    }
+}
+
+void DisplayManager::_drawExitDistillationConfirm() {
+    _drawHeader("Exit Distillation");
+
+    M5.Display.setTextDatum(lgfx::middle_center);
+    M5.Display.setTextColor(COL_TEXT, COL_BG);
+    M5.Display.setTextSize(2);
+    M5.Display.drawString("Are you sure you", CENTER_X, 48);
+    M5.Display.drawString("wish to Exit?", CENTER_X, 74);
+    M5.Display.setTextSize(1);
+    M5.Display.drawString("This will end your current", CENTER_X, 112);
+    M5.Display.drawString("distillation.", CENTER_X, 130);
+
+    const int y = 164;
+    const int w = 110;
+    const int h = 34;
+    const int noX = 36;
+    const int yesX = 174;
+    const bool noSelected = (_ctxSel == 0);
+    const bool yesSelected = (_ctxSel == 1);
+
+    M5.Display.fillRoundRect(noX, y, w, h, 4, noSelected ? COL_ACCENT : COL_DISABLED_BG);
+    M5.Display.drawRoundRect(noX, y, w, h, 4, noSelected ? COL_ACCENT : COL_DIVIDER);
+    M5.Display.setTextColor(noSelected ? COL_BG : COL_TEXT, noSelected ? COL_ACCENT : COL_DISABLED_BG);
+    M5.Display.setTextSize(2);
+    M5.Display.drawString("No", noX + w / 2, y + h / 2);
+
+    M5.Display.fillRoundRect(yesX, y, w, h, 4, yesSelected ? COL_ACCENT : COL_DISABLED_BG);
+    M5.Display.drawRoundRect(yesX, y, w, h, 4, yesSelected ? COL_ACCENT : COL_DIVIDER);
+    M5.Display.setTextColor(yesSelected ? COL_BG : COL_TEXT, yesSelected ? COL_ACCENT : COL_DISABLED_BG);
+    M5.Display.drawString("Yes", yesX + w / 2, y + h / 2);
+
+    _drawFooter("No", "OK", "Yes");
+}
+
+void DisplayManager::_handleExitDistillationConfirm(UIEvent ev) {
+    switch (ev) {
+        case UIEvent::BTN_A:
+            _ctxSel = 0;
+            _needsFullRedraw = true;
+            break;
+        case UIEvent::BTN_C:
+            _ctxSel = 1;
+            _needsFullRedraw = true;
+            break;
+        case UIEvent::BTN_B:
+            if (_ctxSel == 1) {
+                stopToIdleMode(_ch1, _ch2);
+                _goTo(UIScreen::MAIN_MENU);
+            } else {
+                _goTo(UIScreen::POWER_SETTINGS_MENU);
+            }
+            break;
+        default:
+            break;
     }
 }
 
@@ -2048,7 +2345,7 @@ void DisplayManager::_handleInfoSingle(UIEvent ev) {
         }
     } else {
         // INFO_SINGLE_VALUE: any button goes back
-        if (ev == UIEvent::BTN_B || ev == UIEvent::BTN_C) _goTo(UIScreen::INFO_MENU);
+        if (ev == UIEvent::BTN_B || ev == UIEvent::BTN_C) _goTo(_prevScreen);
     }
 }
 
@@ -2203,11 +2500,10 @@ static const char* probeShort(ProbeType t) {
 static const char* const kHwItems[] = {
     "T. Probe 1", "T. Probe 2",
     "Probe 1 Calibr.", "Probe 2 Calibr.",
-    "Temperature Unit", "NTC Beta",
-    "Publish Interval",
+    "NTC Beta",
     "Exit"
 };
-static const int kHwCount = 8;
+static const int kHwCount = 6;
 
 // ── Unit Parameters item list (spec §8.2) ─────────────────────────────────
 static const char* const kUnitItems[] = {
@@ -2303,9 +2599,35 @@ static const int kProcPCount = 9;
 // ────────────────────────────────────────────────────────────────────────────
 void DisplayManager::_drawSetupHw() {
     if (_screen == UIScreen::SETUP_MENU) {
-        _drawHeader("Setup");
+        _drawHeader("General Settings");
         _drawNavFooter();
-        _drawMenuList(kSetupMenuItems, nullptr, kSetupMenuCount, _menuSel, _menuScroll);
+        char vbufs[kSetupMenuCount][16];
+        const char* vals[kSetupMenuCount] = {};
+        if (_cfg) {
+            uint8_t wifiMode = _cfg->wifi_mode;
+            if (wifiMode > (uint8_t)WiFiModeSetting::AUTO) {
+                wifiMode = (uint8_t)WiFiModeSetting::AUTO;
+            }
+            strlcpy(vbufs[0], kWifiModeOpts[wifiMode], sizeof(vbufs[0]));
+            vals[0] = vbufs[0];
+            strlcpy(vbufs[1], (_mqtt && _mqtt->connected()) ? "OK" : "Off", sizeof(vbufs[1]));
+            vals[1] = vbufs[1];
+            uint8_t defaultMode = _cfg->default_mode;
+            if (defaultMode > (uint8_t)DefaultBootMode::DISTILLATION) {
+                defaultMode = (uint8_t)DefaultBootMode::NONE;
+            }
+            strlcpy(vbufs[2], kDefaultModeOpts[defaultMode], sizeof(vbufs[2]));
+            vals[2] = vbufs[2];
+            fmtDegreeUnit(vbufs[3], sizeof(vbufs[3]), _cfg->temp_unit);
+            vals[3] = vbufs[3];
+            snprintf(vbufs[4], sizeof(vbufs[4]), "%u s", _cfg->sample_s);
+            vals[4] = vbufs[4];
+            strlcpy(vbufs[5], _cfg->log_mode > 0 ? "WiFi" : "Off", sizeof(vbufs[5]));
+            vals[5] = vbufs[5];
+            strlcpy(vbufs[6], _cfg->auto_resume ? "On" : "Off", sizeof(vbufs[6]));
+            vals[6] = vbufs[6];
+        }
+        _drawMenuList(kSetupMenuItems, vals, kSetupMenuCount, _menuSel, _menuScroll);
         return;
     }
     if (!_cfg) return;
@@ -2320,10 +2642,8 @@ void DisplayManager::_drawSetupHw() {
     strlcpy(vbufs[1], probeShort(c.ch2_probe_type),  sizeof(vbufs[1])); vals[1] = vbufs[1];
     snprintf(vbufs[2], sizeof(vbufs[2]), "%.1f", c.ch1_probe_cal); vals[2] = vbufs[2];
     snprintf(vbufs[3], sizeof(vbufs[3]), "%.1f", c.ch2_probe_cal); vals[3] = vbufs[3];
-    fmtDegreeUnit(vbufs[4], sizeof(vbufs[4]), c.temp_unit); vals[4] = vbufs[4];
-    snprintf(vbufs[5], sizeof(vbufs[5]), "%u", c.ntc_beta); vals[5] = vbufs[5];
-    snprintf(vbufs[6], sizeof(vbufs[6]), "%u s", c.sample_s); vals[6] = vbufs[6];
-    // vals[7] (Exit) stays nullptr
+    snprintf(vbufs[4], sizeof(vbufs[4]), "%u", c.ntc_beta); vals[4] = vbufs[4];
+    // vals[5] (Exit) stays nullptr
 
     _drawMenuList(kHwItems, vals, kHwCount, _menuSel, _menuScroll);
 }
@@ -2384,7 +2704,7 @@ void DisplayManager::_handleSetupHw(UIEvent ev) {
         count  = kHwCount;
         parent = UIScreen::SETUP_MENU;
     } else if (_screen == UIScreen::WIFI_LOGGING) {
-        count  = kWifiMenuCount;
+        count  = kWifiModeCount;
         parent = UIScreen::MAIN_MENU;
     } else if (_screen == UIScreen::PROFILE_MENU) {
         count  = kProfileMenuCount;
@@ -2419,12 +2739,86 @@ void DisplayManager::_handleSetupHw(UIEvent ev) {
 
             if (_screen == UIScreen::SETUP_MENU) {
                 switch (_menuSel) {
-                    case 0: _navPush(); _goTo(UIScreen::SETUP_HW);        break;  // Sensors
-                    case 1: _navPush(); _goTo(UIScreen::SETUP_POWER);     break;  // Relays
-                    case 2: _navPush(); _goTo(UIScreen::SETUP_PROCESS_P); break;  // Programming
-                    case 3: _navPush(); _goTo(UIScreen::SETUP_PROCESS);   break;  // Parameters
-                    case 4: _navPush(); _goTo(UIScreen::SETUP_UNIT);      break;  // System
-                    case 5: _goTo(UIScreen::MAIN_MENU);                   break;  // Exit
+                    case 0: // WiFi
+                        _navPush(); _goTo(UIScreen::WIFI_LOGGING);
+                        break;
+                    case 1: // MQTT
+                        _navPush(); _goTo(UIScreen::MQTT_BROKER_CONFIG);
+                        break;
+                    case 2: { // Default Mode
+                        strlcpy(_listTitle, "Default Mode", sizeof(_listTitle));
+                        _listOptions = kDefaultModeOpts;
+                        _listCount = kDefaultModeCount;
+                        _listSel = (_cfg && _cfg->default_mode <= (uint8_t)DefaultBootMode::DISTILLATION)
+                            ? (int8_t)_cfg->default_mode
+                            : (int8_t)DefaultBootMode::NONE;
+                        _listCallback = [](int8_t i){
+                            cfg.default_mode = (uint8_t)i;
+                            cfg.save();
+                        };
+                        _goTo(UIScreen::LIST_SELECT_DIALOG);
+                        break;
+                    }
+                    case 3: { // Temperature Unit
+                        static const char* const opts[] = { "^C", "^F" };
+                        strlcpy(_listTitle, "Temperature Unit", sizeof(_listTitle));
+                        _listOptions = opts;  _listCount = 2;
+                        _listSel = (_cfg && strcmp(_cfg->temp_unit, "C") == 0) ? 0 : 1;
+                        _listCallback = [](int8_t i){
+                            strlcpy(cfg.temp_unit, i == 0 ? "C" : "F", sizeof(cfg.temp_unit));
+                            cfg.save();
+                        };
+                        _goTo(UIScreen::LIST_SELECT_DIALOG);
+                        break;
+                    }
+                    case 4: // Publish Interval
+                        strlcpy(_editLabel, "Publish Interval", sizeof(_editLabel));
+                        strlcpy(_editUnit, " s", sizeof(_editUnit));
+                        _editValue = _cfg ? (float)_cfg->sample_s : 1.0f;
+                        _editMin = 1.0f; _editMax = 3600.0f; _editStep = 1.0f;
+                        _editCallback = [](float v){ cfg.sample_s = (uint16_t)v; cfg.save(); };
+                        _goTo(UIScreen::VALUE_ENTRY_DIALOG);
+                        break;
+                    case 5: { // Log Configuration
+                        static const char* const logOpts[] = { "Off", "WiFi" };
+                        strlcpy(_listTitle, "Log Mode", sizeof(_listTitle));
+                        _listOptions = logOpts; _listCount = 2;
+                        _listSel = (cfg.log_mode > 0) ? 1 : 0;
+                        _listCallback = [](int8_t i){ cfg.log_mode = (uint8_t)(i > 0 ? 1 : 0); cfg.save(); };
+                        _goTo(UIScreen::LIST_SELECT_DIALOG);
+                        break;
+                    }
+                    case 6: { // Auto Resume
+                        static const char* const opts[] = { "Off", "On" };
+                        strlcpy(_listTitle, "Auto Resume", sizeof(_listTitle));
+                        _listOptions = opts;  _listCount = 2;
+                        _listSel = (_cfg && _cfg->auto_resume) ? 1 : 0;
+                        _listCallback = [](int8_t i){ cfg.auto_resume = (i == 1); cfg.save(); };
+                        _goTo(UIScreen::LIST_SELECT_DIALOG);
+                        break;
+                    }
+                    case 7: // Clock Setup
+                        _navPush(); _goTo(UIScreen::SETUP_CLOCK);
+                        break;
+                    case 8: // Status
+                        strlcpy(_editLabel, "Status", sizeof(_editLabel));
+                        strlcpy(_errorMsg,
+                                (WiFi.status() == WL_CONNECTED && _mqtt && _mqtt->connected()) ? "OK" : "FAIL",
+                                sizeof(_errorMsg));
+                        _navPush(); _goTo(UIScreen::INFO_SINGLE_VALUE);
+                        break;
+                    case 9: // SW Version
+                        strlcpy(_editLabel, "SW Version", sizeof(_editLabel));
+                        strlcpy(_errorMsg, "0.3.0", sizeof(_errorMsg));
+                        _navPush(); _goTo(UIScreen::INFO_SINGLE_VALUE);
+                        break;
+                    case 10: // Serial Number
+                        strlcpy(_editLabel, "Serial Number", sizeof(_editLabel));
+                        if (_cfg) strlcpy(_errorMsg, _cfg->serial_hex, sizeof(_errorMsg));
+                        else strlcpy(_errorMsg, "N/A", sizeof(_errorMsg));
+                        _navPush(); _goTo(UIScreen::INFO_SINGLE_VALUE);
+                        break;
+                    case 11: _goTo(UIScreen::MAIN_MENU); break; // Exit
                 }
             } else if (_screen == UIScreen::SETUP_HW && _cfg) {
                 switch (_menuSel) {
@@ -2460,19 +2854,7 @@ void DisplayManager::_handleSetupHw(UIEvent ev) {
                         _editCallback = [](float v){ cfg.ch2_probe_cal = v; cfg.save(); };
                         _goTo(UIScreen::VALUE_ENTRY_DIALOG);
                         break;
-                    case 4: { // Temperature Unit
-                        static const char* const opts[] = { "^C", "^F" };
-                        strlcpy(_listTitle, "Temperature Unit", sizeof(_listTitle));
-                        _listOptions = opts;  _listCount = 2;
-                        _listSel = (strcmp(_cfg->temp_unit, "C") == 0) ? 0 : 1;
-                        _listCallback = [](int8_t i){
-                            strlcpy(cfg.temp_unit, i == 0 ? "C" : "F", sizeof(cfg.temp_unit));
-                            cfg.save();
-                        };
-                        _goTo(UIScreen::LIST_SELECT_DIALOG);
-                        break;
-                    }
-                    case 5: { // NTC Beta
+                    case 4: { // NTC Beta
                         strlcpy(_listTitle, "NTC Beta", sizeof(_listTitle));
                         _listOptions = kNtcBetaOpts;  _listCount = kNtcBetaCount;
                         _listSel = ntcBetaIdx(_cfg->ntc_beta);
@@ -2480,54 +2862,43 @@ void DisplayManager::_handleSetupHw(UIEvent ev) {
                         _goTo(UIScreen::LIST_SELECT_DIALOG);
                         break;
                     }
-                    case 6: // Publish Interval
-                        strlcpy(_editLabel, "Publish Interval", sizeof(_editLabel));
-                        strlcpy(_editUnit, " s", sizeof(_editUnit));
-                        _editValue = (float)_cfg->sample_s;
-                        _editMin = 1.0f; _editMax = 3600.0f; _editStep = 1.0f;
-                        _editCallback = [](float v){ cfg.sample_s = (uint16_t)v; cfg.save(); };
-                        _goTo(UIScreen::VALUE_ENTRY_DIALOG);
-                        break;
-                    case 7: _goTo(UIScreen::SETUP_MENU); break; // Exit
+                    case 5: _goTo(_prevScreen == UIScreen::POWER_SETTINGS_MENU ? UIScreen::POWER_SETTINGS_MENU : UIScreen::SETUP_MENU); break; // Exit
                 }
             } else if (_screen == UIScreen::WIFI_LOGGING) {
-                switch (_menuSel) {
-                    case 0: { // Log Configuration → Log Mode selector
-                        static const char* const logOpts[] = { "Off", "WiFi" };
-                        strlcpy(_listTitle, "Log Mode", sizeof(_listTitle));
-                        _listOptions = logOpts; _listCount = 2;
-                        _listSel = (cfg.log_mode > 0) ? 1 : 0;  // uint8_t: 0=Off, >0=On
-                        // Store 0 or 1 only; full 0–4 enum is preserved on NVS read
-                        // but UI currently exposes only Off/WiFi.
-                        _listCallback = [](int8_t i){ cfg.log_mode = (uint8_t)(i > 0 ? 1 : 0); cfg.save(); };
-                        _goTo(UIScreen::LIST_SELECT_DIALOG);
-                        break;
+                if (_cfg && _menuSel >= 0 && _menuSel < kWifiModeCount) {
+                    _cfg->wifi_mode = (uint8_t)_menuSel;
+                    _cfg->save();
+
+                    if (_menuSel == (int)WiFiModeSetting::OFF) {
+                        WiFi.disconnect(true);
+                        WiFi.mode(WIFI_OFF);
+                    } else if (_menuSel == (int)WiFiModeSetting::AP) {
+                        char apName[32];
+                        snprintf(apName, sizeof(apName), "ProofPro-%s", _cfg->topic_id);
+                        WiFi.mode(WIFI_AP);
+                        WiFi.softAP(apName);
+                    } else {
+                        char ssid[33] = {};
+                        char pass[65] = {};
+                        {
+                            Preferences prefs;
+                            prefs.begin(SMARTPID_NVS_NS, /*readOnly=*/true);
+                            prefs.getString("wifi_ssid", ssid, sizeof(ssid));
+                            prefs.getString("wifi_pass", pass, sizeof(pass));
+                            prefs.end();
+                        }
+                        if (strlen(ssid) > 0) {
+                            WiFi.mode(WIFI_STA);
+                            WiFi.setSleep(false);
+                            WiFi.begin(ssid, pass);
+                        } else if (_menuSel == (int)WiFiModeSetting::AUTO) {
+                            char apName[32];
+                            snprintf(apName, sizeof(apName), "ProofPro-%s", _cfg->topic_id);
+                            WiFi.mode(WIFI_AP);
+                            WiFi.softAP(apName);
+                        }
                     }
-                    case 1: { // Status — show WiFi SSID, IP, RSSI
-                        // Reuse INFO_SINGLE_VALUE as a 4-line status screen
-                        _navPush(); _goTo(UIScreen::WIFI_STATUS);
-                        break;
-                    }
-                    case 2: { // WiFi Mode — Off/Client/AP/Auto
-                        static const char* const wifiModeOpts[] = {
-                            "Off", "Client", "Access Point", "Auto"
-                        };
-                        strlcpy(_listTitle, "WiFi Mode", sizeof(_listTitle));
-                        _listOptions = wifiModeOpts; _listCount = 4;
-                        // We don't have a persistent wifi_mode field, so show Client (1) default
-                        _listSel = 1;
-                        // No-op callback — WiFi mode change requires reboot; show info only
-                        _listCallback = [](int8_t){ /* TODO: persist + reboot */ };
-                        _goTo(UIScreen::LIST_SELECT_DIALOG);
-                        break;
-                    }
-                    case 3: // SSID — show current; editable only via captive portal
-                    case 4: // Password — show as "****" for security
-                        _navPush(); _goTo(UIScreen::WIFI_STATUS);
-                        break;
-                    case 5: _navPush(); _goTo(UIScreen::MQTT_BROKER_CONFIG); break;
-                    case 6: _goTo(UIScreen::MAIN_MENU); break;  // Exit — resets stack
-                    default: break;
+                    _needsFullRedraw = true;
                 }
             } else if (_screen == UIScreen::PROFILE_MENU) {
                 switch (_menuSel) {
@@ -2568,6 +2939,11 @@ void DisplayManager::_handleSetupHw(UIEvent ev) {
             }
             break;
         }
+        case UIEvent::TICK_1S:
+            if (_screen == UIScreen::WIFI_LOGGING) {
+                _needsFullRedraw = true;
+            }
+            break;
         default: break;
     }
 }
@@ -2701,7 +3077,7 @@ void DisplayManager::_handleSetupClock(UIEvent ev) {
                     _needsFullRedraw = true;
                     break;
                 case 4:
-                    _goTo(UIScreen::SETUP_UNIT);
+                    _goTo(_prevScreen);
                     break;
             }
             break;
@@ -2816,7 +3192,7 @@ void DisplayManager::_handleSetupProcess(UIEvent ev) {
                     };
                     _goTo(UIScreen::VALUE_ENTRY_DIALOG);
                     break;
-                case 6: _goTo(UIScreen::SETUP_MENU); break; // Exit
+                case 6: _goTo(_prevScreen == UIScreen::POWER_SETTINGS_MENU ? UIScreen::POWER_SETTINGS_MENU : UIScreen::SETUP_MENU); break; // Exit
                 default: break;
             }
             break;
@@ -2874,71 +3250,143 @@ void DisplayManager::_drawSetupClock() {
 }
 
 void DisplayManager::_drawWifiLogging() {
-    _drawHeader("WiFi/Logging");
+    _drawHeader("WiFi");
     _drawNavFooter();
-    _drawMenuList(kWifiMenuItems, nullptr, kWifiMenuCount, _menuSel, _menuScroll);
+    _drawWifiStatus();
 }
 
 void DisplayManager::_drawMqttBrokerConfig() {
-    _drawHeader("MQTT Broker Config.");
+    _drawHeader("MQTT");
     _drawFooter("", "back", "");
     if (!_cfg) return;
-    M5.Display.setTextSize(1);
+
+    M5.Display.setTextSize(2);
     M5.Display.setTextColor(COL_TEXT, COL_BG);
     M5.Display.setTextDatum(lgfx::top_left);
-    int y = CONTENT_Y + 5;
-    char buf[48];
-    snprintf(buf, sizeof(buf), "Broker: %s", _cfg->mqtt_host); M5.Display.drawString(buf, 5, y); y += 20;
-    snprintf(buf, sizeof(buf), "Port:   %u", _cfg->mqtt_port); M5.Display.drawString(buf, 5, y); y += 20;
-    snprintf(buf, sizeof(buf), "User:   %s", _cfg->mqtt_user); M5.Display.drawString(buf, 5, y); y += 20;
-    snprintf(buf, sizeof(buf), "ID:     %s", _cfg->topic_id);  M5.Display.drawString(buf, 5, y);
+    int y = CONTENT_Y + 2;
+    char buf[64];
+
+    const bool wifiOk = (WiFi.status() == WL_CONNECTED);
+    const bool mqttOk = _mqtt && _mqtt->connected();
+    snprintf(buf, sizeof(buf), "State: %s", mqttOk ? "connected" : (wifiOk ? "offline" : "no WiFi"));
+    M5.Display.drawString(buf, 5, y); y += 22;
+
+    snprintf(buf, sizeof(buf), "Broker: %s", _cfg->mqtt_host);
+    M5.Display.drawString(buf, 5, y); y += 22;
+
+    snprintf(buf, sizeof(buf), "Port:   %u", _cfg->mqtt_port);
+    M5.Display.drawString(buf, 5, y); y += 22;
+
+    snprintf(buf, sizeof(buf), "User:   %s", strlen(_cfg->mqtt_user) ? _cfg->mqtt_user : "(none)");
+    M5.Display.drawString(buf, 5, y); y += 22;
+
+    snprintf(buf, sizeof(buf), "Topic:  %s", _cfg->topic_id);
+    M5.Display.drawString(buf, 5, y); y += 22;
+
+    snprintf(buf, sizeof(buf), "Remote: %s",
+             mqttRemoteActive() ? "ON" : (mqttRemoteEnabled() ? "RDY" : "OFF"));
+    M5.Display.drawString(buf, 5, y);
 }
 
 // ── _drawWifiStatus — called for WIFI_STATUS, WIFI_LOG_CONFIG, WIFI_MODE_SELECT ─
 // Shows current WiFi state: SSID, IP, RSSI, MQTT status.
 // SSID/Password editable only via captive portal (BtnA at boot).
 void DisplayManager::_drawWifiStatus() {
-    _drawHeader("WiFi Status");
-    _drawFooter("", "back", "");
+    if (_screen != UIScreen::WIFI_LOGGING) {
+        _drawHeader("WiFi Status");
+        _drawFooter("", "back", "");
+    }
 
     if (!_cfg) return;
 
-    M5.Display.setTextSize(1);
+    M5.Display.setTextSize(_screen == UIScreen::WIFI_LOGGING ? 2 : 1);
     M5.Display.setTextColor(COL_TEXT, COL_BG);
     M5.Display.setTextDatum(lgfx::top_left);
-    int y = CONTENT_Y + 4;
-    char buf[52];
+    int y = CONTENT_Y + 1;
+    const int lineH = (_screen == UIScreen::WIFI_LOGGING) ? 20 : 16;
+    char buf[64];
 
     // Read credentials from NVS (same keys as captive_portal.cpp / setupWiFi())
     char ssid[33] = {};
+    char pass[65] = {};
     {
         Preferences prefs;
         prefs.begin(SMARTPID_NVS_NS, /*readOnly=*/true);
         prefs.getString("wifi_ssid", ssid, sizeof(ssid));
+        prefs.getString("wifi_pass", pass, sizeof(pass));
         prefs.end();
     }
 
     snprintf(buf, sizeof(buf), "SSID: %s", strlen(ssid) ? ssid : "(none)");
-    M5.Display.drawString(buf, 5, y); y += 20;
+    M5.Display.drawString(buf, 5, y); y += lineH;
 
-    if (WiFi.status() == WL_CONNECTED) {
+    char passMask[17] = {};
+    const size_t passLen = strlen(pass);
+    if (passLen > 0) {
+        const size_t maskLen = passLen < sizeof(passMask) ? passLen : sizeof(passMask) - 1;
+        memset(passMask, '*', maskLen);
+        passMask[maskLen] = '\0';
+    }
+    snprintf(buf, sizeof(buf), "Pass: %s", passLen ? passMask : "(none)");
+    M5.Display.drawString(buf, 5, y); y += lineH;
+
+    const bool connected = (WiFi.status() == WL_CONNECTED);
+    snprintf(buf, sizeof(buf), "Saved: %s",
+             _cfg->wifi_mode < kWifiModeCount ? kWifiModeOpts[_cfg->wifi_mode] : "Auto");
+    M5.Display.drawString(buf, 5, y); y += lineH;
+
+    snprintf(buf, sizeof(buf), "Mode:  %s",
+             WiFi.getMode() == WIFI_AP ? "AP" :
+             WiFi.getMode() == WIFI_AP_STA ? "AP+Client" :
+             WiFi.getMode() == WIFI_STA ? "Client" : "Off");
+    M5.Display.drawString(buf, 5, y); y += lineH;
+
+    snprintf(buf, sizeof(buf), "State: %s", connected ? "connected" : "offline");
+    M5.Display.drawString(buf, 5, y); y += lineH;
+
+    if (connected) {
         snprintf(buf, sizeof(buf), "IP:   %s", WiFi.localIP().toString().c_str());
-        M5.Display.drawString(buf, 5, y); y += 20;
+        M5.Display.drawString(buf, 5, y); y += lineH;
         snprintf(buf, sizeof(buf), "RSSI: %d dBm", WiFi.RSSI());
-        M5.Display.drawString(buf, 5, y); y += 20;
+        M5.Display.drawString(buf, 5, y); y += lineH;
+    } else if (WiFi.getMode() == WIFI_AP) {
+        snprintf(buf, sizeof(buf), "AP IP: %s", WiFi.softAPIP().toString().c_str());
+        M5.Display.drawString(buf, 5, y); y += lineH;
     } else {
-        M5.Display.drawString("Not connected", 5, y); y += 20;
         M5.Display.setTextColor(TFT_DARKGREY, COL_BG);
-        M5.Display.drawString("(Hold BtnA at boot", 5, y); y += 16;
-        M5.Display.drawString(" to reconfigure)", 5, y); y += 20;
+        M5.Display.drawString("Boot BtnA: edit WiFi", 5, y); y += lineH;
         M5.Display.setTextColor(COL_TEXT, COL_BG);
     }
 
-    // MQTT status
-    bool mqttOk = _mqtt && _mqtt->connected();
-    snprintf(buf, sizeof(buf), "MQTT: %s", mqttOk ? "OK" : "disconnected");
-    M5.Display.setTextColor(mqttOk ? TFT_GREEN : TFT_RED, COL_BG);
-    M5.Display.drawString(buf, 5, y);
+    if (_screen != UIScreen::WIFI_LOGGING) {
+        snprintf(buf, sizeof(buf), "MAC:  %s", WiFi.macAddress().c_str());
+        M5.Display.drawString(buf, 5, y);
+    }
+
+    if (_screen == UIScreen::WIFI_LOGGING) {
+        static constexpr int btnW = 72;
+        static constexpr int btnH = 28;
+        static constexpr int gap = 6;
+        static constexpr int startX = 10;
+        static constexpr int btnY = 190;
+
+        M5.Display.setTextDatum(lgfx::middle_center);
+        M5.Display.setTextSize(2);
+        for (int i = 0; i < kWifiModeCount; i++) {
+            const int x = startX + i * (btnW + gap);
+            const bool selected = (i == _menuSel);
+            const bool saved = (_cfg->wifi_mode == (uint8_t)i);
+            const uint16_t fill = selected ? COL_ACCENT : (saved ? COL_OK : COL_DISABLED_BG);
+            const uint16_t stroke = selected ? COL_ACCENT : (saved ? COL_OK : COL_DIVIDER);
+            const uint16_t text = (selected || saved) ? COL_BG : COL_TEXT;
+
+            M5.Display.fillRoundRect(x, btnY, btnW, btnH, 4, fill);
+            M5.Display.drawRoundRect(x, btnY, btnW, btnH, 4, stroke);
+            M5.Display.setTextColor(text, fill);
+            M5.Display.drawString(kWifiModeOpts[i], x + btnW / 2, btnY + btnH / 2);
+        }
+    }
+
     M5.Display.setTextColor(COL_TEXT, COL_BG);
 }
 
@@ -3221,7 +3669,7 @@ void DisplayManager::_handleSetupPower(UIEvent ev) {
                     };
                     _goTo(UIScreen::VALUE_ENTRY_DIALOG);
                     break;
-                case 6: _goTo(UIScreen::SETUP_MENU); break; // Exit
+                case 6: _goTo(_prevScreen == UIScreen::POWER_SETTINGS_MENU ? UIScreen::POWER_SETTINGS_MENU : UIScreen::SETUP_MENU); break; // Exit
             }
             break;
         default: break;
@@ -3421,7 +3869,7 @@ void DisplayManager::_handleSetupProcessP(UIEvent ev) {
                     _goTo(UIScreen::LIST_SELECT_DIALOG);
                     break;
                 }
-                case 8: _goTo(UIScreen::SETUP_MENU); break; // Exit
+                case 8: _goTo(_prevScreen == UIScreen::POWER_SETTINGS_MENU ? UIScreen::POWER_SETTINGS_MENU : UIScreen::SETUP_MENU); break; // Exit
             }
             break;
         default: break;

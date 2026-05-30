@@ -298,17 +298,45 @@ static void setDeviceWatchdogFired(ChannelState* ch1, ChannelState* ch2, bool fi
     if (ch1) {
         ch1->watchdogFired = fired;
         if (fired) {
+            profiles.stop(0, *ch1);
+            ch1->programRunning = false;
+            ch1->paused = false;
             ch1->power_pct = 0;
+            ch1->distill_power_pct = 0;
             ch1->relay_state = false;
             ch1->relay_command = false;
+            ch1->finishLatch = false;
+            ch1->finishLatchJustSet = false;
+            ch1->finishEnd = false;
+            ch1->finishEndJustSet = false;
+            ch1->timerTriggered = false;
+            ch1->timerExpired = false;
+            ch1->timerFrozen = false;
+            ch1->timerFrozenRemaining_s = 0;
+            ch1->accelPhaseActive = false;
+            ch1->accelPhaseJustEnded = false;
         }
     }
     if (ch2) {
         ch2->watchdogFired = fired;
         if (fired) {
+            profiles.stop(1, *ch2);
+            ch2->programRunning = false;
+            ch2->paused = false;
             ch2->power_pct = 0;
+            ch2->distill_power_pct = 0;
             ch2->relay_state = false;
             ch2->relay_command = false;
+            ch2->finishLatch = false;
+            ch2->finishLatchJustSet = false;
+            ch2->finishEnd = false;
+            ch2->finishEndJustSet = false;
+            ch2->timerTriggered = false;
+            ch2->timerExpired = false;
+            ch2->timerFrozen = false;
+            ch2->timerFrozenRemaining_s = 0;
+            ch2->accelPhaseActive = false;
+            ch2->accelPhaseJustEnded = false;
         }
     }
 }
@@ -1891,6 +1919,9 @@ void CommandHandler::tick() {
             setDeviceWatchdogFired(_ch[0], _ch[1], true);
             setMqttRemoteActiveInternal(false);
             gLastMqttMsgMs = 0;
+            _cfg->saveRunState((uint8_t)Runmode::POWER_DIRECT,
+                               (uint8_t)Runmode::POWER_DIRECT,
+                               false, false);
             _tele->publishWatchdogSafe(_cfg->pwr_wdog_s);
             if (_mqtt) _mqtt->publishStatus();
             _applyRuntimeOutputs();

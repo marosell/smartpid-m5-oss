@@ -87,8 +87,11 @@ enum class UIScreen : uint8_t {
     RUNNING_GRAPH_CH1,      // Screen 2a: CH1 time+temp+PWM chart
     RUNNING_GRAPH_CH2,      // Screen 2b: CH2 time+temp+PWM chart
     RUNNING_DUAL_OVERVIEW,  // Screen 3: 2×2 overview grid
+    MONITOR_STATUS,         // Monitor mode: two probe readings, no output controls
     POWER_STATUS,           // Bench/operator power status: temps, DC outs, relays
     POWER_OUTPUT_EDIT,      // Live DC1/DC2 percent editor from Power screen
+    POWER_SETTINGS_MENU,    // Distillation config menu reached by holding BtnB
+    EXIT_DISTILLATION_CONFIRM, // Confirmation before ending distillation mode
 
     // Overlay dialogs (drawn on top of running screens)
     CONTEXT_MENU,           // Pause / Stop / Count up/down / Set Timer / Max Power
@@ -245,6 +248,7 @@ private:
     // Basic/Gray (ADC input-only pin; M5Unified's wasPressed() misses quick taps).
     // isPressed() is stable, so we track the rising edge manually.
     bool _prevBtnA = false;
+    bool _defaultModeApplied = false;
 
     // ── Screen transition ─────────────────────────────────────────────────────
     void _goTo(UIScreen s);
@@ -262,8 +266,11 @@ private:
     void _handleRunningChDetail(UIEvent ev);
     void _handleRunningGraph(UIEvent ev);
     void _handleRunningOverview(UIEvent ev);
+    void _handleMonitorStatus(UIEvent ev);
     void _handlePowerStatus(UIEvent ev);
     void _handlePowerOutputEdit(UIEvent ev);
+    void _handlePowerSettingsMenu(UIEvent ev);
+    void _handleExitDistillationConfirm(UIEvent ev);
     void _handleContextMenu(UIEvent ev);
     void _handleSetTimer(UIEvent ev);
     void _handleSetMaxPower(UIEvent ev);
@@ -284,11 +291,15 @@ private:
     void _drawRunningChDetail();
     void _drawRunningGraph(int chIdx);
     void _drawRunningOverview();
+    void _drawMonitorStatus();
+    void _redrawMonitorStatusValues();
     void _drawPowerStatus();
     void _redrawPowerStatusValues();
     void _drawPowerOutputEdit();
     void _redrawPowerOutputEditValue();
     void _applyPowerOutputState();
+    void _drawPowerSettingsMenu();
+    void _drawExitDistillationConfirm();
     void _drawContextMenu();
     void _drawSetTimerDialog();
     void _redrawSetTimerValue();

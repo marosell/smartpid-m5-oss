@@ -102,6 +102,14 @@ void Config::load() {
     auto_resume   = prefs.getBool("auto_resume",  false);
     button_beep   = prefs.getBool("btn_beep",     false);
     remote_enabled = prefs.getBool("remote_en",    false);
+    default_mode = prefs.getUChar("default_mode", (uint8_t)DefaultBootMode::NONE);
+    if (default_mode > (uint8_t)DefaultBootMode::DISTILLATION) {
+        default_mode = (uint8_t)DefaultBootMode::NONE;
+    }
+    wifi_mode = prefs.getUChar("wifi_mode", (uint8_t)WiFiModeSetting::AUTO);
+    if (wifi_mode > (uint8_t)WiFiModeSetting::AUTO) {
+        wifi_mode = (uint8_t)WiFiModeSetting::AUTO;
+    }
     clock_tz = prefs.getUChar("clock_tz", 0);
     clock_ntp_enabled = prefs.getBool("clock_ntp", true);
     clock_24h = prefs.getBool("clock_24h", false);
@@ -237,6 +245,8 @@ void Config::save() {
     prefs.putBool("auto_resume",   auto_resume);
     prefs.putBool("btn_beep",      button_beep);
     prefs.putBool("remote_en",     remote_enabled);
+    prefs.putUChar("default_mode", default_mode);
+    prefs.putUChar("wifi_mode",    wifi_mode);
     prefs.putUChar("clock_tz",     clock_tz);
     prefs.putBool("clock_ntp",     clock_ntp_enabled);
     prefs.putBool("clock_24h",     clock_24h);

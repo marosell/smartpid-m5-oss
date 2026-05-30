@@ -84,25 +84,74 @@ String ProofHttpServer::_statusJson() const {
     doc["mqtt_connected"] = _mqtt && _mqtt->connected();
     doc["remote_enabled"] = mqttRemoteEnabled();
     doc["remote_state"] = !mqttRemoteEnabled() ? "OFF" : (mqttRemoteActive() ? "ON" : "RDY");
+    const bool watchdogFired = (_ch1 && _ch1->watchdogFired) || (_ch2 && _ch2->watchdogFired);
+    const bool programRunning = (_ch1 && _ch1->programRunning) || (_ch2 && _ch2->programRunning);
+    const bool accelActive = (_ch1 && _ch1->accelPhaseActive) || (_ch2 && _ch2->accelPhaseActive);
+    const bool ended = (_ch1 && (_ch1->finishEnd || _ch1->finishLatch)) ||
+                       (_ch2 && (_ch2->finishEnd || _ch2->finishLatch));
+    doc["watchdog_fired"] = watchdogFired;
+    doc["device_state"] = watchdogFired ? "safe" : ended ? "ended" :
+        ((_ch1 && (_ch1->runmode != Runmode::IDLE)) ||
+         (_ch2 && (_ch2->runmode != Runmode::IDLE))) ? "running" : "idle";
+    const char* workflow = ((_ch1 && _ch1->runmode == Runmode::POWER_DIRECT) ||
+                            (_ch2 && _ch2->runmode == Runmode::POWER_DIRECT)) ? "distillation" :
+                           ((_ch1 && _ch1->runmode == Runmode::MONITOR) ||
+                            (_ch2 && _ch2->runmode == Runmode::MONITOR)) ? "monitor" : nullptr;
+    doc["workflow"] = workflow;
+    doc["strategy"] = (workflow && strcmp(workflow, "distillation") == 0)
+        ? (programRunning ? "program" : "manual")
+        : nullptr;
 
-    JsonObject ch1 = doc["channels"]["CH1"].to<JsonObject>();
-    if (_ch1) {
-        ch1["temp"] = _ch1->temp;
-        ch1["power"] = _ch1->power_pct;
-        ch1["target_power"] = _ch1->distill_power_pct;
-        ch1["program_running"] = _ch1->programRunning;
-        ch1["ended"] = _ch1->finishEnd || _ch1->finishLatch;
-        ch1["relay_state"] = _ch1->relay_state;
+    JsonObject program = doc["program"].to<JsonObject>();
+    program["running"] = programRunning;
+    program["accel_active"] = accelActive;
+    program["ended"] = ended;
+    program["target_power"] = max(_ch1 ? _ch1->distill_power_pct : 0, _ch2 ? _ch2->distill_power_pct : 0);
+    program["power"] = max(_ch1 ? _ch1->power_pct : 0, _ch2 ? _ch2->power_pct : 0);
+    if (_cfg) {
+        program["finish_temp_source"] = (_cfg->pwr_dfsp_source == 2) ? "probe2" : "probe1";
     }
 
-    JsonObject ch2 = doc["channels"]["CH2"].to<JsonObject>();
+    JsonObject probes = doc["probes"].to<JsonObject>();
+    if (_ch1) {
+        probes["probe1"]["temp"] = _ch1->temp;
+    }
     if (_ch2) {
-        ch2["temp"] = _ch2->temp;
-        ch2["power"] = _ch2->power_pct;
-        ch2["target_power"] = _ch2->distill_power_pct;
-        ch2["program_running"] = _ch2->programRunning;
-        ch2["ended"] = _ch2->finishEnd || _ch2->finishLatch;
-        ch2["relay_state"] = _ch2->relay_state;
+        probes["probe2"]["temp"] = _ch2->temp;
+    }
+
+    JsonObject outputs = doc["outputs"].to<JsonObject>();
+    if (_ch1) {
+        outputs["dc1"]["power"] = _ch1->power_pct;
+        outputs["dc1"]["target_power"] = _ch1->distill_power_pct;
+    }
+    if (_ch2) {
+        outputs["dc2"]["power"] = _ch2->power_pct;
+        outputs["dc2"]["target_power"] = _ch2->distill_power_pct;
+    }
+
+    JsonObject relays = doc["relays"].to<JsonObject>();
+    if (_ch1) {
+        relays["rl1"]["state"] = _ch1->relay_state;
+    }
+    if (_ch2) {
+        relays["rl2"]["state"] = _ch2->relay_state;
+    }
+
+    JsonObject lanes = doc["lanes"].to<JsonObject>();
+    if (_ch1) {
+        JsonObject lane1 = lanes["lane1"].to<JsonObject>();
+        lane1["program_running"] = _ch1->programRunning;
+        lane1["accel_active"] = _ch1->accelPhaseActive;
+        lane1["watchdog_fired"] = _ch1->watchdogFired;
+        lane1["ended"] = _ch1->finishEnd || _ch1->finishLatch;
+    }
+    if (_ch2) {
+        JsonObject lane2 = lanes["lane2"].to<JsonObject>();
+        lane2["program_running"] = _ch2->programRunning;
+        lane2["accel_active"] = _ch2->accelPhaseActive;
+        lane2["watchdog_fired"] = _ch2->watchdogFired;
+        lane2["ended"] = _ch2->finishEnd || _ch2->finishLatch;
     }
 
     String payload;
@@ -122,7 +171,7 @@ String ProofHttpServer::_configSummaryJson() const {
         program["timer_start_temp"] = _cfg->pwr_dtsp;
         program["timer_s"] = _cfg->pwr_timer_s;
         program["finish_temp"] = _cfg->pwr_dfsp;
-        program["finish_temp_source"] = (_cfg->pwr_dfsp_source == 2) ? "CH2" : "CH1";
+        program["finish_temp_source"] = (_cfg->pwr_dfsp_source == 2) ? "probe2" : "probe1";
         program["finish_action"] = (_cfg->pwr_deo == 1) ? "end" : "continue";
 
         JsonObject clock = doc["clock"].to<JsonObject>();
@@ -134,18 +183,18 @@ String ProofHttpServer::_configSummaryJson() const {
         clock["synced"] = clockTimeIsSynced();
 
         JsonObject relays = doc["relays"].to<JsonObject>();
-        JsonObject r1 = relays["CH1"].to<JsonObject>();
+        JsonObject r1 = relays["rl1"].to<JsonObject>();
         r1["mode"] = relayModeStr((RelayMode)_cfg->pwr_relay1_mode);
         r1["on_ms"] = _cfg->pwr_r1_on_ms;
         r1["cycle_ms"] = _cfg->pwr_r1_cycle_ms;
-        JsonObject r2 = relays["CH2"].to<JsonObject>();
+        JsonObject r2 = relays["rl2"].to<JsonObject>();
         r2["mode"] = relayModeStr((RelayMode)_cfg->pwr_relay2_mode);
         r2["on_ms"] = _cfg->pwr_r2_on_ms;
         r2["cycle_ms"] = _cfg->pwr_r2_cycle_ms;
 
         JsonObject dc = doc["dc_outputs"].to<JsonObject>();
-        dc["DC1"] = dcOutputModeStr(normalizeDcOutputMode(_cfg->pwr_dc1_mode));
-        dc["DC2"] = dcOutputModeStr(normalizeDcOutputMode(_cfg->pwr_dc2_mode));
+        dc["dc1"] = dcOutputModeStr(normalizeDcOutputMode(_cfg->pwr_dc1_mode));
+        dc["dc2"] = dcOutputModeStr(normalizeDcOutputMode(_cfg->pwr_dc2_mode));
     }
     String payload;
     serializeJson(doc, payload);

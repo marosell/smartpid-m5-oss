@@ -308,7 +308,9 @@ void setup() {
     // Run before splash/WiFi if no credentials in NVS or BtnA held at boot.
     // If the portal fires, it blocks until the user submits credentials,
     // then calls ESP.restart() — execution never returns here.
-    if (captivePortal.needed()) {
+    const bool wifiNeedsClientCreds = (cfg.wifi_mode == (uint8_t)WiFiModeSetting::CLIENT ||
+                                      cfg.wifi_mode == (uint8_t)WiFiModeSetting::AUTO);
+    if (wifiNeedsClientCreds && captivePortal.needed()) {
         captivePortal.begin();
         while (!captivePortal.done()) {
             captivePortal.loop();
@@ -324,7 +326,7 @@ void setup() {
     M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
     M5.Display.setTextSize(2);
     M5.Display.setCursor(10, 10);
-    M5.Display.println("SmartPID M5 OSS");
+    M5.Display.println("ProofPro");
     M5.Display.setTextSize(1);
     M5.Display.setCursor(10, 45);
     M5.Display.printf("ID: %s\n", cfg.topic_id);
@@ -333,14 +335,23 @@ void setup() {
 
     bootTracePause("before_wifi");
     setupWiFi();
-    log_i("WiFi connected: SSID=%s  IP=%s", WiFi.SSID().c_str(), WiFi.localIP().toString().c_str());
-    clockSyncBegin(cfg);
+    const bool wifiConnected = (WiFi.status() == WL_CONNECTED);
+    const bool wifiApMode = (WiFi.getMode() == WIFI_AP || WiFi.getMode() == WIFI_AP_STA);
+    if (wifiConnected) {
+        log_i("WiFi connected: SSID=%s  IP=%s", WiFi.SSID().c_str(), WiFi.localIP().toString().c_str());
+        clockSyncBegin(cfg);
+    } else if (wifiApMode) {
+        log_i("WiFi AP active: IP=%s", WiFi.softAPIP().toString().c_str());
+    } else {
+        log_i("WiFi inactive");
+    }
     bootTracePause("after_wifi");
 
     M5.Display.setCursor(10, 75);
-    M5.Display.printf("WiFi: %s\n", WiFi.SSID().c_str());
+    M5.Display.printf("WiFi: %s\n", wifiConnected ? WiFi.SSID().c_str() : (wifiApMode ? "AP mode" : "Off"));
     M5.Display.setCursor(10, 90);
-    M5.Display.printf("IP:   %s\n", WiFi.localIP().toString().c_str());
+    M5.Display.printf("IP:   %s\n", wifiConnected ? WiFi.localIP().toString().c_str() :
+                                        (wifiApMode ? WiFi.softAPIP().toString().c_str() : "0.0.0.0"));
     M5.Display.setCursor(10, 105);
     M5.Display.println("Connecting MQTT...");
 
@@ -588,6 +599,26 @@ static void setupWiFi() {
         prefs.end();
     }
 
+    const WiFiModeSetting mode = (cfg.wifi_mode <= (uint8_t)WiFiModeSetting::AUTO)
+        ? (WiFiModeSetting)cfg.wifi_mode
+        : WiFiModeSetting::AUTO;
+
+    if (mode == WiFiModeSetting::OFF) {
+        WiFi.disconnect(true);
+        WiFi.mode(WIFI_OFF);
+        log_i("WiFi disabled by config");
+        return;
+    }
+
+    if (mode == WiFiModeSetting::AP) {
+        char apName[32];
+        snprintf(apName, sizeof(apName), "ProofPro-%s", cfg.topic_id);
+        WiFi.mode(WIFI_AP);
+        WiFi.softAP(apName);
+        log_i("WiFi AP started: SSID=%s IP=%s", apName, WiFi.softAPIP().toString().c_str());
+        return;
+    }
+
     if (strlen(ssid) == 0) {
         // Captive portal should have run before this point (checked in setup()).
         // If we somehow reach here without credentials, reboot to trigger portal.
@@ -615,6 +646,15 @@ static void setupWiFi() {
     }
 
     if (WiFi.status() != WL_CONNECTED) {
+        if (mode == WiFiModeSetting::AUTO) {
+            char apName[32];
+            snprintf(apName, sizeof(apName), "ProofPro-%s", cfg.topic_id);
+            WiFi.disconnect(true);
+            WiFi.mode(WIFI_AP);
+            WiFi.softAP(apName);
+            log_e("WiFi client connect failed after 30s — fallback AP started: %s", apName);
+            return;
+        }
         log_e("WiFi connect failed after 30s — rebooting");
         M5.Display.setCursor(10, 75);
         M5.Display.println("WiFi FAILED — reboot");

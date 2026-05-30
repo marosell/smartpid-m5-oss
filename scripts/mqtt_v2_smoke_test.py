@@ -191,13 +191,13 @@ def validate_state(state: dict[str, Any], status_unit: str) -> None:
         "ended",
         "latched",
         "acc_elements_enabled",
-        "finish_temp_source",
+        "finish_temp_probe",
         "timer_remaining_s",
         "timer_frozen",
     ):
         assert_true(key in program, f"state.program.{key} is required")
-    assert_true(program["finish_temp_source"] in ("probe1", "probe2"),
-                "state.program.finish_temp_source must be probe1/probe2")
+    assert_true(program["finish_temp_probe"] in ("probe1", "probe2"),
+                "state.program.finish_temp_probe must be probe1/probe2")
 
 
 def wait_for_command_error(cfg: MqttConfig) -> dict[str, Any]:

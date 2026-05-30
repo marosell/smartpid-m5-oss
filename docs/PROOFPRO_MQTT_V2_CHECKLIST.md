@@ -67,7 +67,7 @@ Live `state`:
 - `program.ended`
 - `program.latched`
 - `program.acc_elements_enabled`
-- `program.finish_temp_source`
+- `program.finish_temp_probe`
 - `program.timer_remaining_s`
 - `program.timer_frozen`
 

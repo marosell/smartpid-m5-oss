@@ -191,7 +191,7 @@ ProofPro mode model.
     "ended": false,
     "latched": false,
     "acc_elements_enabled": true,
-    "finish_temp_source": "probe1",
+    "finish_temp_probe": "probe1",
     "timer_remaining_s": 0,
     "timer_frozen": false
   }
@@ -283,7 +283,7 @@ Field notes:
 - `remote_enabled` and `remote_state` mirror retained status for live UI.
 - `program_running` is true when this channel is under ProofPro programmed
   ACCEL/RUN/END logic and false when it is in manual/live power mode.
-- `finish_temp_source` reports the configured probe used for finish-by-temp.
+- `finish_temp_probe` reports the configured probe used for finish-by-temp.
 - `ended=true` is a device/program END state reflected on both channel payloads.
 - `latched=true` means outputs are latched safe/off until reset/start.
 - `timer_remaining_s` freezes when END occurs before the finish timer expires.

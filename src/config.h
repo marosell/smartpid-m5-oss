@@ -20,6 +20,19 @@ enum class DcOutputMode : uint8_t {
     AUXILIARY = 2,
 };
 
+enum class DefaultBootMode : uint8_t {
+    NONE         = 0,
+    MONITOR      = 1,
+    DISTILLATION = 2,
+};
+
+enum class WiFiModeSetting : uint8_t {
+    OFF    = 0,
+    CLIENT = 1,
+    AP     = 2,
+    AUTO   = 3,
+};
+
 inline const char* dcOutputModeStr(DcOutputMode mode) {
     switch (mode) {
         case DcOutputMode::OFF:       return "off";
@@ -154,6 +167,8 @@ struct Config {
     bool     auto_resume;    // true=restore channel run state after power loss
     bool     button_beep;    // retained for NVS compatibility; UI does not enable beeps
     bool     remote_enabled; // persisted MQTT control permission
+    uint8_t  default_mode;   // DefaultBootMode: none / monitor / distillation
+    uint8_t  wifi_mode;      // WiFiModeSetting: off / client / AP / auto
 
     // ── Clock ────────────────────────────────────────────────────────────────
     // Wall clock display uses NTP when WiFi is available. Proof may set an
