@@ -60,6 +60,7 @@
 #include "captive_portal.h"
 #include "hardware_profile.h"
 #include "proof_http_server.h"
+#include "simulation.h"
 
 // ── Forward declarations ──────────────────────────────────────────────────────
 static void setupWiFi();
@@ -99,6 +100,7 @@ static void serialRawAllOff(bool leaveOverride);
 static void serialRawSetSlot(int slot, bool on, bool exclusive);
 static void serialRawMask(uint8_t mask);
 static int serialRawPinForSlot(int slot);
+static bool serialHandleSimulation(const String& lower);
 
 // ── Per-channel state (Phase 2) ───────────────────────────────────────────────
 static ChannelState ch1, ch2;
@@ -469,6 +471,7 @@ void loop() {
             ch1.temp = PROBE_SENTINEL_VALUE;
             ch2.temp = PROBE_SENTINEL_VALUE;
         }
+        simulationApply(ch1, ch2, cfg);
         // PID + output update (Phase 3)
         if (!gRawOutputOverride) {
             outputCtrl.update(ch1, ch2);
@@ -758,6 +761,10 @@ static void handleSerialCommand(String line) {
         Serial.println("{\"type\":\"diag_config\",\"skip_probe_init\":false,\"reboot_required\":true}");
         return;
     }
+    if (serialHandleSimulation(lower)) {
+        printBenchStatus("simulation");
+        return;
+    }
     if (lower == "boottrace on") {
         setBootTraceMode(true);
         Serial.println("{\"type\":\"diag_config\",\"boot_trace\":true,\"reboot_required\":true}");
@@ -874,6 +881,8 @@ static void printSerialHelp() {
     Serial.println("  audio mic sample      record a short mic sample and print level");
     Serial.println("  audio off             stop speaker and mic");
     Serial.println("  skipprobe on|off      persistently skip/enable probe init on next boot");
+    Serial.println("  sim distill [seconds] start distillation temperature simulation");
+    Serial.println("  sim off               disable temperature simulation");
     Serial.println("  boottrace on|off      pause/log early boot stages on next boot");
     Serial.println("  flashsafe             force GPIO + IO expander safe before USB flash");
     Serial.println("  flashmeta             read-only bootloader/partition flash metadata");
@@ -1130,6 +1139,12 @@ static void printBenchStatus(const char* reason) {
     doc["ip"] = WiFi.localIP().toString();
     doc["mqtt"] = mqttMgr.connected();
     doc["probe_init_enabled"] = gProbeInitEnabled;
+    SimulationStatus sim = simulationStatus();
+    JsonObject simulation = doc["simulation"].to<JsonObject>();
+    simulation["enabled"] = sim.enabled;
+    simulation["scenario"] = sim.scenario;
+    simulation["elapsed_s"] = sim.elapsed_s;
+    simulation["duration_s"] = sim.duration_s;
     doc["remote"] = mqttRemoteEnabled();
     doc["acc_elements_enabled"] = accElementsEnabled();
     doc["raw_output_override"] = gRawOutputOverride;
@@ -1466,7 +1481,35 @@ static void forceProbeSample() {
         ch1.temp = PROBE_SENTINEL_VALUE;
         ch2.temp = PROBE_SENTINEL_VALUE;
     }
+    simulationApply(ch1, ch2, cfg);
     display.notifyDataUpdate();
+}
+
+static bool serialHandleSimulation(const String& lower) {
+    if (lower == "sim off" || lower == "simulation off") {
+        simulationStop();
+        Serial.println("{\"type\":\"simulation\",\"enabled\":false}");
+        return true;
+    }
+    if (lower == "sim distill" || lower == "simulation distill" ||
+        lower.startsWith("sim distill ") || lower.startsWith("simulation distill ")) {
+        int durationS = 300;
+        int space = lower.lastIndexOf(' ');
+        if (space >= 0) {
+            int parsed = lower.substring(space + 1).toInt();
+            if (parsed > 0) durationS = parsed;
+        }
+        simulationStartDistillation((uint32_t)durationS, 123.0f, 205.0f, 75.0f, 190.0f);
+        JsonDocument doc;
+        doc["type"] = "simulation";
+        doc["enabled"] = true;
+        doc["scenario"] = "distillation";
+        doc["duration_s"] = durationS;
+        serializeJson(doc, Serial);
+        Serial.println();
+        return true;
+    }
+    return false;
 }
 
 static void applyOutputsNow() {

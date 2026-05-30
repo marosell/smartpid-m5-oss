@@ -248,6 +248,28 @@ mosquitto_pub -h 10.0.1.203 -u proof -P proof \
   -m '{"watchdog_enabled":true,"watchdog_s":30}'
 ```
 
+Enable firmware temperature simulation for Proof/ProofPro bench runs:
+
+```bash
+mosquitto_pub -h 10.0.1.203 -u proof -P proof \
+  -t 'smartpidM5/proofpro/791402d5ac0fe1/commands' \
+  -m '{"simulation":{"enabled":true,"scenario":"distillation","duration_s":300,"probe1_start":123,"probe1_end":205,"probe2_start":75,"probe2_end":190}}'
+```
+
+Disable firmware temperature simulation and return to physical probes:
+
+```bash
+mosquitto_pub -h 10.0.1.203 -u proof -P proof \
+  -t 'smartpidM5/proofpro/791402d5ac0fe1/commands' \
+  -m '{"simulation":{"enabled":false}}'
+```
+
+When simulation is enabled, physical probes can remain connected. Firmware reads
+the physical probes normally, then overrides runtime probe values before output
+logic and telemetry. Live `status` and `state` include
+`simulation.enabled/scenario/elapsed_s/duration_s` so Proof can identify test
+data.
+
 DC output role setup:
 
 ```bash

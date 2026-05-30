@@ -8,6 +8,7 @@
 #include "display.h"
 #include "output_control.h"
 #include "profiles.h"
+#include "simulation.h"
 #include <ArduinoJson.h>
 #include <math.h>
 #ifndef DESKTOP_BUILD
@@ -37,6 +38,8 @@ static bool gWatchdogFired = false;
 
 enum class AlertKind : uint8_t {
     None,
+    Command,
+    ProgramStart,
     ProgramEnd,
     Shutdown,
 };
@@ -384,6 +387,22 @@ static void freezeTimerAtEnd(ChannelState* ch) {
     if (ch->timerFrozenRemaining_s == 0) ch->timerExpired = true;
 }
 
+static void forceChannelEndedSafe(ChannelState* ch, bool anyLatched) {
+    if (!ch) return;
+    ch->programRunning = false;
+    ch->paused = false;
+    ch->power_pct = 0;
+    ch->distill_power_pct = 0;
+    ch->relay_state = false;
+    ch->relay_command = false;
+    ch->accelPhaseActive = false;
+    ch->accelPhaseJustEnded = false;
+    ch->finishEnd = true;
+    if (anyLatched) ch->finishLatch = true;
+    ch->finishEndJustSet = false;
+    ch->finishLatchJustSet = false;
+}
+
 static bool consumeDeviceProgramEnd(ChannelState* ch1, ChannelState* ch2, const char** reasonOut) {
     const bool pending = (ch1 && ch1->finishEndJustSet) || (ch2 && ch2->finishEndJustSet);
     if (!pending) return false;
@@ -393,19 +412,14 @@ static bool consumeDeviceProgramEnd(ChannelState* ch1, ChannelState* ch2, const 
     if (reasonOut) *reasonOut = finishReasonForDevice(ch1, ch2);
     const bool anyLatched = (ch1 && ch1->finishLatch) || (ch2 && ch2->finishLatch);
 
-    if (ch1) {
-        ch1->finishEnd = true;
-        if (anyLatched) ch1->finishLatch = true;
-        ch1->finishEndJustSet = false;
-        ch1->finishLatchJustSet = false;
-    }
-    if (ch2) {
-        ch2->finishEnd = true;
-        if (anyLatched) ch2->finishLatch = true;
-        ch2->finishEndJustSet = false;
-        ch2->finishLatchJustSet = false;
-    }
+    forceChannelEndedSafe(ch1, anyLatched);
+    forceChannelEndedSafe(ch2, anyLatched);
     return true;
+}
+
+static bool payloadIsPureStatusRequest(JsonDocument& doc) {
+    if (!(doc["status"].is<bool>() && doc["status"].as<bool>())) return false;
+    return doc.as<JsonObject>().size() == 1;
 }
 
 static bool playTestChirp() {
@@ -474,16 +488,26 @@ static void requestAlert(AlertKind kind) {
     }
 
     gAlert.kind = kind;
-    gAlert.remaining = 3;
+    gAlert.remaining = 1;
     gAlert.inGap = false;
-    if (kind == AlertKind::ProgramEnd) {
-        gAlert.frequencyHz = 2670;
-        gAlert.onMs = 3000;
-        gAlert.gapMs = 1000;
-    } else {
-        gAlert.frequencyHz = 1800;
-        gAlert.onMs = 500;
-        gAlert.gapMs = 500;
+    gAlert.onMs = 500;
+    gAlert.gapMs = 500;
+    switch (kind) {
+        case AlertKind::ProgramEnd:
+            gAlert.remaining = 3;
+            gAlert.frequencyHz = 2670;
+            gAlert.onMs = 3000;
+            gAlert.gapMs = 1000;
+            break;
+        case AlertKind::ProgramStart:
+            gAlert.frequencyHz = 2670;
+            break;
+        case AlertKind::Command:
+        case AlertKind::Shutdown:
+        case AlertKind::None:
+        default:
+            gAlert.frequencyHz = 1800;
+            break;
     }
     startAlertBeep(millis());
 }
@@ -586,12 +610,27 @@ void CommandHandler::handle(const uint8_t* payload, unsigned int len) {
         noteRemoteActivity(_ch[0], _ch[1], _tele);
         if (_mqtt) _mqtt->publishStatus();
     }
+    if (!heartbeatRequest && !payloadIsPureStatusRequest(doc)) {
+        requestAlert(AlertKind::Command);
+    }
 
     // ── {"status": true} ──────────────────────────────────────────────────────
     if (doc["status"].is<bool>() && doc["status"].as<bool>()) {
         log_i("[CMD] status → re-publishing");
         _mqtt->publishStatus();
         _mqtt->publishConfig();
+    }
+
+    // ── {"simulation": {...}} — bench-only runtime probe override ───────────
+    if (doc["simulation"].is<JsonObjectConst>()) {
+        if (simulationHandleCommand(doc["simulation"].as<JsonObjectConst>())) {
+            SimulationStatus st = simulationStatus();
+            _tele->publishEventTyped(st.enabled ? "simulation started" : "simulation stopped",
+                                     st.enabled ? "simulation_started" : "simulation_stopped");
+            if (_mqtt) _mqtt->publishStatus();
+        } else {
+            _tele->publishCommandError("simulation", "invalid_value");
+        }
     }
 
     if (heartbeatRequest) {
@@ -1147,6 +1186,7 @@ void CommandHandler::_cmdStart(const char* modeStr, int ch1Profile, int ch2Profi
 void CommandHandler::_cmdStartPower() {
     log_i("[CMD] start: power");
     noteRemoteActivity(_ch[0], _ch[1], _tele);
+    requestAlert(AlertKind::ProgramStart);
 
     for (int i = 0; i < 2; i++) {
         ChannelState* ch = _ch[i];
@@ -1976,10 +2016,8 @@ void CommandHandler::tick() {
         // ── Publish acceleration phase end event (set by output_control) ──
         if (ch->accelPhaseJustEnded) {
             ch->accelPhaseJustEnded = false;
-            char evtBuf[24];
-            snprintf(evtBuf, sizeof(evtBuf), "%s accel end", chName);
-            _tele->publishEventTyped(evtBuf, "accel_complete", (int8_t)(i + 1));
-            log_i("[EVT] %s — power → %u%%", evtBuf, ch->distill_power_pct);
+            _tele->publishEventTyped("acceleration complete", "accel_complete");
+            log_i("[EVT] acceleration complete — power → %u%%", ch->distill_power_pct);
         }
 
         // ── Run timer (manual start or temperature-triggered dtSP / dEO) ──
@@ -1988,11 +2026,9 @@ void CommandHandler::tick() {
             if (!ch->timerTriggered && tempValid && ch->dtSP > 0.0f && ch->temp >= ch->dtSP) {
                 ch->timerTriggered = true;
                 ch->timerStartMs   = now;
-                char evtBuf[24];
-                snprintf(evtBuf, sizeof(evtBuf), "%s timer started", chName);
-                _tele->publishEventTyped(evtBuf, "timer_started", (int8_t)(i + 1));
+                _tele->publishEventTyped("timer started", "timer_started");
                 log_i("[EVT] %s at %.1f (duration %lus)",
-                      evtBuf, ch->temp, (unsigned long)ch->timer_duration_s);
+                      "timer started", ch->temp, (unsigned long)ch->timer_duration_s);
             }
 
             // Check for expiry

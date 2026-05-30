@@ -4,6 +4,7 @@
 #include "command_handler.h"
 #include "output_control.h"
 #include "io_expander.h"
+#include "simulation.h"
 #include <ArduinoJson.h>
 #ifndef DESKTOP_BUILD
 #include <esp_ota_ops.h>
@@ -85,6 +86,12 @@ static String buildStatePayload(Config& cfg, const ChannelState& ch1, const Chan
     doc["strategy"] = strategy ? strategy : nullptr;
     doc["remote_enabled"] = mqttRemoteEnabled();
     doc["remote_state"] = !mqttRemoteEnabled() ? "OFF" : (mqttRemoteActive() ? "ON" : "RDY");
+    SimulationStatus sim = simulationStatus();
+    JsonObject simulation = doc["simulation"].to<JsonObject>();
+    simulation["enabled"] = sim.enabled;
+    simulation["scenario"] = sim.scenario;
+    simulation["elapsed_s"] = sim.elapsed_s;
+    simulation["duration_s"] = sim.duration_s;
 
     JsonObject probes = doc["probes"].to<JsonObject>();
     JsonObject probe1 = probes["probe1"].to<JsonObject>();

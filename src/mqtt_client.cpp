@@ -4,6 +4,7 @@
 #include "clock_sync.h"
 #include "channel_state.h"
 #include "command_handler.h"
+#include "simulation.h"
 #include <WiFi.h>
 #include <ArduinoJson.h>
 #include <cstring>
@@ -25,6 +26,12 @@ static String buildStatusPayload(Config& cfg) {
     doc["unit"]   = cfg.temp_unit;
     doc["remote_enabled"] = mqttRemoteEnabled();
     doc["remote_state"] = !mqttRemoteEnabled() ? "OFF" : (mqttRemoteActive() ? "ON" : "RDY");
+    SimulationStatus sim = simulationStatus();
+    JsonObject simulation = doc["simulation"].to<JsonObject>();
+    simulation["enabled"] = sim.enabled;
+    simulation["scenario"] = sim.scenario;
+    simulation["elapsed_s"] = sim.elapsed_s;
+    simulation["duration_s"] = sim.duration_s;
     doc["device_state"] = proofDeviceState();
     const char* workflow = proofWorkflow();
     const char* strategy = proofStrategy();

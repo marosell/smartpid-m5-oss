@@ -155,6 +155,7 @@ struct ChannelState {
         spReachedFired       = false;
         // Power mode transient state
         power_pct            = 0;
+        distill_power_pct    = 0;
         relay_state          = false;
         relay_command        = false;
         programRunning       = false;
