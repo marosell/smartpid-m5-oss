@@ -11,13 +11,17 @@
 DesktopM5 M5;
 WiFiClass WiFi;
 Config cfg;
-MQTTManager mqttMgr;
 OutputController outputCtrl;
 ProfileManager profiles;
 IOExpander ioExpander;
 
+#ifndef UNIT_TEST
+MQTTManager mqttMgr;
+#endif
+
 void DesktopM5::update() {}
 
+#ifndef UNIT_TEST
 const char* runmodeStr(Runmode r) {
     switch (r) {
         case Runmode::IDLE: return "idle";
@@ -48,6 +52,7 @@ const char* relayModeStr(RelayMode r) {
     }
     return "Unknown";
 }
+#endif
 
 void Config::load() {}
 void Config::save() {}
@@ -59,6 +64,7 @@ void Config::saveMqtt() {}
 void Config::saveRunState(uint8_t, uint8_t, bool, bool) {}
 void Config::savePowerParams() {}
 
+#ifndef UNIT_TEST
 void MQTTManager::begin(Config&) {}
 void MQTTManager::loop() {}
 bool MQTTManager::connected() { return true; }
@@ -67,6 +73,7 @@ bool MQTTManager::publishStatus() { return true; }
 bool MQTTManager::publishConfig() { return true; }
 void MQTTManager::onMessage(MessageCallback) {}
 String MQTTManager::fullTopic(const char* suffix) const { return String("desktop/") + suffix; }
+#endif
 
 OutputController::OutputController() = default;
 OutputController::~OutputController() = default;

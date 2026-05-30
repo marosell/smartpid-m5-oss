@@ -63,6 +63,20 @@ pio run -e desktop
 .pio/build/desktop/program
 ```
 
+## Tests
+
+Fast native schema tests:
+
+```bash
+pio test -e test-native
+```
+
+Hardware/unit tests that require an ESP32 target:
+
+```bash
+pio test -e test
+```
+
 ## Special Installer Builds
 
 These are not normal firmware builds:
