@@ -3,6 +3,11 @@
   margin: 0.7in 0.72in 0.74in;
 }
 
+@page protocol {
+  size: Letter landscape;
+  margin: 0.48in 0.46in 0.52in;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -18,9 +23,17 @@ body {
   margin: 0;
 }
 
+body.protocol {
+  page: protocol;
+}
+
 .manual {
   max-width: 7.1in;
   margin: 0 auto;
+}
+
+body.protocol .manual {
+  max-width: 10in;
 }
 
 .title-page {
@@ -31,6 +44,10 @@ body {
   justify-content: center;
   min-height: 8.2in;
   page-break-after: always;
+}
+
+body.protocol .title-page {
+  min-height: 6.3in;
 }
 
 .title-page .eyebrow {
@@ -123,6 +140,13 @@ table {
   width: 100%;
 }
 
+body.protocol table {
+  font-size: 8.2pt;
+  line-height: 1.25;
+  margin: 0.09in 0 0.16in;
+  page-break-inside: auto;
+}
+
 thead {
   display: table-header-group;
 }
@@ -139,6 +163,11 @@ td {
   padding: 0.055in 0.075in;
   text-align: left;
   vertical-align: top;
+}
+
+body.protocol th,
+body.protocol td {
+  padding: 0.04in 0.045in;
 }
 
 tr:nth-child(even) td {
@@ -163,6 +192,20 @@ pre {
   padding: 0.11in 0.13in;
   page-break-inside: avoid;
   white-space: pre-wrap;
+}
+
+body.protocol pre {
+  font-size: 8.2pt;
+  line-height: 1.25;
+  margin: 0.08in 0 0.13in;
+  padding: 0.08in 0.1in;
+  page-break-inside: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+body.protocol code {
+  font-size: 0.88em;
 }
 
 pre code {

@@ -29,6 +29,8 @@ const manuals = [
     html: path.join(outDir, "TEST_PROTOCOL.html"),
     pdf: path.join(docsDir, "TEST_PROTOCOL.pdf"),
     title: "ProofPro Bench Test Protocol",
+    bodyClass: "protocol",
+    subtitle: "",
   },
 ];
 
@@ -201,7 +203,9 @@ function titlePage(markdown, title) {
     const line = rawLines[i].trim();
     if (line === "") continue;
     if (/^(Firmware|Draft date):/.test(line) || /^MQTT\b/.test(line)) break;
+    if (/^#{1,6}\s+/.test(line)) break;
     subtitleLines.push(line);
+    if (subtitleLines.length >= 2) break;
   }
   const subtitle = subtitleLines.join(" ");
   const meta = lines
@@ -229,13 +233,20 @@ function stripTitleBlock(markdown) {
     }
     i += 1;
   }
-  return seenDraft ? lines.slice(i).join("\n") : markdown;
+  if (seenDraft) return lines.slice(i).join("\n");
+
+  const h1Index = lines.findIndex((line) => line.startsWith("# "));
+  if (h1Index === -1) return markdown;
+  return lines.slice(h1Index + 1).join("\n");
 }
 
 function renderDocument(manual) {
   const markdown = fs.readFileSync(manual.markdown, "utf8");
   const css = fs.readFileSync(cssPath, "utf8");
-  const body = `${titlePage(markdown, manual.title)}\n${renderMarkdown(stripTitleBlock(markdown))}`;
+  const body = `${titlePage(
+    manual.subtitle === "" ? `# ${manual.title}\n\n` : markdown,
+    manual.title
+  )}\n${renderMarkdown(stripTitleBlock(markdown))}`;
   return `<!doctype html>
 <html>
 <head>
@@ -243,7 +254,7 @@ function renderDocument(manual) {
   <title>${escapeHtml(manual.title)}</title>
   <style>${css}</style>
 </head>
-<body>
+<body class="${manual.bodyClass || ""}">
   <main class="manual">
 ${body}
   </main>
